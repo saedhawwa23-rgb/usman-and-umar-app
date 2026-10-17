@@ -323,6 +323,7 @@ fun OpenDroidNavigation(
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
     object Chat : Screen("chat", "Chat", Icons.Default.Chat)
+    object TaskManager : Screen("task_manager", "Tasks", Icons.Default.Assignment)
     object Plan : Screen("plan", "Plan", Icons.Default.List)
     object Memory : Screen("memory", "Memory", Icons.Default.Star)
     object Social : Screen("social", "Social", Icons.Default.Share)
@@ -377,6 +378,7 @@ fun MainDashboard(
     var currentTab by remember { mutableStateOf<Screen>(Screen.Chat) }
 
     val chatViewModel: ChatViewModel = hiltViewModel()
+    val workspaceTaskViewModel: WorkspaceTaskViewModel = hiltViewModel()
     val planViewModel: PlanViewModel = hiltViewModel()
     val memoryViewModel: MemoryViewModel = hiltViewModel()
     val socialViewModel: SocialViewModel = hiltViewModel()
@@ -386,6 +388,7 @@ fun MainDashboard(
 
     val tabs = listOf(
         Screen.Chat,
+        Screen.TaskManager,
         Screen.Plan,
         Screen.Memory,
         Screen.Social,
@@ -463,6 +466,7 @@ fun MainDashboard(
             ) { tab ->
                 when (tab) {
                     Screen.Chat -> ChatScreen(viewModel = chatViewModel)
+                    Screen.TaskManager -> WorkspaceTaskScreen(viewModel = workspaceTaskViewModel)
                     Screen.Plan -> PlanScreen(viewModel = planViewModel)
                     Screen.Memory -> MemoryScreen(viewModel = memoryViewModel)
                     Screen.Social -> SocialScreen(viewModel = socialViewModel)
