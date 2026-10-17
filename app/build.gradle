@@ -178,7 +178,7 @@ android {
 // `org.jetbrains.kotlin.android` plugin any more) and carries the same compiler
 // flags this block set before the migration.
 kotlin {
-    jvmToolchain(21)
+    // Compile against the JDK selected by Gradle/CI; Java and Kotlin targets remain JVM 21.
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21
         freeCompilerArgs.addAll(
