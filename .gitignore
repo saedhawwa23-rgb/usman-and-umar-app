@@ -1,0 +1,34 @@
+*.iml
+.gradle
+/.kotlin
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/app/build
+/llama/build
+
+# Large Qwen GGUF is checksum-pinned and staged by app/build.gradle.
+/app/src/main/assets/models/*.gguf
+
+# Signing credentials — never commit to public repos
+*.keystore
+*.jks
+
+# gradle.properties IS tracked: it holds build settings the project cannot
+# build without (android.useAndroidX and friends). Signing credentials must
+# never go in it — put them in ~/.gradle/gradle.properties or pass them as
+# ORG_GRADLE_PROJECT_* environment variables. See gradle.properties.example.
+
+# Local AI assistant guidance — not tracked
+CLAUDE.md
+docs/superpowers/

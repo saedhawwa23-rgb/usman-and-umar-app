@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <script src="js/theme-init.js"></script>
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: https://avatars.githubusercontent.com https://github.githubassets.com https://api.producthunt.com; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.github.com; base-uri 'self'; form-action 'self'">
+  <title>Features — OpenDroid</title>
+  <meta name="description" content="Explore all features of OpenDroid, your open autonomous Android agent from v1.0.0 to v1.0.6.">
+  <meta property="og:title" content="Features — OpenDroid">
+  <meta property="og:description" content="Explore all features of OpenDroid, your open autonomous Android agent.">
+  <meta property="og:image" content="https://yashab-cyber.github.io/opendroid/assets/bot.png">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://yashab-cyber.github.io/opendroid/features.html">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="canonical" href="https://yashab-cyber.github.io/opendroid/features.html">
+  <link rel="icon" type="image/png" href="assets/bot.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<a href="#main-content" class="skip-link">Skip to main content</a>
+
+<nav class="navbar" id="navbar">
+  <div class="nav-inner">
+    <a href="index.html" class="nav-brand">
+      <img src="assets/bot.png" alt="OpenDroid">
+      <span>OpenDroid</span>
+    </a>
+    <div class="nav-right">
+    <ul class="nav-links" id="nav-links">
+      <li class="nav-dropdown">
+        <a href="features.html">Products</a>
+        <ul class="dropdown-menu">
+          <li><a href="features.html">Features</a></li>
+          <li><a href="releases.html">Releases &amp; Changelog</a></li>
+          <li><a href="https://github.com/yashab-cyber/opendroid/releases" target="_blank" rel="noopener noreferrer">Download APK</a></li>
+          <li><a href="https://indusapp.store/wphbqhzu" target="_blank" rel="noopener noreferrer">Indus Appstore</a></li>
+        </ul>
+      </li>
+      <li class="nav-dropdown">
+        <a href="features.html">Use Cases</a>
+        <ul class="dropdown-menu">
+          <li><a href="#showcase-planning">Autonomous Planning</a></li>
+          <li><a href="#showcase-routines">Habit &amp; Routine Detection</a></li>
+          <li><a href="#showcase-telegram">Telegram &amp; WhatsApp</a></li>
+          <li><a href="#showcase-screen-understanding">Screen Understanding</a></li>
+          <li><a href="#showcase-memory">Personal Knowledge Graph</a></li>
+          <li><a href="#showcase-device">Device Control</a></li>
+          <li><a href="#showcase-litert">On-Device AI Models</a></li>
+        </ul>
+      </li>
+      <li><a href="about.html">About</a></li>
+      <li><a href="support.html">Support</a></li>
+      <li class="nav-dropdown">
+        <a href="#">Resources</a>
+        <ul class="dropdown-menu">
+          <li><a href="https://github.com/yashab-cyber/opendroid" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+          <li><a href="https://discord.gg/knRMyFmvpp" target="_blank" rel="noopener noreferrer">Discord</a></li>
+          <li><a href="contributor.html">Contributors</a></li>
+          <li><a href="security.html">Security</a></li>
+          <li><a href="privacy.html">Privacy</a></li>
+        </ul>
+      </li>
+      <li><a href="https://github.com/yashab-cyber/opendroid/releases" target="_blank" class="nav-cta" aria-label="Download OpenDroid" rel="noopener noreferrer">
+        Download
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-left: 4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+      </a></li>
+    </ul>
+    <div class="nav-controls">
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Enable light mode" aria-pressed="false">
+        <svg class="icon-sun" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+        <svg class="icon-moon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        <span class="theme-toggle-text-wrap"><span class="tt-dark">Dark</span><span class="tt-light">Light</span></span>
+      </button>
+      <button class="nav-hamburger" id="nav-hamburger" aria-label="Toggle menu" aria-expanded="false" aria-controls="nav-links">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+  </div>
+</nav>
+
+<header class="page-header" id="main-content" tabindex="-1">
+  <div class="container">
+    <span class="label">Capabilities</span>
+    <h1>Powerful Features</h1>
+    <p>Every capability OpenDroid brings to your Android device — built for autonomy, designed for privacy.</p>
+  </div>
+</header>
+
+<main>
+  <!-- Feature Showcase -->
+  <section class="section" id="feature-list">
+    <div class="container">
+      <div class="feature-showcase">
+
+        <!-- 1. Habit & Routine Detection -->
+        <div class="glass-card showcase-card reveal" id="showcase-routines">
+          <div class="showcase-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+          </div>
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <h3 style="margin:0;">Habit &amp; Routine Detection</h3>
+              <span class="badge-latest" style="font-size:0.7rem;">New in v1.0.6</span>
+            </div>
+            <p>OpenDroid notices your repeated daily patterns — like opening Gmail, checking Calendar, and opening Slack every weekday at 9:00 AM. After detecting a pattern, it proactively asks: <em>"I noticed you usually do these tasks every weekday morning. Would you like me to automate them?"</em> One tap converts the routine into a scheduled background macro with morning briefings.</p>
+            <div class="tag-row">
+              <span class="tag">HabitRoutineEngine</span>
+              <span class="tag">Sequence Mining</span>
+              <span class="tag">Morning Briefing</span>
+              <span class="tag">Macro Bridge</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Telegram & Messaging Automation -->
+        <div class="glass-card showcase-card reveal" id="showcase-telegram">
+          <div class="showcase-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+          </div>
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <h3 style="margin:0;">Telegram &amp; WhatsApp Automation</h3>
+              <span class="badge-latest" style="font-size:0.7rem;">Enhanced in v1.0.6</span>
+            </div>
+            <p>Full hands-free control across messaging apps. Send Telegram messages to <code>@username</code> handles, address book contacts, or international phone numbers without opening the app manually. Also automates WhatsApp chat and group messages, SMS drafting, and phone calls with graceful intent fallbacks.</p>
+            <div class="tag-row">
+              <span class="tag">SEND_TELEGRAM</span>
+              <span class="tag">SEND_WHATSAPP</span>
+              <span class="tag">TelegramAutomator</span>
+              <span class="tag">ContactResolver</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Screen Understanding -->
+        <div class="glass-card showcase-card reveal" id="showcase-screen-understanding">
+          <div class="showcase-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          </div>
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <h3 style="margin:0;">Screen Understanding ("Read &amp; Remember")</h3>
+              <span class="tag" style="font-size:0.7rem;">v1.0.5</span>
+            </div>
+            <p>Tell OpenDroid: <em>"Read this screen and save the meeting details to my notes"</em> or <em>"Remember this"</em>. Multimodal vision and accessibility trees extract structured event data (title, date, location, participants, action items) into persistent memory. Retrieve anything later by asking: <em>"What did I save about the flight?"</em></p>
+            <div class="tag-row">
+              <span class="tag">READ_AND_REMEMBER_SCREEN</span>
+              <span class="tag">RECALL_MEMORY</span>
+              <span class="tag">Multimodal Vision</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. 4-Tier Personal Knowledge Graph -->
+        <div class="glass-card showcase-card reveal" id="showcase-memory">
+          <div class="showcase-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5V19A9 3 0 0 0 21 19V5"></path><path d="M3 12A9 3 0 0 0 21 12"></path></svg>
+          </div>
+          <div>
+            <h3>4-Tier Personal Knowledge Graph</h3>
+            <p>OpenDroid retains intelligence safely across four distinct tiers: <strong>Level 1 (Temporary)</strong> for active plan context; <strong>Level 2 (Long-Term)</strong> for explicit facts and preferences; <strong>Level 3 (Learned Patterns)</strong> for inferred habits with dynamic confidence scoring; and <strong>Level 4 (Sensitive Data)</strong> encrypted with hardware Android Keystore AES-256-GCM.</p>
+            <div class="tag-row">
+              <span class="tag">PersonalGrowthEngine</span>
+              <span class="tag">Dynamic Confidence</span>
+              <span class="tag">Keystore AES-256</span>
+              <span class="tag">Room SQLite</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. Autonomous Planning -->
+        <div class="glass-card showcase-card reveal" id="showcase-planning">
+          <div class="showcase-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.44 2.5 2.5 0 0 1 0-3.12 3 3 0 0 1 0-4.88 2.5 2.5 0 0 1 0-3.12A2.5 2.5 0 0 1 9.5 2z"></path><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.44 2.5 2.5 0 0 0 0-3.12 3 3 0 0 0 0-4.88 2.5 2.5 0 0 0 0-3.12A2.5 2.5 0 0 0 14.5 2z"></path></svg>
+          </div>
+          <div>
+            <h3>Autonomous Planning &amp; Re-evaluation</h3>
+            <p>Give OpenDroid a complex, multi-step goal like <em>"Check if it's going to rain, text my wife I'll be late, and set an alarm for 6 PM"</em>. The agent decomposes commands into logical sub-tasks, executes each in sequence, verifies the outcome, and dynamically adjusts the remaining steps if something fails or conditions change.</p>
+            <div class="tag-row">
+              <span class="tag">PlanManager</span>
+              <span class="tag">ReEvaluationEngine</span>
+              <span class="tag">IntentClassifier</span>
+              <span class="tag">Compound Intent Guard</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6. Full Device & System Control -->
+        <div class="glass-card showcase-card reveal" id="showcase-device">
+          <div class="showcase-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
+          </div>
+          <div>
+            <h3>Full Device &amp; System Control</h3>
+            <p>Deep integration with Android system APIs enables control over brightness, Wi-Fi, Bluetooth, flashlight, screen lock, alarms, timers, calendar events, currency conversions, media playback, and hardware status — all locally and hands-free.</p>
+            <div class="tag-row">
+              <span class="tag">SystemActions</span>
+              <span class="tag">WRITE_SETTINGS</span>
+              <span class="tag">AlarmManager</span>
+              <span class="tag">CalendarProvider</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 7. On-Device AI Models (LiteRT-LM) -->
+        <div class="glass-card showcase-card reveal" id="showcase-litert">
+          <div class="showcase-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          </div>
+          <div>
+            <h3>On-Device AI Models (LiteRT-LM)</h3>
+            <p>Run 100% offline with zero cloud dependency. Download LiteRT models (Gemma 4 e2b-it, Qwen 2.5, Llama 3.2) in the background via WorkManager over Wi-Fi or cellular networks. Downloads verify SHA-256 checksums and test runtime JNI compatibility before enabling on-device inference.</p>
+            <div class="tag-row">
+              <span class="tag">LiteRT-LM</span>
+              <span class="tag">Offline AI</span>
+              <span class="tag">Hugging Face Auth</span>
+              <span class="tag">WorkManager</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 8. Accessibility Automation -->
+        <div class="glass-card showcase-card reveal" id="showcase-accessibility">
+          <div class="showcase-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 14s1.5 2 4 2 4-2 4-2"></path><line x1="9" y1="9" x2="9.01" y2="9"></line><line x1="15" y1="9" x2="15.01" y2="9"></line></svg>
+          </div>
+          <div>
+            <h3>Accessibility Automation</h3>
+            <p>When API controls aren't available, OpenDroid leverages Android's Accessibility Service to interact with third-party apps directly. It can click buttons, scroll feeds, read screen layouts, type text, and navigate complex UIs across your favorite apps.</p>
+            <div class="tag-row">
+              <span class="tag">AccessibilityService</span>
+              <span class="tag">UI Automation</span>
+              <span class="tag">Node Scraping</span>
+              <span class="tag">Gesture Injection</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 9. 10+ Cloud & Local LLMs -->
+        <div class="glass-card showcase-card reveal" id="showcase-llm">
+          <div class="showcase-icon" aria-hidden="true">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+          </div>
+          <div>
+            <h3>10+ LLM Provider Support</h3>
+            <p>Bring your own AI model. OpenDroid supports Anthropic Claude, OpenAI GPT, Google Gemini, Groq, Mistral, OpenRouter, Together AI, Cohere, DeepSeek — and offline execution via local Ollama or LiteRT models. Features dynamic runtime model discovery straight from provider endpoints.</p>
+            <div class="tag-row">
+              <span class="tag">Anthropic</span>
+              <span class="tag">OpenAI</span>
+              <span class="tag">Gemini</span>
+              <span class="tag">Ollama</span>
+              <span class="tag">Dynamic Fetch</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta-section">
+    <div class="container">
+      <div class="cta-box reveal">
+        <h2>Experience Every Feature</h2>
+        <p>Download OpenDroid v1.0.6 and explore its full capabilities on your Android device.</p>
+        <div class="cta-buttons">
+          <a href="https://github.com/yashab-cyber/opendroid/releases" class="btn btn-primary">⬇ Download APK (v1.0.6)</a>
+          <a href="releases.html" class="btn btn-secondary">📜 View Release Notes</a>
+          <a href="https://indusapp.store/wphbqhzu" target="_blank" class="indus-badge-link" rel="noopener noreferrer">
+            <img src="assets/indus-badge.png" alt="Get it on Indus Appstore" class="indus-badge-img">
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer" id="footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a href="index.html" class="nav-brand">
+          <img src="assets/bot.png" alt="OpenDroid" style="width:28px;height:28px;">
+          <span>OpenDroid</span>
+        </a>
+        <p>Your open autonomous Android agent. Built with ❤ by the open-source community.</p>
+      </div>
+      <div class="footer-col">
+        <h4>Product</h4>
+        <ul>
+          <li><a href="features.html">Features</a></li>
+          <li><a href="releases.html">Releases &amp; Changelog</a></li>
+          <li><a href="https://github.com/yashab-cyber/opendroid/releases" target="_blank" rel="noopener noreferrer">Download</a></li>
+          <li><a href="https://indusapp.store/wphbqhzu" target="_blank" rel="noopener noreferrer">Indus Appstore</a></li>
+          <li><a href="https://www.producthunt.com/products/opendroid?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-opendroid" target="_blank" rel="noopener noreferrer">Product Hunt</a></li>
+          <li><a href="https://github.com/yashab-cyber/opendroid" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>Resources</h4>
+        <ul>
+          <li><a href="about.html">About</a></li>
+          <li><a href="contributor.html">Contributors</a></li>
+          <li><a href="support.html">Support</a></li>
+          <li><a href="security.html">Security</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>Legal</h4>
+        <ul>
+          <li><a href="privacy.html">Privacy Policy</a></li>
+          <li><a href="terms.html">Terms of Service</a></li>
+          <li><a href="https://github.com/yashab-cyber/opendroid/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">License</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>&copy; 2026 OpenDroid Contributors. Apache License 2.0.</span>
+      <span>
+        <a href="https://www.producthunt.com/products/opendroid?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-opendroid" target="_blank" rel="noopener noreferrer">Product Hunt</a> &nbsp;·&nbsp;
+        <a href="https://discord.gg/knRMyFmvpp" target="_blank" rel="noopener noreferrer">Discord</a> &nbsp;·&nbsp;
+        <a href="https://github.com/yashab-cyber/opendroid" target="_blank" rel="noopener noreferrer">GitHub</a>
+      </span>
+    </div>
+  </div>
+</footer>
+
+<script src="js/main.js"></script>
+</body>
+</html>

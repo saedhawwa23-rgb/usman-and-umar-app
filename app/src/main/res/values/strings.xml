@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">USMAN AND UMAR</string>
+    <string name="accessibility_service_desc">Provides autonomous UI interaction, screen reading, and navigation assistance for USMAN AND UMAR control.</string>
+</resources>

@@ -1,0 +1,480 @@
+# Archived Upstream OpenDroid Releases
+
+This file is retained as historical release context from the imported OpenDroid source project. It is **not** the current USMAN AND UMAR release record, and its model, device-test, version, and asset claims must not be read as current. See the current app version in `app/build.gradle` and the cloud-first design in [`architecture.md`](architecture.md).
+
+---
+
+## v1.0.7 — Historical upstream release (September 4, 2026)
+
+### Highlights since v1.0.6
+
+#### 🌐 Complete AI Social Media Management System
+*   **Multi-Platform Management**: Autonomous AI social assistant supporting 7 major platforms: **X (Twitter)**, **Instagram**, **LinkedIn**, **Facebook**, **YouTube**, **Telegram**, and **Discord**.
+*   **Unified Social Dashboard**: 10 purpose-built sub-tabs (`Overview`, `Accounts`, `Unified Inbox`, `Content Studio`, `Calendar`, `Comments`, `Campaigns`, `Analytics`, `Reports`, `Settings & Rules`).
+*   **Hardware-Backed Credential Security**: Android Keystore-backed AES-256-GCM encrypted vault (`SocialCredentialStore`) with Additional Authenticated Data (AAD) cryptographic binding per platform and account (`social_cred_aad:<platform>:<accountId>`), preventing cross-account substitution attacks.
+*   **Room Database Migration `MIGRATION_8_9`**: Upgraded Room schema to version 9 with 8 new relational entities and reactive DAOs (`social_accounts`, `social_posts`, `social_comments`, `social_interactions`, `social_analytics_snapshots`, `social_campaigns`, `social_automation_rules`, `social_audit_logs`).
+*   **Tri-Tier Automation & Human-in-the-Loop Safety**: Configurable automation levels (`SAFE`, `APPROVAL`, `AUTONOMOUS`) enforced by `SocialRuleEngine`. Any sensitive, financial, legal, refund, security vulnerability, breach, or negative sentiment interaction strictly triggers mandatory human review.
+*   **Grounded AI Intelligence Layer**:
+    *   `SocialContentComposer`: Crafts platform-tailored drafts respecting character budgets and hashtag norms.
+    *   `SocialInboxClassifier`: AI triage classifying interactions into categories (`LEAD`, `SUPPORT_REQUEST`, `QUESTION`, `FEEDBACK`, `SPAM`) with sentiment and priority scoring.
+    *   `SocialCommentReplyEngine`: Grounded community reply generator that retrieves verified brand knowledge memories without hallucinating or inventing fake dates.
+    *   `SocialScheduleWorker`: Background scheduled publishing coordinator via WorkManager.
+
+#### 📁 Storage Management & Play Store Policy Compliance
+*   **Storage Access Framework (SAF) Integration**: Implemented `StorageWorkspaceProvider` to resolve Google Play Console All Files Access (`MANAGE_EXTERNAL_STORAGE`) policy requirements.
+*   **Granular Folder Selection**: Users can choose specific workspace folders via Android's document tree picker or operate seamlessly within app-scoped sandboxed storage without requiring broad external storage access.
+*   **Permissions UX Enhancements**: Modernized `PermissionsScreen` and `PermissionModel` with folder picking options for Android 11+ (SDK 30+).
+
+#### 🎨 Pure OLED Black & Classic White Theme Redesign
+*   **Clean Contrast Styling**: Overhauled the entire UI theme to pure OLED black (`#000000`) in dark mode and classic pure white (`#FFFFFF`) in light mode.
+*   **Zero Green Accents**: Modernized all buttons, chips, and cards to sleek obsidian/titanium monochrome styling with subtle sky sapphire active badges.
+*   **Enhanced Visual Feedback & Animations**: Fluid sub-tab transitions, animated sync indicators, and responsive canvas charts (`SocialCharts.kt`).
+
+#### 🧪 LiteRT Model Compatibility & Stability
+*   **Compatibility Fixes**: Resolved model verification failure when downloading LiteRT on-device models (e.g. Qwen 2.5, Gemma).
+*   **Failure Marker Matching & Memory Safety**: Enhanced probe evaluation and fallback behavior for on-device inference.
+
+#### 🛠️ Version & Build Updates
+*   **Version Bump**: Updated app version to `1.0.7` (`versionCode 8`).
+*   **Comprehensive Test Suite**: Added `SocialPlatformTest`, `OpenDroidDatabaseMigrationTest` (validating schema v8 to v9 migration and data preservation), and `SocialRuleEngineTest` with 100% passing tests.
+
+### Release Assets
+*   **`app-debug.apk`** — Debug build APK for developer testing & logging.
+*   **`app-release.apk`** — Release APK (sideload for testing).
+*   **`app-debug.aab`** — Debug Android App Bundle.
+*   **`app-release.aab`** — Release Android App Bundle.
+
+### Checksums (SHA-256)
+*   **`app-debug.apk`**: `3cd060523174964465ac24a5c4f37ab4d11c4fa69f43931681b103557233fb80`
+*   **`app-release.apk`**: `eef3d9c61ae7783dbc6b0cb30fe6714b94f2c74ba7c182dd1e00a05da29de11b`
+*   **`app-debug.aab`**: `81461c621fc30dacb25099bdcd3382229ccdfb56f835d03d24563797d3e8c57f`
+*   **`app-release.aab`**: `03186f5d4410c7f758d0ec215dc49f61aa0945bb61e5ba78c47a804611eab29b`
+
+### Build Configuration
+*   **Package**: `com.opendroid.aiagent`
+*   **Version Code**: 8
+*   **Version Name**: 1.0.7
+*   **Min SDK**: 26 (Android 8.0)
+*   **Target SDK**: 36 (Android 16)
+
+### Install notes for testers
+1. Download `app-release.apk` or `app-debug.apk` from the GitHub release.
+2. Enable install from unknown sources for your browser/file manager.
+3. Sideload the APK; uninstall any prior build with a different signing key if Android blocks the update.
+4. Report issues against tag `v1.0.7`.
+
+---
+
+## v1.0.6 (August 20, 2026)
+
+Current release. Sideload the APK for direct install, or use the AAB for Play Store distribution.
+
+### Highlights since v1.0.5
+
+#### 🔄 Habit & Routine Detection Engine
+*   **Proactive Pattern Recognition**: OpenDroid tracks app usage habits over time and detects repeated daily/weekly workflows (e.g., every weekday at 9:00 AM: *Gmail $\to$ Calendar $\to$ Slack $\to$ Chrome*).
+*   **Proactive Automation Prompts**: Surfaces smart suggestions with confidence metrics: *"I noticed you usually do these tasks every weekday morning. Would you like me to automate them?"*
+*   **Multi-Step Morning Routine Automation**: Automatically synthesizes structured morning briefings:
+    1. Read today's calendar (`LIST_CALENDAR_TODAY`)
+    2. Summarize upcoming meetings (`GET_MORNING_BRIEFING`, `section = "schedule"`)
+    3. Check important notifications (`READ_NOTIFICATIONS`)
+    4. Prepare task list from notes (`READ_NOTES`)
+    5. Read selected messages (`READ_NOTIFICATIONS`)
+    6. Deliver spoken or text morning briefing (`GET_MORNING_BRIEFING`, `section = "full"`)
+*   **One-Click Approval & Macro Scheduling**: User approval converts detected routines into recurring scheduled macros in `MacroDao` and logs knowledge nodes in `PersonalGrowthEngine`.
+*   **Dedicated Routines Screen**: Added modern UI screen (`RoutinesScreen.kt`) with suggestion approval cards, active routines list, template presets (*Morning Routine*, *Work Focus*, *Evening Wrap-up*), and learning analytics.
+*   **Room Database Migration `MIGRATION_7_8`**: Added `habit_events` and `habit_routines` tables, upgrading schema to version 8.
+
+#### ✈️ Telegram Control & Automation
+*   **Full Telegram Automation**: OpenDroid now supports end-to-end messaging and chat control on Telegram alongside WhatsApp and SMS.
+*   **`SEND_TELEGRAM` & `OPEN_TELEGRAM` Actions**: Direct handling of `@username` handles, contact address book lookups, international phone numbers, and chat links (`tg://resolve`, `https://t.me/`).
+*   **`TelegramAutomator`**: Automatic accessibility typing and sending across official Telegram, Telegram Web/FOSS, Plus Messenger, and NekoX.
+*   **Habit Engine Integration**: Package recognition tracks Telegram workflows in routine mining.
+
+#### 🧪 LiteRT Model Compatibility & Probe Fixes
+*   **Model Verification Fix**: Fixed a bug where downloaded LiteRT models (such as `Gemma 4 e2b-it` and `Qwen 2.5`) falsely reported `FORMAT_INVALID` during initialization verification.
+*   **Failure Marker Matching**: Corrected probe verification logic from strict `.all` failure matching to `.any` marker matching and expanded backend-specific error classification for GPU/NPU/CPU fallbacks.
+
+#### 🛠️ Version & Build Updates
+*   **Version Bump**: Updated app version to `1.0.6` (`versionCode 7`).
+*   **Comprehensive Test Coverage**: Added `HabitRoutineEngineTest`, `RoutineActionsTest`, and `TelegramActionsTest` with 100% passing test suite.
+
+### Release Assets
+*   **`app-debug.apk`** — Debug build APK for developer testing & logging.
+*   **`app-release.apk`** — Release APK (sideload for testing).
+*   **`app-debug.aab`** — Debug Android App Bundle.
+*   **`app-release.aab`** — Release Android App Bundle.
+
+### Checksums (SHA-256)
+*   **`app-debug.apk`**: `07025caea20b4c9e32c7889549777266605e94361985ec4ce790f988920b4d63`
+*   **`app-release.apk`**: `c10b8ec614d38aab2f0bbaa254d38bc7ec7bde7b296963b74ddda86e12748a6e`
+*   **`app-debug.aab`**: `e2025affd0d0f344085b16eb486295f7fca9b513cf5159a3781b9c839eb1c149`
+*   **`app-release.aab`**: `de9bd177e4274cc97ec45913d2ce2e59389291bed45d0eddbd770bbe9e956f23`
+
+### Build Configuration
+*   **Package**: `com.opendroid.aiagent`
+*   **Version Code**: 7
+*   **Version Name**: 1.0.6
+*   **Min SDK**: 26 (Android 8.0)
+*   **Target SDK**: 36 (Android 16)
+
+### Install notes for testers
+1. Download `app-release.apk` or `app-debug.apk` from the GitHub release.
+2. Enable install from unknown sources for your browser/file manager.
+3. Sideload the APK; uninstall any prior build with a different signing key if Android blocks the update.
+4. Report issues against tag `v1.0.6`.
+
+---
+
+## v1.0.5 (August 18, 2026)
+
+### Highlights since v1.0.4
+
+#### 🧠 Screen Understanding → “Read & Remember”
+*   **Multimodal Screen Extraction**: Added `extractAndStructureScreenInfo` to `VisionEngine` combining screen captures with text accessibility tree fallback to automatically extract meeting details (*Title, Date, Time, Location, Participants, Action Items*), key points, and notes.
+*   **`READ_AND_REMEMBER_SCREEN` Action**: Added dedicated action and natural language fast-paths for triggers such as *"Read this screen and save the important information to my notes"*, *"Read this WhatsApp message and save the meeting details"*, *"Remember this"*, and *"Add this to my notes"*.
+*   **`RECALL_MEMORY` Action**: Allows querying and recalling stored screen notes, facts, and memories (*"What did I save about X?"*, *"Read my notes"*).
+*   **Persistent Room Storage**: Screen extractions persist into SQLite via `MemoryRepository` under `MemoryType.SEMANTIC` and automatically surface in Memory and LLM context.
+
+#### 📈 Personal Growth Memory (Personal Knowledge Graph & Tiered Memory)
+*   **Personal Knowledge Graph**: Organizes learned intelligence into a structured knowledge graph with entity nodes (`KnowledgeNode`), categories (`KnowledgeCategory`: `CONTACT`, `TASK_ROUTINE`, `APP_PREFERENCE`, `SCHEDULE`, `PROJECT`, `RESOURCE`, `NOTE_FACT`, `USER_PREFERENCE`), and relations (`KnowledgeRelation`).
+*   **4-Tier Security & Retention Hierarchy**:
+    1.  **⚡ Level 1: Temporary Memory (`TEMPORARY`)**: Current task/session working context, active plan state, and intermediate tool results.
+    2.  **🧠 Level 2: Long-Term Memory (`LONG_TERM`)**: Explicit user facts, active projects, and custom preferences with confidence rating `1.0`.
+    3.  **📈 Level 3: Learned Patterns (`LEARNED_PATTERN`)**: Behaviors inferred from activity (frequently contacted people, preferred media apps, ride hailing choices, recurring alarm routines, frequent websites) with dynamic confidence scoring (50% → 85% → 95%).
+    4.  **🔒 Level 4: Sensitive Data (`SENSITIVE`)**: High-security confidential records (passwords, PINs, tokens) encrypted at rest using Android Keystore AES-256-GCM via `SensitiveMemoryStore`.
+*   **Knowledge Actions**: Added `QUERY_KNOWLEDGE_GRAPH`, `UPDATE_PREFERENCE`, and `SAVE_SENSITIVE_INFO` actions.
+*   **UI Growth Graph Screen**: Added interactive **GROWTH GRAPH** view in `MemoryScreen` with level filtering chips, category chips, confidence badges, one-tap pattern-to-preference promotion, and encrypted secret creation.
+
+#### 🌐 On-Device AI Cellular Network Download Warning & Support
+*   **Cellular Network Download**: Allowed LiteRT on-device AI model downloads to proceed over cellular network connections in addition to Wi-Fi.
+*   **Data Charges Warning Dialog**: Added interactive warning dialog before starting cellular downloads alert users to potential data carrier charges.
+*   **Dynamic WorkManager Network Constraints**: Configured `ModelDownloadWorkRequest` with flexible network constraints based on user choice.
+
+#### 🛠️ Toolchain & Version Bump
+*   **Version Bump**: Updated app version to `1.0.5` (`versionCode 6`).
+*   **Java 21 Alignment**: Standardized compilation on Java 21 compatibility.
+
+### Release Assets
+*   **`app-debug.apk`** — Debug build APK for developer testing & logging.
+*   **`app-release.apk`** — Release APK (sideload for testing).
+*   **`app-debug.aab`** — Debug Android App Bundle.
+*   **`app-release.aab`** — Release Android App Bundle.
+
+### Checksums (SHA-256)
+*   **`app-debug.apk`**: `857a3d7f1891f61717e23f8352479c46270eb625c936f5b6bdcd14f4fedb3b4c`
+*   **`app-release.apk`**: `30b8827d99bea209be96c152456534607f23b15c03b909bd9f672880cdfdb397`
+*   **`app-debug.aab`**: `87cc9a0f468a5ac48d00829b3f8f4a2f4fabf2f9a73d77b20c3238be406410f7`
+*   **`app-release.aab`**: `05b14dce34c169a5dad812f2adf0b6838457d252407b3ad3e651344440678894`
+
+### Build Configuration
+*   **Package**: `com.opendroid.aiagent`
+*   **Version Code**: 6
+*   **Version Name**: 1.0.5
+*   **Min SDK**: 26 (Android 8.0)
+*   **Target SDK**: 36 (Android 16)
+
+### Install notes for testers
+1. Download `app-release.apk` or `app-debug.apk` from the GitHub release.
+2. Enable install from unknown sources for your browser/file manager.
+3. Sideload the APK; uninstall any prior build with a different signing key if Android blocks the update.
+4. Report issues against tag `v1.0.5`.
+
+---
+
+## v1.0.4 (August 10, 2026)
+
+#### 🤖 Dynamic Model Fetching & Catalog Updates
+*   **Runtime Model Lists**: Every remote LLM provider (Gemini, OpenAI, Cohere, Groq, OpenRouter, etc.) now dynamically fetches its available model list directly from its respective `/models` endpoint rather than shipping hardcoded fallback lists.
+*   **Capability-Based Chat Model Filtering**: Chat models are identified dynamically by capability markers (e.g. `generateContent` support for Gemini, declared chat endpoints for Cohere, non-chat denylist for OpenAI-compatible providers) ensuring newly released models appear in the picker without requiring an app update.
+*   **De-staled Seed Models**: Updated seed models across provider catalogs (Gemini `gemini-2.5-flash`, Groq `llama-3.3-70b-versatile`, OpenRouter `openrouter/auto`).
+*   **Improved Model Fetch Error Reporting**: Failed model lookups report explicit states (`Success` / `NeedsCredentials` / `Failed`) in Settings instead of swallowing errors and caching stale defaults.
+*   **Standalone Parser Architecture**: Extracted parsing into `ModelListParsers` with unit tests verifying parser stability across provider schemas.
+
+#### ⚡ LiteRT & On-Device Improvements
+*   **SDK Gate Cleanup**: Removed redundant `SDK_INT` runtime checks in `LiteRTLMProvider.isAvailable` as `minSdk 26` guarantees API availability.
+*   **LiteRT Tests**: Added tests for custom LiteRT model registry helpers and the default Qwen model configuration.
+
+#### 📱 About Screen Fixes
+*   **Dynamic Version Display**: Updated the About screen to read `BuildConfig.VERSION_NAME` dynamically rather than using a hardcoded string.
+*   **Icon Badge Scaling**: Replaced text placeholder with properly scaled `bot.png` app icon badge (`requiredSize`).
+
+#### 🛠️ Toolchain & Build Hardening
+*   **Gradle 9.7.0**: Upgraded Gradle wrapper to 9.7.0 and updated SHA-256 wrapper verification checksum.
+*   **Version Bump**: Updated app version to `1.0.4` (`versionCode 5`).
+
+### Release Assets
+*   **`app-debug.apk`** — Debug build APK for developer testing & logging.
+*   **`app-release.apk`** — Release APK (sideload for testing).
+*   **`app-debug.aab`** — Debug Android App Bundle.
+*   **`app-release.aab`** — Release Android App Bundle.
+
+### Checksums (SHA-256)
+*   **`app-debug.apk`**: `f7d1e09255b31bdab371a676a721cbbf84ac590241392882e4f41ed2ec25d9e0`
+*   **`app-release.apk`**: `0ca3ba4eb79a2cdbda7ec54ad535f9e20fbe00784b7ac3ba37f75bc44f11139b`
+*   **`app-debug.aab`**: `2a48def95b1f1ed4c8c3298d7f128f3f9e5226439526a3ce1ab46d64be4ac5eb`
+*   **`app-release.aab`**: `1e44938af7d9b6df8e7cd074a210129cc7757ca551462bb122206021833037f5`
+
+### Build Configuration
+*   **Package**: `com.opendroid.aiagent`
+*   **Version Code**: 5
+*   **Version Name**: 1.0.4
+*   **Min SDK**: 26 (Android 8.0)
+*   **Target SDK**: 36 (Android 16)
+
+### Install notes for testers
+1. Download `app-release.apk` or `app-debug.apk` from the GitHub release.
+2. Enable install from unknown sources for your browser/file manager.
+3. Sideload the APK; uninstall any prior build with a different signing key if Android blocks the update.
+4. Report issues against tag `v1.0.4`.
+
+---
+
+## v1.0.3 (August 5, 2026)
+
+Current release. Sideload the APK for direct install, or use the AAB for Play Store distribution.
+
+### Highlights since v1.0.2 (PR #30 by @JMAN730)
+
+#### 🔐 Security & Credential Hardening
+*   **Android Keystore Credential Storage**: Moved provider API credentials from the former encrypted-preferences store to direct Android Keystore-backed encryption, with stale-credential recovery on decrypt failure and transactional (all-or-nothing) credential saves.
+*   **Keystore GCM IV Fix**: Stopped rejecting the Keystore-generated GCM IV on encrypt, which previously broke encryption on some devices.
+*   **SecurePrefs Retirement**: Retired `SecurePrefs` for non-provider callers and removed the deprecated encrypted-preferences dependency after the direct Keystore migration.
+*   **Approval & Storage Safety Remediation**: Closed PRD/TRD remediation gaps in action approval and storage safety; YOLO mode now explicitly (and only via user opt-in) bypasses the `neverAutoApprove` guard.
+*   **Typed LLM Errors**: Preserved typed LLM error information through Claude streaming responses instead of collapsing them to generic failures.
+
+#### 📦 Model Download & Install Integrity
+*   **Publisher SHA-256 Pins**: Recorded publisher SHA-256 pins for the Gemma 3n models so downloads verify against known-good hashes.
+*   **Atomic Model Installs**: Made model artifact/manifest commits unambiguous on failure — a crashed install can no longer leave a model half-registered.
+*   **Download Resilience**: Hardened model downloads against WorkManager job quotas, improved retry feedback, logged previously swallowed download errors, and deduplicated the LiteRT compatibility probe.
+*   **Hugging Face Token Hygiene**: Log failed clears of the Hugging Face verification timestamp instead of ignoring them.
+
+#### 🛠️ Build & Toolchain
+*   **SDK 36**: Bumped `compileSdk`/`targetSdk` to 36 with AndroidX platform dependencies upgraded to match.
+*   **Gradle 9.6.1 / AGP 9.3.1**: Migrated to Gradle 9.6.1 and AGP 9.3.1 with built-in Kotlin and KSP; modern DSL throughout; Gradle daemon pinned to JDK 21 with the configuration cache enabled.
+*   **Network Stack**: Upgraded to Retrofit 3.0.0 and the OkHttp 5.4.0 BOM.
+*   **Lint Zero-Baseline Push**: Enabled `warningsAsErrors` across the lint tiers and cleared `DefaultLocale`, `InlinedApi`, `AutoboxingStateCreation`, `Recycle` (false positives suppressed at source), `UseKtx`, and `DuplicateUsesFeature` findings; deleted five unused drawables and their baseline entries.
+*   **Test Matrix Fixes**: Corrected three instrumentation tests surfaced by the expanded CI matrix and isolated the resource-cleanup test fixture.
+
+#### 📱 UI, Accessibility & Compatibility
+*   **Android 16 Edge-to-Edge**: Finalized edge-to-edge support with proper inset handling across screens.
+*   **Touch Fix**: Stopped the floating button's unused margin from swallowing taps around it.
+*   **Onboarding & Settings UX**: Added a date picker for the onboarding birthday field and made the Planning & Automation settings section collapsible.
+*   **Accessibility Node Traversal**: Extracted accessibility node traversal into a testable component and landed instrumentation tests for it.
+*   **Optional Hardware Declarations**: Declared telephony and camera as optional hardware, gated granular telephony features on API 33, and guarded remaining camera actions — the app now installs on tablets and WiFi-only devices.
+
+#### 📚 Documentation
+*   Consolidated root docs into `docs/`, folded `vibecoder.md` into `CONTRIBUTING.md`, and trimmed the README.
+*   Added a QA test plan for Qwen 2.5 LiteRT on-device inference; fixed stale SDK-level references and staging-file names.
+
+### Release Assets
+*   **`app-debug.apk`** — Debug build APK for developer testing & logging.
+*   **`app-release.apk`** — Release APK (sideload for testing).
+*   **`app-debug.aab`** — Debug Android App Bundle.
+*   **`app-release.aab`** — Release Android App Bundle.
+
+### Checksums (SHA-256)
+*   **`app-debug.apk`**: `fc1a0726a2e236620c659f54cf8ff65303677b6d6d641cd509c4bac02a2b7c56`
+*   **`app-release.apk`**: `9c28e6b9c8f5414774856b59966939075d58facc82f6e8dd96d808c301409830`
+*   **`app-debug.aab`**: `d1b5029f871400010fdc7cd6528d0c29e3e55559856dd51306b84ee3cb9c59d7`
+*   **`app-release.aab`**: `064a51d8dfdf2bd977a85e64fe7ff49f68cb369a03272c78217b51d22add8bc9`
+
+### Build Configuration
+*   **Package**: `com.opendroid.aiagent`
+*   **Version Code**: 4
+*   **Version Name**: 1.0.3
+*   **Min SDK**: 26 (Android 8.0)
+*   **Target SDK**: 36 (Android 16)
+
+### Install notes for testers
+1. Download `app-release.apk` or `app-debug.apk` from the GitHub pre-release.
+2. Enable install from unknown sources for your browser/file manager.
+3. Sideload the APK; uninstall any prior build with a different signing key if Android blocks the update.
+4. Report issues against tag `v1.0.3`.
+
+---
+
+## v1.0.2 — Developer Pre-release (July 30, 2026)
+
+Developer-facing pre-release for sideload testing. Not a Play Store production upload.
+
+### Highlights since v1.0.1 (Contributor Contributions #22, #23, #24, #25, #26)
+*   **Android 14/15 Foreground Service Fix (PR #22 by @JMAN730)**: Resolved `SecurityException` crashes on fresh installs by introducing `specialUse` fallback FGS service type and runtime permission handling in `OpenDroidService` (PR #22).
+*   **Auto Mode & Safety Controls (PR #23 by @JMAN730)**: Introduced `AutoMode` (`NEVER`, `SAFE_ONLY`, `ALWAYS`), `AutoApprovalPolicy` plan filtering, `isNeverAutoApprovable` safeguards on sensitive actions, and `VoiceApprovalParser` for spoken plan approvals (PR #23).
+*   **Website Redesign & Theme Accessibility (PR #24 by @sudomarc)**: Full visual redesign of the website, light/dark theme toggle, navigation accessibility fix, mobile responsive fixes, and maintenance (PR #24).
+*   **LLM Reliability, Crash Logging & CI Hardening (PR #25 by @JMAN730)**: Added LLM provider error handling, Claude model catalog updates, on-device crash logging (`CrashLogRecorder`, `CrashLogRedactor`, `RoomCrashLogSink`, `CrashLogScreen`), permissions onboarding screen (`PermissionsScreen`), and CI hardening with GitHub Actions workflow (`android-ci.yml`), lint baseline, and Room schemas (PR #25).
+*   **App Package Verification & Handling (PR #26 / PR #49 by @JMAN730)**: Fixed package verification and `APPLICATION_NOT_INSTALLED` fallback handling across action handlers (PR #26, PR #49).
+*   **GitHub Star History Chart (#19, #21)**: Added interactive GitHub Star History chart to `README.md` with theme-aware (light/dark mode) embeds, legend rendering, and direct link to interactive chart page (Closes #17, PR #19, PR #21).
+*   **LiteRT Prompt Context Overflow Prevention (#20)**: Added `PromptBudget` token calculations and expanded on-device model context windows (1280 for Qwen 2.5 0.5B, 4096 for Gemma) to eliminate native C++ `SIGABRT` crashes (Fixes #15, PR #20).
+*   **UI Redesign & Iconography**: Premium developer-tool palette, Auto Mode settings/UI, and iconography upgrades.
+*   **Security Hardening**: Strengthened storage, auto-reply handling, and release build signing posture.
+*   **Package ID**: `applicationId` updated to `com.opendroid.aiagent` (includes Play Store verification token).
+*   **Toolchain Alignment**: Android SDK 35, Java 21, Kotlin 2.4.0, Hilt 2.58, Room 2.8.4.
+
+### Release Assets
+*   **`app-debug.apk`** — Debug build APK for developer testing & logging.
+*   **`app-release.apk`** — Release APK (sideload for testing).
+*   **`app-debug.aab`** — Debug Android App Bundle.
+*   **`app-release.aab`** — Release Android App Bundle.
+
+### Checksums (SHA-256)
+*   **`app-debug.apk`**: `cd1c02d696869960f561ec651072e538b721d87aa26220540c395b2ab5075b16`
+*   **`app-release.apk`**: `de455265ef6d9b301e2c5189ab046004026382e0f551108062ad2e5f3fc0d5e9`
+*   **`app-debug.aab`**: `77a7d0e8554c4f8e415ae63021a2c55dcd129b5dfc5e2964a153941c7fa6f555`
+*   **`app-release.aab`**: `e36c46ac399c6911540ed0c13ff3b868602381982aac310463a31c20860af3b4`
+
+### Build Configuration
+*   **Package**: `com.opendroid.aiagent`
+*   **Version Code**: 3
+*   **Version Name**: 1.0.2
+*   **Min SDK**: 26 (Android 8.0)
+*   **Target SDK**: 35 (Android 15)
+
+### Install notes for testers
+1. Download `app-release.apk` or `app-debug.apk` from the GitHub pre-release.
+2. Enable install from unknown sources for your browser/file manager.
+3. Sideload the APK; uninstall any prior build with a different signing key if Android blocks the update.
+4. Report issues against tag `v1.0.2`.
+
+---
+
+## v1.0.1 — On-Device Model Management & Theme Update (Re-release)
+
+### 🔄 Qwen 2.5 & Gemma 4 RAM Stability Update (July 14, 2026)
+*   **Qwen 2.5 Verification Hash Fix**: Corrected the SHA-256 hash of the LiteRT-LM Qwen 2.5 0.5B-it model specification in the registry to prevent the download manager from reporting it as corrupt.
+*   **On-Device RAM Compatibility Guard**: Implemented dynamic device RAM checks using `ActivityManager` to check total system RAM before downloading, importing, or initializing large models (like Gemma 4 E2B and E4B). Large models are safely blocked with a clear warning if the device has insufficient memory, preventing silent OS OOM crashes.
+*   **Application Heap Optimization**: Enabled `android:largeHeap="true"` in the manifest to request a larger system memory budget.
+
+### 🔄 Model Management & Secure Authentication Update (July 13, 2026)
+*   **On-Demand Model Downloader & Manager**: Created a complete lifecycle manager (`ModelManager` / `ModelRepository`) that supports downloading on-device LiteRT-LM models in the background via WorkManager, pausing, resuming, or canceling downloads, and verifying integrity.
+*   **Hugging Face Access Token Authentication**: Added secure token entry (masked password field with toggle, paste, and clear buttons) in Settings. Token is verified against HF `whoami-v2` API and stored securely with AES-256 encryption.
+*   **Gated Model Gating**: Prompts user with a details dialog if they try to download a gated model (e.g. Gemma 3/4) without configuring a token.
+*   **Diagnostics and Error Page Integration**: Dynamically displays network speed (MB/s), downloaded sizes, and ETA calculations during transfer. Displays exact error causes (unauthorized token, network offline, 404) and shows a quick-link "Open Model Page" button to let users easily accept gated repository license terms on failure.
+*   **Integrity and JNI Loading Verifications**: Before marking a model as ready, the download worker validates the file size, checks the SHA-256 hash (if available), and attempts to load/initialize the model via the LiteRT C++ library to ensure compatibility and prevent archive errors.
+*   **Offline Local Model Import**: Added direct local file selection support to import custom `.task` and `.litertlm` files, copy them to sandboxed app directories, run JNI engine compatibility tests, and register them as Ready.
+*   **Dynamic Progress Tracking & Speed Indicator UI**: Replaced the static status placeholders in Settings with an interactive card for each LiteRT-LM model. Displays live progress percentage, download speed, ETA, and progress bar with pause/resume/cancel buttons.
+*   **Automated Storage Cleanup**: Implemented on-device storage checks showing total/free device space and model space usage, plus a "Delete Unused Models" option to prune inactive models.
+*   **LiteRT Runtime Caching**: Upgraded `LiteRTLMProvider` to cache the `LlmInference` engine across prompts instead of reinstantiating it every time, enabling seamless switching and sub-millisecond execution.
+*   **Persistent Room State & Migrations**: Added the `models` table (`ModelEntity`) and `ModelDao` to track progress and status Reactively via Flow, with a safe database `MIGRATION_4_5` migration.
+
+### 🔄 Re-release Updates (July 12, 2026)
+*   **Gemma 3n Multimodal Support**: Added support for the Google on-device Gemma 3n Multimodal model alongside Gemma 4, utilizing the upgraded ML Kit GenAI Prompt API.
+*   **Dual Model Status Check**: Upgraded the on-device AI card in Settings to display individual status indicators (Available, Download Needed, Downloading, or Unsupported) and separate download triggers for both Gemma 4 and Gemma 3n Multimodal.
+*   **Toolchain Upgrades**: Upgraded Kotlin compiler to `2.4.0`, Hilt compiler/plugin to `2.58`, and Room compiler to `2.8.4` to support modern Kotlin 2.4 metadata compilation.
+*   **Settings Provider Restored**: Resolved a bug introduced during Gemma 4 integration where cloud providers (such as OpenRouter, Copilot API, DeepSeek, and Together AI) were incorrectly omitted from the active provider selection dropdown.
+
+### 🤖 On-Device Gemma 4 Integration
+*   **Google ML Kit GenAI Prompt API**: Complemented the offline LLM providers with Google's on-device Gemma 4 (Gemini Nano) running via Android AI Core (AICore).
+*   **AI Core Status & Model Downloader**: Added a real-time AICore capability checker and downloader card in Settings to monitor model status (available, downloading, or unsupported) and trigger downloads directly from the UI.
+*   **Structured Tool Calling & Streaming**: Supports native streaming of responses and maps available actions (like toggle flashlight, take screenshot, lock phone) to structured JSON output parsing to perform autonomous device actions.
+*   **Build Toolchain Upgrades**: Upgraded the project build configurations to Kotlin 2.0.21 and Dagger/Hilt 2.51.1 to resolve Room/Kapt annotation processor metadata incompatibilities.
+*   **Ollama Preservation**: Retained full backward compatibility for Ollama as an optional offline provider.
+
+### 🐛 Bug Fixes & Improvements
+*   **Ollama Host & Endpoint Normalization**: Corrected `OllamaProvider` to read from the dedicated `ollamaUrl` config field rather than ignoring it. Implemented automatic URL normalization to prepend `http://` and remove trailing slashes for Ollama, Copilot, and Custom OpenAI Compatible endpoints to support formats like `127.0.0.1:11434` or `localhost`.
+*   **Settings Screen Race Condition & Saving Debounce**: Fixed a critical race condition where active keystroke inputs in Settings (API keys, URLs, etc.) were overwritten by background model-cache and latency benchmark updates before they could save. Also reduced saving debounce delays from 1000ms to 500ms for faster, more responsive updates.
+*   **Auto-Reply Loop Prevention**: Tracks recently auto-replied contacts with a 60-second cooldown window in `AutoReplyEngine` to suppress bounceback notifications. Also ignores self-sent notifications (e.g. WhatsApp notifications starting with `"You:"`).
+*   **Intent Classifier Complexity Heuristics**: Added a fast-path whitelist of single-intent commands (e.g. `"set brightness to 50"`, `"set volume to 70"`) in `IntentClassifier` to classify them as `SIMPLE` instead of `MEDIUM`. This prevents them from bypassing the local `AliasResolver` and causing LLM hallucinations.
+*   **Missing Parameter Prompt Loop**: Fully supports prompting the user for missing required action parameters (e.g. `"to"`, `"subject"`, and `"body"` for `SEND_EMAIL`) sequentially via chat and re-executing actions upon receipt.
+
+### 🔔 Notification Intelligence & Auto-Reply
+*   **NotificationListenerService**: Intercepts all system notifications in real-time, persists them to a local Room database for analysis and recall.
+*   **AI Auto-Reply Engine**: Automatically generates contextual replies for WhatsApp, SMS, and Email using the active LLM provider.
+    *   Configurable 1–60 minute reply delay (default: 15 minutes).
+    *   Per-app toggles (WhatsApp, SMS, Email) and global master toggle.
+    *   Rate-limiting (max replies per contact per hour).
+    *   Contact blacklist/whitelist support.
+    *   Custom reply tone/style prompt.
+*   **Reply Dispatcher**: Dispatches replies via Android `RemoteInput` (WhatsApp inline reply) and `SmsManager` (SMS).
+*   **Pattern Learning**: `NotificationIntelligence` analyzes communication patterns (top contacts, peak hours, app usage) and stores them as semantic memories for adaptive agent behavior.
+*   **New Actions**: `READ_NOTIFICATIONS` and `AUTO_REPLY_TOGGLE` added to ActionSchema, accessible via natural language ("read my notifications", "turn on auto reply").
+
+### 🎨 Light & Dark Theme
+*   **Dynamic Theme System**: Added `OpenDroidColors` palette with `CompositionLocal` provider for runtime theme switching.
+*   **Light Mode**: Clean, GitHub-inspired light palette with proper contrast and readability.
+*   **Dark Mode**: Existing dark theme preserved as default.
+*   **Live Toggle**: Settings → Planning & Automation → Dark/Light Mode switch. Changes apply instantly without restart.
+*   **Status Bar Adaptation**: Status bar and navigation bar icons automatically adjust for light/dark appearance.
+
+### 📱 New UI Screens
+*   **Auto-Reply Settings Screen**: Full configuration UI with toggles, delay slider, rate limit, and custom tone prompt.
+*   **Notification History Screen**: View all captured notifications with filter chips (All/Message/Email/Social/Replied), stats dashboard, and auto-reply log.
+*   **Settings Navigation**: Two new cards in Settings for "Auto-Reply Settings" and "Notification History".
+
+### 🛠️ Technical Changes
+*   **Database**: Room migration v2→v3 adding `notifications` table.
+*   **DI**: `NotificationDao`, `AutoReplyEngine`, `NotificationIntelligence`, `NotificationActions` registered in Hilt.
+*   **Manifest**: Registered `OpenDroidNotificationListener` service with `BIND_NOTIFICATION_LISTENER_SERVICE` permission.
+*   **MemoryManager**: Now includes notification context and learned communication patterns in LLM context window.
+*   **ActionDispatcher**: Registered `NotificationActions` (READ_NOTIFICATIONS, AUTO_REPLY_TOGGLE).
+
+### 📦 Release Assets
+*   **`app-debug.apk`** — Debug build APK (for testing and logging).
+*   **`app-release.apk`** — Signed production APK.
+*   **`app-release.aab`** — Signed Android App Bundle.
+
+### 🔑 Build Configuration
+*   **Package**: `com.opendroid.ai`
+*   **Version Code**: 2
+*   **Version Name**: 1.0.1
+*   **Min SDK**: 26 (Android 8.0)
+*   **Target SDK**: 35 (Android 15)
+
+---
+
+## v1.0.0 — Production Release
+
+First official production release of OpenDroid, targeting Google Play Store, Amazon Appstore, Samsung Galaxy Store, and other Android app marketplaces.
+
+### 🚀 Key Features
+
+#### 🤖 Multi-Provider LLM Agent
+*   Supports **11 LLM providers**: OpenAI, Claude, Gemini, Mistral, DeepSeek, Groq, Cohere, Together AI, OpenRouter, Ollama (local), and Copilot.
+*   Autonomous multi-step task planning with schema-enforced action execution.
+*   Real-time plan visualization and re-evaluation engine.
+
+#### 📸 Multimodal Vision Engine & Screenshot Fallback
+*   Integrated **`ANALYZE_SCREENSHOT`** to capture active layouts.
+*   **Dual-Tier fallback framework**: hardware screen capture → layout text-scraping fallback.
+*   Guides the user with clear instructions to re-enable accessibility services if both methods fail.
+
+#### 🛡️ Intent Safeguards & Compound Phrase Guard
+*   **AliasResolver Guard**: word-guarding to prevent partial alias matching.
+*   **ActionSchema enforcement**: hardcoded action schema system eliminates LLM action hallucinations.
+
+#### 📞 Hardened Call & SMS Intents (Zero-Refusal Policies)
+*   **`SEND_SMS` Fallback**: carrier sending → SMS composer intent fallback.
+*   **`MAKE_CALL` Fallback**: direct dialing → dialer screen fallback.
+*   **Contact Resolver Safety**: informative errors when contacts not found.
+
+#### 🔦 Device Control
+*   Flashlight toggle with hardware state tracking via `TorchCallback`.
+*   Bluetooth, WiFi, brightness, volume, and Do Not Disturb controls.
+*   Alarm, timer, reminder, and calendar event management.
+
+#### 🏠 Smart Home & Transport
+*   Smart home device control (lights, thermostat, door locks).
+*   Ride booking (Uber, Ola) and navigation/directions.
+
+#### 🧠 Memory & Macros
+*   Persistent memory system for learning user preferences.
+*   Macro recording and scheduled execution.
+
+#### 🔐 Security
+*   Encrypted API key storage using Android Keystore-backed encryption.
+*   Scoped network security — cleartext HTTP restricted to localhost only.
+*   Backup exclusion for encrypted preferences.
+
+### 📦 Release Assets
+*   **`app-release.apk`** — Signed production APK (for sideloading and non-Play stores).
+*   **`app-release.aab`** — Signed Android App Bundle (for Google Play Store upload).
+
+### 🔑 Build Configuration
+*   **Package**: `com.opendroid.ai`
+*   **Version Code**: 1
+*   **Version Name**: 1.0.0
+*   **Min SDK**: 26 (Android 8.0)
+*   **Target SDK**: 34 (Android 14)
+*   **R8 minification**: Enabled
+*   **Resource shrinking**: Enabled
+*   **Signing**: APK Signature Scheme v2
