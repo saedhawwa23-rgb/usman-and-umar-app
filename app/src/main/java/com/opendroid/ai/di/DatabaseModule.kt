@@ -10,6 +10,7 @@ import com.opendroid.ai.data.db.dao.MemoryDao
 import com.opendroid.ai.data.db.dao.PlanDao
 import com.opendroid.ai.data.db.dao.NotificationDao
 import com.opendroid.ai.data.db.dao.TaskHistoryDao
+import com.opendroid.ai.data.db.dao.WorkspaceTaskDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -44,7 +45,8 @@ object DatabaseModule {
             OpenDroidDatabase.MIGRATION_6_7,
             OpenDroidDatabase.MIGRATION_7_8,
             OpenDroidDatabase.MIGRATION_8_9,
-            OpenDroidDatabase.MIGRATION_9_10
+            OpenDroidDatabase.MIGRATION_9_10,
+            OpenDroidDatabase.MIGRATION_10_11
         )
         .build()
     }
@@ -68,6 +70,10 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideTaskHistoryDao(db: OpenDroidDatabase): TaskHistoryDao = db.taskHistoryDao()
+
+    @Provides
+    @Singleton
+    fun provideWorkspaceTaskDao(db: OpenDroidDatabase): WorkspaceTaskDao = db.workspaceTaskDao()
 
     @Provides
     @Singleton

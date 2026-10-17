@@ -10,12 +10,16 @@ import com.opendroid.ai.data.db.dao.MacroDao
 import com.opendroid.ai.data.db.dao.MemoryDao
 import com.opendroid.ai.data.db.dao.PlanDao
 import com.opendroid.ai.data.db.dao.TaskHistoryDao
+import com.opendroid.ai.data.db.dao.WorkspaceTaskDao
 import com.opendroid.ai.data.db.entities.ChatSessionEntity
 import com.opendroid.ai.data.db.entities.ConversationEntity
 import com.opendroid.ai.data.db.entities.MacroEntity
 import com.opendroid.ai.data.db.entities.MemoryEntity
 import com.opendroid.ai.data.db.entities.PlanEntity
 import com.opendroid.ai.data.db.entities.TaskHistoryEntity
+import com.opendroid.ai.data.db.entities.WorkspaceTaskDependencyEntity
+import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
+import com.opendroid.ai.data.db.entities.WorkspaceTaskExecutionEntity
 
 import com.opendroid.ai.data.db.dao.NotificationDao
 import com.opendroid.ai.data.db.dao.UnknownActionDao
@@ -63,9 +67,12 @@ import com.opendroid.ai.data.db.dao.SocialAuditLogDao
         SocialAnalyticsSnapshotEntity::class,
         SocialCampaignEntity::class,
         SocialAutomationRuleEntity::class,
-        SocialAuditLogEntity::class
+        SocialAuditLogEntity::class,
+        WorkspaceTaskEntity::class,
+        WorkspaceTaskDependencyEntity::class,
+        WorkspaceTaskExecutionEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 abstract class OpenDroidDatabase : RoomDatabase() {
@@ -74,6 +81,7 @@ abstract class OpenDroidDatabase : RoomDatabase() {
     abstract fun planDao(): PlanDao
     abstract fun memoryDao(): MemoryDao
     abstract fun taskHistoryDao(): TaskHistoryDao
+    abstract fun workspaceTaskDao(): WorkspaceTaskDao
     abstract fun macroDao(): MacroDao
     abstract fun unknownActionDao(): UnknownActionDao
     abstract fun notificationDao(): NotificationDao
@@ -448,6 +456,67 @@ abstract class OpenDroidDatabase : RoomDatabase() {
         val MIGRATION_9_10 = object : Migration(9, 10) {
             override fun migrate(database: SupportSQLiteDatabase) {
                 database.execSQL("DROP TABLE IF EXISTS models")
+            }
+        }
+
+        /** Adds the unified persistent Task Manager tables without changing legacy task history. */
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS workspace_tasks (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        projectId TEXT,
+                        category TEXT NOT NULL,
+                        tagsJson TEXT NOT NULL,
+                        priority INTEGER NOT NULL,
+                        deadlineAt INTEGER,
+                        toolId TEXT,
+                        workflowId TEXT,
+                        inputJson TEXT NOT NULL,
+                        expectedOutcome TEXT NOT NULL,
+                        notes TEXT NOT NULL,
+                        retryLimit INTEGER NOT NULL,
+                        timeoutMs INTEGER NOT NULL,
+                        requiresApproval INTEGER NOT NULL,
+                        schedule TEXT,
+                        state TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL
+                    )
+                """)
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_tasks_state ON workspace_tasks(state)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_tasks_priority ON workspace_tasks(priority)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_tasks_updatedAt ON workspace_tasks(updatedAt)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_tasks_projectId ON workspace_tasks(projectId)")
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS workspace_task_dependencies (
+                        taskId TEXT NOT NULL,
+                        dependsOnTaskId TEXT NOT NULL,
+                        PRIMARY KEY(taskId, dependsOnTaskId)
+                    )
+                """)
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_dependencies_dependsOnTaskId ON workspace_task_dependencies(dependsOnTaskId)")
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS workspace_task_executions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        taskId TEXT NOT NULL,
+                        event TEXT NOT NULL,
+                        fromState TEXT,
+                        toState TEXT NOT NULL,
+                        attempt INTEGER NOT NULL,
+                        success INTEGER,
+                        outputRedacted TEXT,
+                        errorCode TEXT,
+                        errorMessageRedacted TEXT,
+                        startedAt INTEGER NOT NULL,
+                        finishedAt INTEGER
+                    )
+                """)
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_executions_taskId ON workspace_task_executions(taskId)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_executions_startedAt ON workspace_task_executions(startedAt)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_executions_toState ON workspace_task_executions(toState)")
             }
         }
     }

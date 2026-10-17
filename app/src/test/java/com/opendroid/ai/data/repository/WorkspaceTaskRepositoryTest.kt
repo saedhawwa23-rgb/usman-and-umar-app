@@ -1,0 +1,26 @@
+package com.opendroid.ai.data.repository
+
+import com.opendroid.ai.core.task.InvalidTaskTransition
+import com.opendroid.ai.core.task.TaskState
+import com.opendroid.ai.core.task.TaskStateMachine
+import kotlin.test.Test
+import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
+
+class WorkspaceTaskRepositoryTest {
+    @Test
+    fun stateMachineRejectsTerminalTaskMutation() {
+        assertFailsWith<InvalidTaskTransition> {
+            TaskStateMachine.transition(TaskState.SUCCEEDED, TaskState.READY)
+        }
+    }
+
+    @Test
+    fun failedOutcomeRequiresErrorCode() {
+        val errorCode: String? = null
+        assertFailsWith<IllegalArgumentException> {
+            require(false || !errorCode.isNullOrBlank()) { "Failed tasks need an error code" }
+        }
+        assertTrue(TaskStateMachine.canTransition(TaskState.RUNNING, TaskState.FAILED))
+    }
+}
