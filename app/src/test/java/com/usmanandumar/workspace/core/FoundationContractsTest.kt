@@ -7,10 +7,10 @@ import com.usmanandumar.workspace.core.tool.ToolDefinition
 import com.usmanandumar.workspace.core.tool.ToolRegistry
 import com.usmanandumar.workspace.core.workflow.WorkflowDefinition
 import com.usmanandumar.workspace.core.workflow.WorkflowStep
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
-import kotlin.test.assertTrue
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.Assert.assertThrows
 
 class FoundationContractsTest {
     @Test
@@ -18,7 +18,7 @@ class FoundationContractsTest {
         val registry = ToolRegistry()
         registry.register(ToolDefinition("files.checksum", "Checksum", "Hash files", "files"))
         assertEquals(listOf("files.checksum"), registry.all().map { it.id })
-        assertFailsWith<IllegalArgumentException> {
+        assertThrows(IllegalArgumentException::class.java) {
             registry.register(ToolDefinition("files.checksum", "Other", "Duplicate", "files"))
         }
     }
@@ -27,7 +27,7 @@ class FoundationContractsTest {
     fun taskStateMachineAllowsApprovalAndExecutionPath() {
         assertTrue(TaskStateMachine.canTransition(TaskState.DRAFT, TaskState.READY))
         assertEquals(TaskState.QUEUED, TaskStateMachine.transition(TaskState.READY, TaskState.QUEUED))
-        assertFailsWith<InvalidTaskTransition> {
+        assertThrows(InvalidTaskTransition::class.java) {
             TaskStateMachine.transition(TaskState.SUCCEEDED, TaskState.RUNNING)
         }
     }

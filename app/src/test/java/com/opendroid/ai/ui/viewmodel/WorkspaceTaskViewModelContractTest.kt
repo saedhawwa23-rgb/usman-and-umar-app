@@ -1,8 +1,8 @@
 package com.opendroid.ai.ui.viewmodel
 
 import com.usmanandumar.workspace.core.task.TaskState
-import kotlin.test.Test
-import kotlin.test.assertTrue
+import org.junit.Assert.assertTrue
+import org.junit.Test
 
 class WorkspaceTaskViewModelContractTest {
     @Test
