@@ -48,6 +48,6 @@ abstract class WorkspaceTaskDao {
         dependencies: List<WorkspaceTaskDependencyEntity>,
     ) {
         insert(task)
-        dependencies.forEach(::addDependency)
+        dependencies.forEach { dependency -> addDependency(dependency) }
     }
 }

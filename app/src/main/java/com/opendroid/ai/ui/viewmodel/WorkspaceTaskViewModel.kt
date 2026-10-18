@@ -2,7 +2,7 @@ package com.opendroid.ai.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.opendroid.ai.core.task.TaskState
+import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.data.repository.WorkspaceTaskRepository
 import dagger.hilt.android.lifecycle.HiltViewModel

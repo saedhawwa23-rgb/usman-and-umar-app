@@ -1,8 +1,7 @@
 package com.opendroid.ai.data.repository
 
-import com.opendroid.ai.core.task.InvalidTaskTransition
-import com.opendroid.ai.core.task.TaskState
-import com.opendroid.ai.core.task.TaskStateMachine
+import com.usmanandumar.workspace.core.task.TaskState
+import com.usmanandumar.workspace.core.task.TaskStateMachine
 import com.opendroid.ai.data.db.dao.WorkspaceTaskDao
 import com.opendroid.ai.data.db.entities.WorkspaceTaskDependencyEntity
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
