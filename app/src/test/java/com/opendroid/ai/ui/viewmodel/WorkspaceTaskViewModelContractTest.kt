@@ -7,6 +7,6 @@ import org.junit.Test
 class WorkspaceTaskViewModelContractTest {
     @Test
     fun taskManagerExposesOnlySupportedExecutionStates() {
-        assertTrue(TaskState.values().containsAll(listOf(TaskState.DRAFT, TaskState.QUEUED, TaskState.RUNNING)))
+        assertTrue(TaskState.values().toSet().containsAll(listOf(TaskState.DRAFT, TaskState.QUEUED, TaskState.RUNNING)))
     }
 }
