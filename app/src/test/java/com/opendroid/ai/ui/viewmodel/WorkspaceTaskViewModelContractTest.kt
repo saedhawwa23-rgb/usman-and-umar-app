@@ -1,6 +1,6 @@
 package com.opendroid.ai.ui.viewmodel
 
-import com.opendroid.ai.core.task.TaskState
+import com.usmanandumar.workspace.core.task.TaskState
 import kotlin.test.Test
 import kotlin.test.assertTrue
 

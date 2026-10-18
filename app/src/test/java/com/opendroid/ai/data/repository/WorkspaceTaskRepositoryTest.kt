@@ -1,8 +1,8 @@
 package com.opendroid.ai.data.repository
 
-import com.opendroid.ai.core.task.InvalidTaskTransition
-import com.opendroid.ai.core.task.TaskState
-import com.opendroid.ai.core.task.TaskStateMachine
+import com.usmanandumar.workspace.core.task.InvalidTaskTransition
+import com.usmanandumar.workspace.core.task.TaskState
+import com.usmanandumar.workspace.core.task.TaskStateMachine
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
