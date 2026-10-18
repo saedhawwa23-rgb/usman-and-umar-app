@@ -26,7 +26,7 @@ object TaskStateMachine {
         TaskState.DRAFT to setOf(TaskState.READY, TaskState.CANCELLED),
         TaskState.READY to setOf(TaskState.QUEUED, TaskState.WAITING_APPROVAL, TaskState.BLOCKED, TaskState.CANCELLED),
         TaskState.QUEUED to setOf(TaskState.RUNNING, TaskState.CANCELLED, TaskState.BLOCKED),
-        TaskState.RUNNING to setOf(TaskState.SUCCEEDED, TaskState.FAILED, TaskState.WAITING_USER, TaskState.CANCELLED),
+        TaskState.RUNNING to setOf(TaskState.SUCCEEDED, TaskState.FAILED, TaskState.WAITING_APPROVAL, TaskState.WAITING_USER, TaskState.CANCELLED),
         TaskState.WAITING_APPROVAL to setOf(TaskState.READY, TaskState.QUEUED, TaskState.CANCELLED, TaskState.BLOCKED),
         TaskState.WAITING_USER to setOf(TaskState.READY, TaskState.QUEUED, TaskState.CANCELLED, TaskState.BLOCKED),
         TaskState.BLOCKED to setOf(TaskState.READY, TaskState.CANCELLED),

@@ -1,6 +1,8 @@
 package com.opendroid.ai.core.connector
 
 import com.google.gson.Gson
+import android.content.Context
+import com.opendroid.ai.actions.ActionDispatcher
 import com.opendroid.ai.core.llm.LLMProviderFactory
 import com.opendroid.ai.core.llm.StreamChunk
 import com.opendroid.ai.core.llm.ToolDefinition
@@ -13,6 +15,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import javax.inject.Inject
 import javax.inject.Singleton
+import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.UUID
 
 class KeystoreConnectorCredentialResolver @Inject constructor(
@@ -51,13 +54,18 @@ class CloudToolAgent @Inject constructor(
     private val providers: LLMProviderFactory,
     private val registry: UniversalToolRegistry,
     private val credentials: KeystoreConnectorCredentialResolver,
-    private val executionLog: InMemoryConnectorExecutionLog
+    private val executionLog: InMemoryConnectorExecutionLog,
+    @ApplicationContext private val context: Context,
+    private val actionDispatcher: ActionDispatcher,
 ) {
     private val gson = Gson()
 
     init {
         // Read-only discovery is available without configuring an external service.
         registry.register(LocalRegistryConnector(registry))
+        // Deterministic Android actions share the same connector policy as
+        // cloud tools; the dispatcher remains the final validation boundary.
+        registry.register(LocalActionConnector(context, actionDispatcher))
     }
 
     suspend fun run(goal: String, maxSteps: Int = 12): UniversalAgentResult {

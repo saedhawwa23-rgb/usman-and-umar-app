@@ -8,6 +8,7 @@ import java.util.UUID
 import java.net.URLEncoder
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -139,6 +140,18 @@ class UniversalToolRegistry @Inject constructor() {
         approval: ConnectorApprovalGate = DefaultConnectorApprovalGate,
         log: ConnectorExecutionLog = InMemoryConnectorExecutionLog()
     ): ConnectorResult {
+        if (invocation.argumentsJson.length > 64_000) {
+            return ConnectorResult(false, error = "Tool arguments exceed the 64 KB safety limit")
+        }
+        val registeredTool = findTool(invocation.tool.qualifiedName)
+        if (registeredTool == null || registeredTool.connectorId != invocation.tool.connectorId) {
+            log.append(ConnectorExecutionRecord(invocation.invocationId, invocation.tool.connectorId, invocation.tool.name, invocation.tool.risk, "rejected", "Tool is not registered"))
+            return ConnectorResult(false, error = "Tool is not registered")
+        }
+        val arguments = runCatching { JsonParser.parseString(invocation.argumentsJson) }.getOrNull()
+        if (arguments == null || !arguments.isJsonObject) {
+            return ConnectorResult(false, error = "Tool arguments must be a JSON object")
+        }
         val decision = approval.decide(invocation)
         if (decision != ApprovalDecision.ALLOW) {
             val status = if (decision == ApprovalDecision.DENY) "denied" else "approval_required"

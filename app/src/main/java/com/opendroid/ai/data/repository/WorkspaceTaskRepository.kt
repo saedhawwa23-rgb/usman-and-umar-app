@@ -100,6 +100,7 @@ class WorkspaceTaskRepository @Inject constructor(
         errorCode: String? = null,
         errorMessageRedacted: String? = null,
         attempt: Int = 0,
+        event: String = "execution",
         now: Long = System.currentTimeMillis(),
     ) {
         require(success || !errorCode.isNullOrBlank()) { "Failed tasks need an error code" }
@@ -110,7 +111,7 @@ class WorkspaceTaskRepository @Inject constructor(
         dao.recordExecution(
             WorkspaceTaskExecutionEntity(
                 taskId = taskId,
-                event = "execution",
+                event = event,
                 fromState = task.state,
                 toState = state.name,
                 attempt = attempt,

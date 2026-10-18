@@ -7,6 +7,7 @@ data class WorkflowStep(
     val id: String,
     val toolId: String,
     val dependsOn: List<String> = emptyList(),
+    val inputMappings: Map<String, String> = emptyMap(),
     val condition: String? = null,
     val requiresApproval: Boolean = false,
     val timeoutMs: Long = 30_000,
