@@ -4,7 +4,7 @@ import com.usmanandumar.workspace.core.tool.ToolRegistry
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
 
-interface WorkflowToolExecutor {
+fun interface WorkflowToolExecutor {
     suspend fun execute(toolId: String, input: Map<String, String>): WorkflowToolResult
 }
 
