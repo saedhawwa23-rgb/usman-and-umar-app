@@ -165,6 +165,7 @@ jobs:
           force-avd-creation: true
           cores: 4
           ram-size: 4096M
+          disk-size: 2048M
           emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
           emulator-boot-timeout: 1200
           disable-spellchecker: true
