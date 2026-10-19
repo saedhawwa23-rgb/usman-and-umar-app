@@ -64,7 +64,7 @@
 
     <application
         android:name=".OpenDroidApp"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:largeHeap="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"

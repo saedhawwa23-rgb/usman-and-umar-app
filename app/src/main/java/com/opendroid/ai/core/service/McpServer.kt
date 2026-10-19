@@ -25,9 +25,7 @@ import javax.inject.Singleton
 class McpServer @Inject constructor(
     @ApplicationContext private val context: Context,
     private val actionDispatcher: ActionDispatcher,
-    private val commandExecutor: PrivilegedCommandExecutor,
     private val configStore: McpConfigStore,
-    private val terminalManager: PersistentTerminalManager
 ) {
 
     private val running = AtomicBoolean(false)
@@ -53,7 +51,6 @@ class McpServer @Inject constructor(
         val thread = serverThread
         serverThread = null
         thread?.join(JOIN_TIMEOUT_MS)
-        terminalManager.closeAll()
     }
 
     private fun serve() {
@@ -159,29 +156,11 @@ class McpServer @Inject constructor(
         .put("serverInfo", JSONObject().put("name", "opendroid").put("version", BuildConfig.VERSION_NAME))
 
     private fun tools(): JSONArray = JSONArray()
-        .put(tool("device_info", "Return USMAN AND UMAR and privileged-backend status", JSONObject()))
-        .put(tool("list_actions", "List actions available to USMAN AND UMAR", JSONObject()))
-        .put(tool("execute_action", "Execute an existing USMAN AND UMAR action", objectSchema(
+        .put(tool("device_info", "Return basic USMAN AND UMAR runtime information", JSONObject()))
+        .put(tool("list_actions", "List low-risk deterministic actions available to MCP", JSONObject()))
+        .put(tool("execute_action", "Run only deterministic local calculations; other app actions require the in-app approval flow", objectSchema(
             JSONObject().put("action", stringSchema()).put("params", JSONObject().put("type", "object")),
             "action")))
-        .put(tool("run_privileged_command", "Run a command through Shizuku, root, or app shell", objectSchema(
-            JSONObject().put("command", stringSchema()), "command")))
-        .put(tool("mcp_list_configs", "List persisted MCP endpoint configurations", JSONObject()))
-        .put(tool("mcp_configure", "Create or update a persisted MCP endpoint configuration", objectSchema(
-            JSONObject().put("name", stringSchema())
-                .put("url", stringSchema())
-                .put("enabled", JSONObject().put("type", "boolean"))
-                .put("headers", JSONObject().put("type", "object")), "name", "url")))
-        .put(tool("mcp_remove_config", "Remove a persisted MCP endpoint configuration", objectSchema(
-            JSONObject().put("name", stringSchema()), "name")))
-        .put(tool("terminal_create", "Create a persistent shell session", JSONObject()))
-        .put(tool("terminal_write", "Write a command to a persistent shell session", objectSchema(
-            JSONObject().put("sessionId", stringSchema()).put("command", stringSchema()), "sessionId", "command")))
-        .put(tool("terminal_read", "Read currently available output from a terminal session", objectSchema(
-            JSONObject().put("sessionId", stringSchema()), "sessionId")))
-        .put(tool("terminal_list", "List persistent terminal sessions", JSONObject()))
-        .put(tool("terminal_close", "Close a persistent terminal session", objectSchema(
-            JSONObject().put("sessionId", stringSchema()), "sessionId")))
 
     private fun objectSchema(properties: JSONObject, vararg required: String): JSONObject = JSONObject()
         .put("type", "object")
@@ -202,20 +181,10 @@ class McpServer @Inject constructor(
             "device_info" -> JSONObject()
                 .put("package", context.packageName)
                 .put("sdk", Build.VERSION.SDK_INT)
-                .put("command", JSONObject(commandExecutor.status()))
                 .put("mcpPort", PORT)
                 .toString()
-            "list_actions" -> JSONObject().put("actions", JSONArray(actionDispatcher.getAllRegisteredActions())).toString()
+            "list_actions" -> JSONObject().put("actions", JSONArray(McpToolPolicy.availableActionIds())).toString()
             "execute_action" -> executeAction(arguments)
-            "run_privileged_command" -> executeCommand(arguments)
-            "mcp_list_configs" -> JSONObject().put("configs", configsJson()).toString()
-            "mcp_configure" -> configureMcp(arguments)
-            "mcp_remove_config" -> removeMcp(arguments)
-            "terminal_create" -> terminalCreate()
-            "terminal_write" -> terminalWrite(arguments)
-            "terminal_read" -> terminalRead(arguments)
-            "terminal_list" -> terminalList()
-            "terminal_close" -> terminalClose(arguments)
             else -> throw IllegalArgumentException("Unknown tool: $name")
         }
         return JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", text)))
@@ -224,62 +193,14 @@ class McpServer @Inject constructor(
     private fun executeAction(arguments: JSONObject): String {
         val action = arguments.optString("action")
         require(action.isNotBlank()) { "action is required" }
+        val canonicalAction = actionDispatcher.canonicalActionName(action)
+        require(McpToolPolicy.isActionAllowed(canonicalAction)) {
+            "Action is not exposed through MCP; only deterministic local calculation tools are available"
+        }
         val rawParams = arguments.optJSONObject("params") ?: JSONObject()
         val params = rawParams.keys().asSequence().associateWith { key -> rawParams.optString(key) }
-        return resultToJson(runBlocking { actionDispatcher.execute(action, params, context) })
+        return resultToJson(runBlocking { actionDispatcher.execute(canonicalAction, params, context) })
     }
-
-    private fun executeCommand(arguments: JSONObject): String {
-        val command = arguments.optString("command")
-        require(command.isNotBlank()) { "command is required" }
-        val result = runBlocking { commandExecutor.execute(command) }
-        return JSONObject().put("backend", result.backend.name).put("exitCode", result.exitCode)
-            .put("stdout", result.stdout).put("stderr", result.stderr).toString()
-    }
-
-    private fun configsJson(): JSONArray = JSONArray().apply {
-        configStore.list().forEach { config ->
-            put(JSONObject().put("name", config.name).put("url", config.url)
-                .put("enabled", config.enabled).put("headers", JSONObject(config.headers)))
-        }
-    }
-
-    private fun configureMcp(arguments: JSONObject): String {
-        val headers = arguments.optJSONObject("headers") ?: JSONObject()
-        configStore.upsert(McpEndpointConfig(
-            name = arguments.optString("name"),
-            url = arguments.optString("url"),
-            enabled = arguments.optBoolean("enabled", true),
-            headers = headers.keys().asSequence().associateWith { key -> headers.optString(key) }
-        ))
-        return JSONObject().put("saved", true).put("name", arguments.optString("name")).toString()
-    }
-
-    private fun removeMcp(arguments: JSONObject): String {
-        val name = arguments.optString("name")
-        require(name.isNotBlank()) { "name is required" }
-        configStore.remove(name)
-        return JSONObject().put("removed", true).put("name", name).toString()
-    }
-
-    private fun terminalCreate(): String = JSONObject(runBlocking { terminalManager.create().toMap() }).toString()
-
-    private fun terminalWrite(arguments: JSONObject): String {
-        runBlocking { terminalManager.write(arguments.optString("sessionId"), arguments.optString("command")) }
-        return JSONObject().put("written", true).toString()
-    }
-
-    private fun terminalRead(arguments: JSONObject): String =
-        JSONObject().put("output", runBlocking { terminalManager.read(arguments.optString("sessionId")) }).toString()
-
-    private fun terminalList(): String = JSONObject().put("sessions", JSONArray(terminalManager.list().map { it.toMap() })).toString()
-
-    private fun terminalClose(arguments: JSONObject): String {
-        terminalManager.close(arguments.optString("sessionId"))
-        return JSONObject().put("closed", true).toString()
-    }
-
-    private fun TerminalSessionInfo.toMap(): Map<String, String> = mapOf("id" to id, "backend" to backend.name)
 
     private fun resultToJson(result: ActionResult): String = JSONObject()
         .put("success", result.success).put("data", result.data).put("error", result.error).toString()

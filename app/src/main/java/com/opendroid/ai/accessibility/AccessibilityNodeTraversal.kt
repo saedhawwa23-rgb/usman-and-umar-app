@@ -1,5 +1,6 @@
 package com.opendroid.ai.accessibility
 
+import android.text.InputType
 import android.view.accessibility.AccessibilityNodeInfo
 import javax.inject.Inject
 
@@ -28,7 +29,21 @@ class AccessibilityNodeTraversal @Inject constructor() {
         return sb.toString()
     }
 
+    /** If true, the caller must not send a screenshot of this window to a model. */
+    fun containsPasswordField(root: AccessibilityNodeInfo?): Boolean {
+        if (root == null) return false
+        if (isPasswordNode(root)) return true
+        for (i in 0 until root.childCount) {
+            val child = root.getChild(i) ?: continue
+            val containsPassword = containsPasswordField(child)
+            child.recycle()
+            if (containsPassword) return true
+        }
+        return false
+    }
+
     private fun collectText(node: AccessibilityNodeInfo, sb: StringBuilder) {
+        if (isPasswordNode(node)) return
         val nodeText = node.text?.toString()
         val contentDesc = node.contentDescription?.toString()
 
@@ -43,6 +58,15 @@ class AccessibilityNodeTraversal @Inject constructor() {
             collectText(child, sb)
             child.recycle()
         }
+    }
+
+    private fun isPasswordNode(node: AccessibilityNodeInfo): Boolean {
+        if (node.isPassword) return true
+        val variation = node.inputType and InputType.TYPE_MASK_VARIATION
+        return variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
+            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
+            variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
     }
 
     /**
