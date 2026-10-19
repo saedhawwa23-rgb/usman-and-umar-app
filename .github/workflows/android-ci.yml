@@ -166,6 +166,11 @@ jobs:
           cores: 4
           ram-size: 4096M
           disk-size: 2048M
+          pre-emulator-launch-script: |
+            config="$HOME/.android/avd/test.avd/config.ini"
+            sed -i '/^disk\.dataPartition\.size=/d' "$config"
+            printf '%s\n' 'disk.dataPartition.size=2048M' >> "$config"
+            grep '^disk.dataPartition.size=' "$config"
           emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
           emulator-boot-timeout: 1200
           disable-spellchecker: true
