@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.sp
 import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.actions.base.ActionResult
+import com.opendroid.ai.core.agent.ActionSchema
+import com.opendroid.ai.core.crash.CrashLogRedactor
 import com.opendroid.ai.ui.theme.AppTheme
 import com.opendroid.ai.ui.viewmodel.WorkspaceTaskViewModel
 
@@ -132,6 +134,17 @@ private fun TaskRow(task: WorkspaceTaskEntity, onTransition: (TaskState) -> Unit
             Text(task.title, color = AppTheme.colors.textPrimary, fontSize = 16.sp)
             Spacer(Modifier.height(4.dp))
             Text("${task.state} · priority ${task.priority}", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+            if (!task.toolId.isNullOrBlank()) {
+                val risk = ActionSchema.riskForAction(task.toolId)
+                Text("Action: ${task.toolId} · risk: ${risk.name}", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+                val safeInputs = CrashLogRedactor.redact(task.inputJson)
+                Text(
+                    "Inputs: ${safeInputs.take(1_200)}${if (safeInputs.length > 1_200) "…" else ""}",
+                    color = AppTheme.colors.textSecondary,
+                    fontSize = 12.sp,
+                )
+                Text("Review the action and inputs before approving; approval runs it immediately.", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+            }
             Spacer(Modifier.height(8.dp))
             when (state) {
                 TaskState.DRAFT -> Button(onClick = { onTransition(TaskState.READY) }) { Text("Prepare") }
