@@ -88,6 +88,20 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
             }
             if (installed) {
                 item { Text("LOCAL TASKS", fontWeight = FontWeight.Bold) }
+                item {
+                    Text("OPENMANUS PREREQUISITES", fontWeight = FontWeight.Bold)
+                    Text(
+                        "This fixed Termux check reports whether Python 3.12+, the official source checkout, its requirements file, and a project .venv interpreter are present. It does not install dependencies or run the agent, and a passing check alone does not mean OpenManus is ready.",
+                        color = AppTheme.colors.textSecondary
+                    )
+                }
+                item {
+                    Text("OPENSWARM", fontWeight = FontWeight.Bold)
+                    Text(
+                        "Not configured: multiple unrelated projects use this name. No repository is cloned or executed until the exact project is selected.",
+                        color = AppTheme.colors.textSecondary
+                    )
+                }
                 items(TermuxTask.entries.size) { index ->
                     val task = TermuxTask.entries[index]
                     OutlinedButton(onClick = { viewModel.run(task) }, modifier = Modifier.fillMaxWidth(), enabled = permissionGranted) { Text(task.label) }
