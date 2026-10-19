@@ -126,7 +126,13 @@ jobs:
       - name: Set up Android SDK and NDK
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;27.2.12479018'
+          packages: 'platform-tools emulator platforms;android-28 platforms;android-36 build-tools;36.0.0 ndk;27.2.12479018 system-images;android-28;default;x86_64 system-images;android-36;google_apis;x86_64'
+
+      - name: Verify emulator toolchain
+        run: |
+          test -x "$ANDROID_HOME/emulator/emulator"
+          "$ANDROID_HOME/emulator/emulator" -version
+          "$ANDROID_HOME/platform-tools/adb" version
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
