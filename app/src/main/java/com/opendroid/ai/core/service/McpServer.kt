@@ -4,10 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import com.opendroid.ai.BuildConfig
-import com.opendroid.ai.actions.ActionDispatcher
-import com.opendroid.ai.actions.base.ActionResult
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -24,7 +21,6 @@ import javax.inject.Singleton
 @Singleton
 class McpServer @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val actionDispatcher: ActionDispatcher,
     private val configStore: McpConfigStore,
 ) {
 
@@ -157,10 +153,15 @@ class McpServer @Inject constructor(
 
     private fun tools(): JSONArray = JSONArray()
         .put(tool("device_info", "Return basic USMAN AND UMAR runtime information", JSONObject()))
-        .put(tool("list_actions", "List low-risk deterministic actions available to MCP", JSONObject()))
-        .put(tool("execute_action", "Run only deterministic local calculations; other app actions require the in-app approval flow", objectSchema(
-            JSONObject().put("action", stringSchema()).put("params", JSONObject().put("type", "object")),
-            "action")))
+        .put(tool("list_actions", "List the deterministic local CALCULATE action available to MCP", JSONObject()))
+        .put(tool("execute_action", "Run only bounded local arithmetic; other app actions require the in-app approval flow", objectSchema(
+            JSONObject()
+                .put("action", stringSchema().put("enum", JSONArray().put("CALCULATE")))
+                .put("params", JSONObject()
+                    .put("type", "object")
+                    .put("properties", JSONObject().put("expression", stringSchema()))
+                    .put("required", JSONArray().put("expression"))),
+            "action", "params")))
 
     private fun objectSchema(properties: JSONObject, vararg required: String): JSONObject = JSONObject()
         .put("type", "object")
@@ -191,19 +192,16 @@ class McpServer @Inject constructor(
     }
 
     private fun executeAction(arguments: JSONObject): String {
-        val action = arguments.optString("action")
+        val action = arguments.optString("action").uppercase()
         require(action.isNotBlank()) { "action is required" }
-        val canonicalAction = actionDispatcher.canonicalActionName(action)
-        require(McpToolPolicy.isActionAllowed(canonicalAction)) {
-            "Action is not exposed through MCP; only deterministic local calculation tools are available"
+        require(McpToolPolicy.isActionAllowed(action)) {
+            "Action is not exposed through MCP; only local arithmetic is available"
         }
         val rawParams = arguments.optJSONObject("params") ?: JSONObject()
-        val params = rawParams.keys().asSequence().associateWith { key -> rawParams.optString(key) }
-        return resultToJson(runBlocking { actionDispatcher.execute(canonicalAction, params, context) })
+        val expression = rawParams.optString("expression")
+        val result = McpToolPolicy.calculate(expression)
+        return JSONObject().put("success", true).put("data", "$expression = $result").toString()
     }
-
-    private fun resultToJson(result: ActionResult): String = JSONObject()
-        .put("success", result.success).put("data", result.data).put("error", result.error).toString()
 
     private fun error(code: Int, message: String): JSONObject = JSONObject().put("code", code).put("message", message)
 
