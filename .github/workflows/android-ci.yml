@@ -128,6 +128,11 @@ jobs:
         with:
           packages: 'platform-tools emulator platforms;android-28 platforms;android-36 build-tools;36.0.0 ndk;27.2.12479018 system-images;android-28;default;x86_64 system-images;android-36;google_apis;x86_64'
 
+      - name: Install emulator host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpulse0
+
       - name: Verify emulator toolchain
         run: |
           test -x "$ANDROID_HOME/emulator/emulator"
