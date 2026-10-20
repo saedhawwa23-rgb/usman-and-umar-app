@@ -30,6 +30,27 @@ enum class TermuxTask(val label: String, val executable: String, val arguments: 
         "Install Git, Python, Node.js and build tools",
         "pkg",
         arrayOf("install", "-y", "git", "python", "nodejs", "clang", "make", "cmake")
+    ),
+    OPENMANUS_PREFLIGHT(
+        "Check OpenManus prerequisites",
+        "python",
+        arrayOf(
+            "-c",
+            """
+            import pathlib, sys
+            root = pathlib.Path.home() / "FoundationAgents-OpenManus"
+            checks = {
+                "Python 3.12+": sys.version_info >= (3, 12),
+                "OpenManus checkout": root.is_dir(),
+                "requirements.txt": (root / "requirements.txt").is_file(),
+                "isolated .venv interpreter": (root / ".venv" / "bin" / "python").is_file(),
+            }
+            print("Python: " + sys.version.split()[0])
+            for label, ok in checks.items():
+                print(f"{label}: {'present' if ok else 'missing'}")
+            sys.exit(0 if all(checks.values()) else 2)
+            """.trimIndent()
+        )
     )
 }
 

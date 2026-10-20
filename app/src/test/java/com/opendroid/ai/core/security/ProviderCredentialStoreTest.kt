@@ -202,6 +202,7 @@ class ProviderCredentialStoreTest {
         val dataExtractionRules = File("src/main/res/xml/data_extraction_rules.xml").readText()
         val manifest = File("src/main/AndroidManifest.xml").readText()
 
+        assertTrue(manifest.contains("android:allowBackup=\"false\""))
         assertTrue(manifest.contains("android:fullBackupContent=\"@xml/backup_rules\""))
         assertTrue(manifest.contains("android:dataExtractionRules=\"@xml/data_extraction_rules\""))
         assertTrue(backupRules.contains("<exclude domain=\"sharedpref\" path=\".\"/>"))

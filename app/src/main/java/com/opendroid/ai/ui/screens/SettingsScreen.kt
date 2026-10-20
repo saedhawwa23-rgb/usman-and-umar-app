@@ -75,6 +75,7 @@ fun SettingsScreen(
     onNavigateToDiscovery: () -> Unit = {},
     onNavigateToGitHubDiscovery: () -> Unit = {},
     onNavigateToTermux: () -> Unit = {},
+    onNavigateToGoogleDrive: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val config by viewModel.llmConfig.collectAsState()
@@ -234,6 +235,26 @@ fun SettingsScreen(
                             Text("Optional local terminal tasks with visible results; cloud execution is separate.", color = TextSecondary, fontSize = 12.sp)
                         }
                         Icon(Icons.Default.ArrowForward, contentDescription = "Open local Termux", tint = AccentCyan)
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().clickable { onNavigateToGoogleDrive() },
+                    colors = CardDefaults.cardColors(containerColor = CardBackground)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("GOOGLE DRIVE", fontWeight = FontWeight.Bold, color = AccentCyan)
+                            Spacer(Modifier.height(4.dp))
+                            Text("Sign in, authorize Drive, browse, search, upload and export files.", color = TextSecondary, fontSize = 12.sp)
+                        }
+                        Icon(Icons.Default.ArrowForward, contentDescription = "Open Google Drive", tint = AccentCyan)
                     }
                 }
             }

@@ -1,7 +1,9 @@
 package com.opendroid.ai.core.termux
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TermuxGitHubCloneTest {
@@ -39,5 +41,20 @@ class TermuxGitHubCloneTest {
         ).forEach { url ->
             assertThrows(IllegalArgumentException::class.java) { TermuxGitHubClone.command(url) }
         }
+    }
+
+    @Test
+    fun `OpenManus preflight uses fixed Python argv and only checks prerequisites`() {
+        val task = TermuxTask.OPENMANUS_PREFLIGHT
+        assertEquals("python", task.executable)
+        assertEquals("-c", task.arguments[0])
+        val script = task.arguments[1]
+        assertTrue(script.contains("sys.version_info >= (3, 12)"))
+        assertTrue(script.contains("FoundationAgents-OpenManus"))
+        assertTrue(script.contains("requirements.txt"))
+        assertTrue(script.contains(".venv"))
+        assertFalse(script.contains("subprocess"))
+        assertFalse(script.contains("os.system"))
+        assertFalse(script.contains("pip install"))
     }
 }

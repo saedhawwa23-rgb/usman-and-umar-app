@@ -20,6 +20,11 @@ android {
         versionCode 23
         versionName "3.0.0-cloud-ai"
 
+        // OAuth client IDs are public application identifiers, not client secrets.
+        // The Web client ID is used as Credential Manager's serverClientId; the
+        // Android client is matched by package name and signing-certificate SHA-1.
+        buildConfigField "String", "GOOGLE_WEB_OAUTH_CLIENT_ID", '"314587321554-7nmt1gk0cotier4dbcrctl1qcv1950u3.apps.googleusercontent.com"'
+
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
@@ -205,6 +210,10 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
     implementation 'androidx.activity:activity-compose:1.13.0'
+    implementation 'androidx.credentials:credentials:1.6.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.6.0'
+    implementation 'com.google.android.libraries.identity.googleid:googleid:1.2.1'
+    implementation 'com.google.android.gms:play-services-auth:21.6.0'
 
     // Jetpack Compose
     implementation platform('androidx.compose:compose-bom:2026.06.01')

@@ -6,6 +6,8 @@ import com.opendroid.ai.accessibility.testfixtures.A11yProbeActivity
 import com.opendroid.ai.accessibility.testfixtures.AccessibilityServiceTestHarness
 import org.junit.After
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -58,6 +60,38 @@ class KnownScreenScrapeInstrumentationTest {
                 service.getScreenText().contains(A11yProbeActivity.HEADLINE_TEXT)
             }
             assertTrue(service.getScreenText().contains(A11yProbeActivity.BUTTON_TEXT))
+        }
+    }
+
+    @Test
+    fun passwordContentIsExcludedFromNodeText() {
+        ActivityScenario.launch(A11yProbeActivity::class.java).use {
+            AccessibilityServiceTestHarness.await(message = "password probe screen visible") {
+                val root = AccessibilityServiceTestHarness.uiAutomation.rootInActiveWindow
+                root != null && nodeTraversal.containsPasswordField(root)
+            }
+            val root = AccessibilityServiceTestHarness.uiAutomation.rootInActiveWindow!!
+            try {
+                val text = nodeTraversal.screenText(root)
+                assertTrue(text.contains(A11yProbeActivity.HEADLINE_TEXT))
+                assertFalse(text.contains(A11yProbeActivity.PASSWORD_VALUE))
+                assertFalse(text.contains(A11yProbeActivity.PASSWORD_FIELD_HINT))
+                assertTrue(nodeTraversal.containsPasswordField(root))
+            } finally {
+                root.recycle()
+            }
+        }
+    }
+
+    @Test
+    fun screenshotIsWithheldWhenActiveWindowHasPasswordField() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return
+        val service = AccessibilityServiceTestHarness.enableService()
+        ActivityScenario.launch(A11yProbeActivity::class.java).use {
+            AccessibilityServiceTestHarness.await(message = "service sees password probe") {
+                service.getScreenText().contains(A11yProbeActivity.HEADLINE_TEXT)
+            }
+            assertNull(service.takeScreenshotAndEncode())
         }
     }
 }

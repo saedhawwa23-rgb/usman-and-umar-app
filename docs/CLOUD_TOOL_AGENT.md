@@ -14,6 +14,10 @@ USMAN AND UMAR uses configured LLM providers for planning and tool selection. Op
 
 A provider/model may not support tools, and catalog availability is not proof that a specific tool call will work. The app must report failures clearly rather than silently claiming that work succeeded.
 
+## Persistent task tool execution
+
+The Task Manager also supports deterministic, AI-optional action tasks. A user can create a task with a registered `ActionDispatcher` action ID and a bounded JSON object of string parameters, then explicitly select **Approve & Run**. The runner checks registration, parses and bounds the input, executes through the app's existing action dispatcher, and records a terminal state only for a completed action result. Missing-input or user-mediated actions remain waiting for the user; failures are recorded as failures. Common credential patterns are redacted from persisted result/error text. This is an explicitly user-started single action, not a natural-language autonomous planner, a general Linux sandbox, or proof that a device-dependent action completed beyond the dispatcher result.
+
 ## Connector model
 
 `UniversalToolRegistry` is provider-neutral. Connectors publish a display name and compact tool schemas; the cloud provider sees only the tool definitions needed for the current request. Connector implementations do not bypass the app's tool validation or approval policy.

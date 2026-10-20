@@ -619,6 +619,7 @@ class OpenDroidAccessibilityService : AccessibilityService() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return null
         }
+        if (activeWindowContainsPasswordField()) return null
         return suspendCoroutine { continuation ->
             try {
                 takeScreenshot(
@@ -627,6 +628,12 @@ class OpenDroidAccessibilityService : AccessibilityService() {
                     object : TakeScreenshotCallback {
                         override fun onSuccess(screenshotResult: ScreenshotResult) {
                             try {
+                                // The active app may have changed while the asynchronous screenshot was captured.
+                                if (activeWindowContainsPasswordField()) {
+                                    screenshotResult.hardwareBuffer.close()
+                                    continuation.resume(null)
+                                    return
+                                }
                                 val hardwareBuffer = screenshotResult.hardwareBuffer
                                 val colorSpace = screenshotResult.colorSpace
                                 val bitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace)
@@ -664,6 +671,15 @@ class OpenDroidAccessibilityService : AccessibilityService() {
                 e.printStackTrace()
                 continuation.resume(null)
             }
+        }
+    }
+
+    private fun activeWindowContainsPasswordField(): Boolean {
+        val rootNode = rootInActiveWindow ?: return true
+        return try {
+            nodeTraversal.containsPasswordField(rootNode)
+        } finally {
+            rootNode.recycle()
         }
     }
 

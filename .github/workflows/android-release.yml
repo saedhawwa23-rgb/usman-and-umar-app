@@ -6,18 +6,23 @@ on:
       ref:
         description: Commit, branch, or tag to build
         required: true
-        default: feature/integrated-linux-terminal
+        default: feat/free-agent-task-execution
       tag:
         description: GitHub Release tag to create
         required: true
         default: v3.0.0-cloud-ai-pr4
+      publish_release:
+        description: Publish the verified artifact as a GitHub prerelease
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
   build-verify-publish:
-    name: Build, verify, and publish APK
+    name: Build, verify, and package APK
     runs-on: ubuntu-latest
     steps:
       - name: Checkout requested ref
@@ -84,24 +89,36 @@ jobs:
           mkdir -p "$out"
           test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
           "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.0.0-cloud-ai'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "native-code: 'armeabi-v7a'"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep '^native-code:' | grep -F "'armeabi-v7a'"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$apk" | tee "$out/SIGNING_STATUS.txt"
+          printf '\nSigning type: CI-generated Android debug key; not a production release signature.\n' >> "$out/SIGNING_STATUS.txt"
           unzip -l "$apk" | grep -F 'assets/proot/proot'
           unzip -p "$apk" assets/proot/proot > /tmp/proot-from-apk
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
           grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' "$out/PROOT_ELF.txt"
           sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
-          cp "$apk" "$out/usman-and-umar-v3.0.0-cloud-ai-pr4.apk"
-          sha256sum "$out/usman-and-umar-v3.0.0-cloud-ai-pr4.apk" | tee "$out/SHA256SUMS.txt"
+          apk_name="usman-and-umar-${GITHUB_SHA:0:12}.apk"
+          cp "$apk" "$out/$apk_name"
+          stat -c '%n %s bytes' "$out/$apk_name" | tee "$out/APK_SIZE.txt"
+          sha256sum "$out/$apk_name" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nref=%s\ntag=%s\n' "$(git rev-parse HEAD)" "${{ inputs.ref }}" "${{ inputs.tag }}" > "$out/BUILD_METADATA.txt"
 
+      - name: Upload verified APK and build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: usman-and-umar-apk-${{ steps.build-meta.outputs.commit }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Publish GitHub Release
+        if: inputs.publish_release
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
         with:
           tag_name: ${{ inputs.tag }}
           name: USMAN AND UMAR ${{ inputs.tag }}
           body: |
-            Verified Android ARM32 debug artifact from PR #4.
+            Verified Android ARM32 debug artifact from the specified commit.
 
             Commit: `${{ steps.build-meta.outputs.commit }}`
             Package: `com.usmanandumar.app`

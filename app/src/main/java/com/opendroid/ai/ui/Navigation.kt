@@ -59,6 +59,7 @@ object OpenDroidRoutes {
     const val DISCOVERY = "discovery"
     const val GITHUB_DISCOVERY = "github_discovery"
     const val TERMUX = "termux"
+    const val GOOGLE_DRIVE = "google_drive"
     const val UNIVERSAL_AGENT = "universal_agent"
 }
 
@@ -186,6 +187,9 @@ fun OpenDroidNavigation(
                 },
                 onNavigateToUniversalAgent = {
                     navController.navigate(OpenDroidRoutes.UNIVERSAL_AGENT)
+                },
+                onNavigateToGoogleDrive = {
+                    navController.navigate(OpenDroidRoutes.GOOGLE_DRIVE)
                 }
             )
         }
@@ -315,6 +319,13 @@ fun OpenDroidNavigation(
             )
         }
 
+        composable(OpenDroidRoutes.GOOGLE_DRIVE) {
+            GoogleDriveScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() }
+            )
+        }
+
         composable(OpenDroidRoutes.UNIVERSAL_AGENT) {
             UniversalAgentScreen()
         }
@@ -350,6 +361,7 @@ fun MainDashboard(
     onNavigateToGitHubDiscovery: () -> Unit = {},
     onNavigateToTermux: () -> Unit = {},
     onNavigateToUniversalAgent: () -> Unit = {},
+    onNavigateToGoogleDrive: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -496,7 +508,8 @@ fun MainDashboard(
                         onNavigateToRoutines = onNavigateToRoutines,
                         onNavigateToDiscovery = onNavigateToDiscovery,
                         onNavigateToGitHubDiscovery = onNavigateToGitHubDiscovery,
-                        onNavigateToTermux = onNavigateToTermux
+                        onNavigateToTermux = onNavigateToTermux,
+                        onNavigateToGoogleDrive = onNavigateToGoogleDrive
                     )
                 }
             }

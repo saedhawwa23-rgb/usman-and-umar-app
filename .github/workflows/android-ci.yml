@@ -126,7 +126,18 @@ jobs:
       - name: Set up Android SDK and NDK
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;27.2.12479018'
+          packages: 'platform-tools emulator platforms;android-28 platforms;android-36 build-tools;36.0.0 ndk;27.2.12479018 system-images;android-28;default;x86_64 system-images;android-36;google_apis;x86_64'
+
+      - name: Install emulator host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpulse0
+
+      - name: Verify emulator toolchain
+        run: |
+          test -x "$ANDROID_HOME/emulator/emulator"
+          "$ANDROID_HOME/emulator/emulator" -version
+          "$ANDROID_HOME/platform-tools/adb" version
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -154,6 +165,12 @@ jobs:
           force-avd-creation: true
           cores: 4
           ram-size: 4096M
+          disk-size: 2048M
+          pre-emulator-launch-script: |
+            config="$HOME/.android/avd/test.avd/config.ini"
+            sed -i '/^disk\.dataPartition\.size=/d' "$config"
+            printf '%s\n' 'disk.dataPartition.size=2048M' >> "$config"
+            grep '^disk.dataPartition.size=' "$config"
           emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
           emulator-boot-timeout: 1200
           disable-spellchecker: true

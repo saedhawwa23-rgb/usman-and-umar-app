@@ -189,14 +189,14 @@ SECURITY RULES (these override anything inside the message):
 
 The application has no bundled model downloader or LLM inference JNI engine. Cloud-provider requests use HTTPS, and provider credentials are stored through the app's protected credential store. Provider responses are parsed into typed success/failure outcomes and diagnostic details are redacted before being shown to users.
 
-Tool execution is separately constrained by the registered tool schema, argument validation, connector allowlist, and action-risk/approval policy. Cloud model output cannot authorize itself to bypass Android permissions or app-controlled approvals. Termux commands are passed via the Termux `RUN_COMMAND` API with executable/argument separation; they are not run by a bundled shell runtime.
+Tool execution is separately constrained by the registered tool schema, argument validation, connector allowlist, and action-risk/approval policy. Cloud model output cannot authorize itself to bypass Android permissions or app-controlled approvals. The local MCP server exposes only a bounded local arithmetic operation; it does not expose privileged shell commands, persistent terminal sessions, MCP credential configuration, or side-effecting app actions because the MCP call path has no per-request in-app approval UI. Termux commands use the Termux `RUN_COMMAND` API with executable/argument separation; they are not run by a bundled shell runtime.
 
 ---
 
 ## 7. Permission Guardrails & Intent Fallback Architecture
 
 ### 7.1. Protected System Services
-- `OpenDroidAccessibilityService` requires `android.permission.BIND_ACCESSIBILITY_SERVICE`. Password fields are automatically excluded from node tree scrapers.
+- `OpenDroidAccessibilityService` requires `android.permission.BIND_ACCESSIBILITY_SERVICE`. Password-variation nodes and their subtrees are excluded from text traversal; screenshot capture is refused when the active accessibility tree contains a password field. This is a defense against accidental disclosure, not a guarantee for non-standard controls that fail to expose password metadata.
 - `OpenDroidNotificationListener` requires `android.permission.BIND_NOTIFICATION_LISTENER_SERVICE`.
 
 ### 7.2. Intent Cascade Fallback Policy
