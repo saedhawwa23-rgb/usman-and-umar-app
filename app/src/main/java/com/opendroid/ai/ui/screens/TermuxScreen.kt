@@ -105,6 +105,18 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
                     )
                 }
                 item {
+                    Text("PATCHED ARM32 PRoot", fontWeight = FontWeight.Bold)
+                    Text(
+                        "Installs the bundled statically linked armeabi-v7a PRoot and loader into Termux home and verifies the executable. This runtime installer does not yet launch OpenManus/OpenSwarm inside a Linux rootfs.",
+                        color = AppTheme.colors.textSecondary
+                    )
+                    Button(
+                        onClick = { viewModel.installPatchedProot() },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = permissionGranted && activeJobs.none { it.taskLabel == "Install ARM32 PRoot and loader" }
+                    ) { Text("INSTALL ARM32 PRoot + LOADER") }
+                }
+                item {
                     Button(
                         onClick = { viewModel.installAgentRuntimes() },
                         modifier = Modifier.fillMaxWidth(),

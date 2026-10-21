@@ -41,6 +41,10 @@ class TermuxViewModel @Inject constructor(
         termux.installAgentRuntimes()
     }
 
+    fun installPatchedProot() = dispatch("ARM32 PRoot and loader installation") {
+        termux.installPatchedProot()
+    }
+
     fun abort(executionId: Int) = dispatch("SIGINT for job $executionId") {
         termux.abort(executionId)
     }

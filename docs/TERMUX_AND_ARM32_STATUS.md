@@ -1,30 +1,53 @@
-# Termux agent setup and ARM32 status
+# Termux, ARM32 PRoot, and build status
 
-## Agent sources and runtime requirements
+## Delivered in the Android source branch
 
-The bundled setup script selects the official [FoundationAgents/OpenManus](https://github.com/FoundationAgents/OpenManus) repository and [VRSEN/OpenSwarm](https://github.com/VRSEN/OpenSwarm). The OpenManus README currently documents Python 3.12 and `requirements.txt`; its configuration describes an LLM provider/API key for agent execution. VRSEN/OpenSwarm documents Node.js 20+, Python 3.12+, and one of its supported model-provider keys. “OpenSwarm” is not a unique project name; this bootstrap intentionally identifies VRSEN's repository rather than silently mixing it with the separate openswarm-os project.
+- `app/src/main/assets/termux/setup.sh` bootstraps Git, Python, Node.js, build dependencies, isolated OpenManus/OpenSwarm environments, and project dependency installation. It uses the official FoundationAgents/OpenManus and VRSEN/OpenSwarm repositories; the OpenSwarm identity is explicit because the name is shared by unrelated projects. The installer does not embed or call a paid model API. Actual agent inference still requires a provider/API key supported by those upstream projects.
+- Android-native app launch, URL opening, and the Sharesheet are implemented without AI. Public GitHub clone accepts only canonical GitHub repository URLs and passes them as argv.
+- Termux tasks are explicit and allowlisted. Active tasks can receive SIGINT; the bridge checks `/proc/<pid>/stat` start time before signaling to reduce PID-reuse risk.
+- The Termux screen now offers installation of the bundled static ARM32 PRoot and loader into Termux home. The installer verifies the binary and creates a `uua-proot` launcher setting `PROOT_LOADER`.
 
-`app/src/main/assets/termux/setup.sh` installs Termux packages (`python`, `nodejs`, `git`, `clang`, `make`, `cmake`, `pkg-config`, `libffi`, and `openssl`), checks the documented Python/Node baselines, clones the two public repositories if the expected target path is absent, creates a separate Python virtual environment per source tree, installs each repository's `requirements.txt`, and runs `npm ci` for VRSEN/OpenSwarm when a lockfile is present. Existing checkouts are reused rather than updated or overwritten. Installation output is logged inside Termux at `~/.local/state/usman-umar/setup.log`.
+Termux itself must be installed by the user, with `allow-external-apps=true` and Android's Termux `RUN_COMMAND` permission enabled. The app has not been tested on the Samsung Galaxy M10 in this session.
 
-The setup does not request, embed, or call a model-provider API key. Local app launching, URL opening, Sharesheet text sharing, GitHub clone commands, and setup orchestration do not need an AI API. OpenManus/OpenSwarm agent execution is distinct: the upstream projects need a configured model provider to perform AI tasks. Dependencies may also require internet access and compatible Termux/ARM packages, so an APK build cannot prove that installation succeeds on the Samsung device.
+## ARM32 PRoot/loader compile evidence
 
-Termux must already be installed separately. The user must enable Termux's `allow-external-apps` setting and grant Android's Termux `RUN_COMMAND` permission before the app can invoke the installer.
+The source checkout was `oonid/pr` at commit `1b2ea7966b5105e7d58051a394c25da97bf85a7d`. The build used Android NDK r27c's API 28 ARM sysroot and compiler-rt runtime, with a native host Clang 18 shim because this execution host is `aarch64` while the NDK download provides `linux-x86_64` host tools. The output target was ARMv7/ELF32 only; no 64-bit target binary was substituted.
 
-## Patched PRoot and ARM32
+The stock upstream build script needed two local fixes, preserved as [oonid-pr-arm32-build-fixes.patch](oonid-pr-arm32-build-fixes.patch): map the `armv7a-linux-androideabi` compiler triple to the NDK's actual `usr/lib/arm-linux-androideabi` sysroot directory, and parse ELF32 program headers when adjusting the TLS segment alignment. The host Clang shim selected NDK's ARM compiler-rt builtins. These changes were applied to the temporary upstream checkout for this build; they were not committed upstream.
 
-The selected `oonid/pr` source contains a C build script with an explicit `--arch=arm` target, an Android NDK r27c download path, Android API level 28, and the `armv7a-linux-androideabi` toolchain triple. Its documented README examples show arm64, not ARM32. The script copies its built `proot` and optional `loader` outputs under `build/out/arm`; this does not by itself install those outputs in Termux or integrate them into this app.
+The observed blockers and exact diagnostics were:
 
-The ARM32 build attempt is running from the source checkout at `projects/upstream-review/pr`. It first failed to fetch a submodule with a TLS/RPC disconnect. No ARM32 compiler diagnostic or successful ARM32 binary has been verified yet. The log and final result must be checked before reporting compiler status. No pre-built 64-bit binary is used as a substitute.
+1. Initial sysroot setup: `cp: cannot stat '/home/ubuntu/projects/upstream-review/pr/build/ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/armv7a-linux-androideabi': No such file or directory`.
+2. The NDK's x86_64 host compiler could not execute on this aarch64 host: `.../armv7a-linux-androideabi28-clang: line 4: .../bin/clang: cannot execute binary file: Exec format error`.
+3. The first native-host Clang link attempt lacked GCC's runtime: `ld.lld: error: unable to find library -lgcc`; using the NDK's ARM compiler-rt resolved this.
+4. After PRoot linked, the upstream TLS fixer interpreted the ELF32 header as ELF64 and reported `struct.error: unpack_from requires a buffer of at least 360290169215039532 bytes for unpacking 4 bytes at offset 360290169215039528 (actual buffer size is 2145576)`. The ELF32-aware patch resolved it.
 
-Even if PRoot compiles, full OpenManus/OpenSwarm execution inside patched PRoot remains a separate integration task. This document does not claim the generated PRoot/loader has been integrated into the APK or tested on Android 9/ARM32.
+Verified outputs from `build/out/arm`:
 
-## Google Drive and local outputs
+| Artifact | Size | SHA-256 | Verification |
+|---|---:|---|---|
+| `proot` | 2,145,576 bytes | `fb87717e9d5add5eb33460180a175cfe6d0ada1401d1a5b7e6034f9bd0a1eb92` | ELF32, ARM EABI5, statically linked, no dynamic section; TLS `p_align=0x40` |
+| `loader` | 18,104 bytes | `e631fda2757f4845dddf13e997d88af5216a9a9158c2353b70cdfb7ff1fd03cd` | ELF32, ARM EABI5, statically linked |
 
-The app already has the Google Drive browse/search/upload/download/export implementation, but OAuth/API enablement and consent configuration remain external prerequisites. The native Sharesheet currently shares text, not arbitrary generated files. GitHub clones and Termux setup outputs do not yet have a direct “Save to Drive” action, and the inherited Drive upload implementation is capped at 5 MiB. Therefore Drive is not yet a complete hub for every local-tool output.
+The stripped runtime is packaged as a 261,415-byte gzip tar asset at `app/src/main/assets/proot/arm32-runtime.tar.gz`; SHA-256: `87a34b19a2046325de20747cb340773202b3fe5b9594b2d82c7d8ece9b6aea08`. The native binaries were verified with `file`, `readelf`, and the build script, but have not been executed on Android hardware.
+
+**Still not complete:** OpenManus and OpenSwarm are installed by the bootstrap into Termux's normal home environment, not provisioned or run inside a Linux PRoot rootfs. The PRoot/loader installation action is implemented, but full rootfs provisioning, agent execution through it, and device verification remain outstanding.
+
+## Google Drive and local-output limitation
+
+The existing Google Drive browse/search/upload/download/export implementation remains in the app, with the inherited 5 MiB upload cap. Google OAuth/API enablement, consent-screen configuration, and test-user registration remain external prerequisites. The Sharesheet shares text; GitHub clones, Termux outputs, and the bundled PRoot installer do not yet have a direct, integrated “Save to Drive” action. Drive is therefore not yet a complete hub for every local-tool output, and no live Drive operation was verified in this session.
+
+## Android APK and CI status
+
+The work is on `feature/source-migration` with an unmerged [Pull Request #2](https://github.com/umarashebir-cpu/usman-and-umar-app/pull/2).
+
+The local `./gradlew testDebugUnitTest assembleDebug` attempt stopped before compilation with the exact message: `SDK location not found. Define a valid SDK location with an ANDROID_HOME environment variable or by setting the sdk.dir path in your project's local properties file at '/home/ubuntu/projects/usman-and-umar-app-fresh/local.properties'.`
+
+The PR Android CI run [39631388833](https://github.com/umarashebir-cpu/usman-and-umar-app/actions/runs/39631388833) for commit `b78ef8f` failed in all five jobs in about two seconds, with zero steps and no runner assigned. The manual APK workflow [39631495666](https://github.com/umarashebir-cpu/usman-and-umar-app/actions/runs/39631495666) for the same commit also failed before its first step on both attempts (the initial run and one rerun). The available GitHub token could not retrieve check annotations/logs (`403`, insufficient `checks:read`); the observed job metadata had empty runner names and zero steps. This is not evidence of a Kotlin or Gradle source failure, and its underlying GitHub runner cause could not be determined. These attempts produced no APK. The previously reported APK belongs to older commit `652c87c` and is not represented as a build of this update.
 
 ## References
 
-- [OpenManus README](https://github.com/FoundationAgents/OpenManus)
-- [VRSEN/OpenSwarm README](https://github.com/VRSEN/OpenSwarm)
-- [oonid/pr README](https://github.com/oonid/pr)
+- [FoundationAgents/OpenManus](https://github.com/FoundationAgents/OpenManus)
+- [VRSEN/OpenSwarm](https://github.com/VRSEN/OpenSwarm)
+- [oonid/pr](https://github.com/oonid/pr)
 - [oonid/pr ARM build script](https://github.com/oonid/pr/blob/main/scripts/build.sh)

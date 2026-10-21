@@ -109,6 +109,50 @@ internal object TermuxProcessControl {
     }
 }
 
+internal object TermuxProotRuntime {
+    private const val MAX_ARCHIVE_BASE64_CHARS = 400_000
+    private val base64Pattern = Regex("[A-Za-z0-9+/]+={0,2}")
+
+    fun installCommand(encodedArchive: String): TermuxCommand {
+        require(encodedArchive.length in 1..MAX_ARCHIVE_BASE64_CHARS && encodedArchive.length % 4 == 0 && base64Pattern.matches(encodedArchive)) {
+            "The bundled ARM32 PRoot archive is invalid or exceeds the safe transfer limit."
+        }
+        val script = """
+            set -eu
+            pkg install -y coreutils tar
+            root="${'$'}HOME/.local/lib/usman-umar"
+            base="${'$'}root/proot-arm32"
+            tmp="${'$'}root/proot-arm32.new.${'$'}${'$'}"
+            mkdir -p "${'$'}root" "${'$'}HOME/.local/bin"
+            rm -rf "${'$'}tmp"
+            mkdir -p "${'$'}tmp"
+            printf '%s' "${'$'}1" | base64 -d | tar -xz -C "${'$'}tmp"
+            test -s "${'$'}tmp/proot" && test -s "${'$'}tmp/loader"
+            chmod 700 "${'$'}tmp/proot" "${'$'}tmp/loader"
+            PROOT_LOADER="${'$'}tmp/loader" "${'$'}tmp/proot" --version >/dev/null
+            rm -rf "${'$'}base.old"
+            if [ -e "${'$'}base" ]; then mv "${'$'}base" "${'$'}base.old"; fi
+            if ! mv "${'$'}tmp" "${'$'}base"; then
+                if [ -e "${'$'}base.old" ]; then mv "${'$'}base.old" "${'$'}base"; fi
+                exit 1
+            fi
+            rm -rf "${'$'}base.old"
+            cat > "${'$'}HOME/.local/bin/uua-proot" <<'UUA_PROOT_EOF'
+            #!/data/data/com.termux/files/usr/bin/sh
+            export PROOT_LOADER="${'$'}HOME/.local/lib/usman-umar/proot-arm32/loader"
+            exec "${'$'}HOME/.local/lib/usman-umar/proot-arm32/proot" "${'$'}@"
+            UUA_PROOT_EOF
+            chmod 700 "${'$'}HOME/.local/bin/uua-proot"
+            "${'$'}HOME/.local/bin/uua-proot" --version
+        """.trimIndent()
+        return TermuxCommand(
+            "Install ARM32 PRoot and loader",
+            "sh",
+            listOf("-c", script, "uua-proot-installer", encodedArchive)
+        )
+    }
+}
+
 @Singleton
 class TermuxIntegration @Inject constructor(
     @ApplicationContext private val context: Context
@@ -203,6 +247,14 @@ class TermuxIntegration @Inject constructor(
         val encoded = android.util.Base64.encodeToString(script.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
         val fixedInstall = "mkdir -p \"\$HOME/.local/bin\"; printf '%s' '$encoded' | base64 -d > \"\$HOME/.local/bin/usman-umar-setup.sh\" && chmod 700 \"\$HOME/.local/bin/usman-umar-setup.sh\" && exec bash \"\$HOME/.local/bin/usman-umar-setup.sh\""
         TermuxCommand("Install OpenManus and OpenSwarm dependencies", "bash", listOf("-lc", fixedInstall))
+    }.fold(onSuccess = ::run, onFailure = { Result.failure(it) })
+
+    /** Installs only the bundled statically linked ARM32 PRoot and loader into Termux home. */
+    fun installPatchedProot(): Result<Int> = runCatching {
+        val archive = context.assets.open("proot/arm32-runtime.tar.gz").use { it.readBytes() }
+        require(archive.isNotEmpty() && archive.size <= 300_000) { "Bundled ARM32 PRoot archive is missing or oversized." }
+        val encoded = android.util.Base64.encodeToString(archive, android.util.Base64.NO_WRAP)
+        TermuxProotRuntime.installCommand(encoded)
     }.fold(onSuccess = ::run, onFailure = { Result.failure(it) })
 
     fun cloneGitHubRepository(url: String): Result<Int> = runCatching { TermuxGitHubClone.command(url) }

@@ -72,4 +72,22 @@ class TermuxGitHubCloneTest {
             TermuxProcessControl.interruptCommand(-1)
         }
     }
+
+    @Test
+    fun `ARM32 PRoot installer passes bounded archive as argv not shell source`() {
+        val command = TermuxProotRuntime.installCommand("QUJD")
+        assertEquals("sh", command.executable)
+        assertEquals("-c", command.arguments[0])
+        assertEquals("uua-proot-installer", command.arguments[2])
+        assertEquals("QUJD", command.arguments[3])
+        assertFalse(command.arguments[1].contains("QUJD"))
+        assertTrue(command.arguments[1].contains("base64 -d | tar -xz"))
+        assertTrue(command.arguments[1].contains("PROOT_LOADER=\"${'$'}tmp/loader\""))
+        assertThrows(IllegalArgumentException::class.java) {
+            TermuxProotRuntime.installCommand("QUJD; id")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            TermuxProotRuntime.installCommand("A".repeat(400_004))
+        }
+    }
 }
