@@ -16,6 +16,7 @@ import okhttp3.Response
 import okio.Buffer
 import okio.BufferedSink
 import okio.ForwardingSink
+import okio.buffer
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -139,6 +140,30 @@ class GoogleDriveRepository @Inject constructor(
             output.toByteArray()
         } ?: throw IOException("The selected local file could not be opened.")
 
+        return uploadBytes(accessToken, displayName, mimeType, bytes, onProgress)
+    }
+
+    /** Uploads a small generated local-tool output and verifies its Drive file ID and metadata. */
+    fun uploadText(
+        accessToken: String,
+        displayName: String,
+        text: String,
+        onProgress: (sentBytes: Long, totalBytes: Long) -> Unit = { _, _ -> }
+    ): GoogleDriveItem {
+        val safeName = safeFileName(displayName).let { if (it.contains('.')) it else "$it.txt" }
+        return uploadBytes(accessToken, safeName, "text/plain; charset=utf-8", text.toByteArray(Charsets.UTF_8), onProgress)
+    }
+
+    private fun uploadBytes(
+        accessToken: String,
+        displayName: String,
+        mimeType: String,
+        bytes: ByteArray,
+        onProgress: (sentBytes: Long, totalBytes: Long) -> Unit
+    ): GoogleDriveItem {
+        if (bytes.size > MAX_MULTIPART_UPLOAD_BYTES) {
+            throw IOException("This first Drive upload flow supports files up to 5 MiB. Resumable uploads are not implemented yet.")
+        }
         val metadata = JSONObject().put("name", displayName)
         val metadataPart = metadata.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         val contentPart = bytes.toRequestBody(mimeType.toMediaType())

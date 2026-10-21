@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -20,6 +21,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -44,10 +46,32 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
     val results by viewModel.results.collectAsState()
     val activeJobs by viewModel.activeJobs.collectAsState()
     var repositoryUrl by remember { mutableStateOf("") }
+    var pendingDriveSave by remember { mutableStateOf<com.opendroid.ai.core.termux.TermuxResult?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         viewModel.refresh()
     }
     LaunchedEffect(Unit) { viewModel.refresh() }
+
+    pendingDriveSave?.let { result ->
+        val output = viewModel.resultDriveText(result)
+        AlertDialog(
+            onDismissRequest = { pendingDriveSave = null },
+            title = { Text("Review output before upload") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("The entire captured output will be uploaded to the connected Google Drive account. Logs can contain tokens, private paths, or other sensitive content. Redact secrets before continuing. The preview below shows at most 1,200 characters.")
+                    Text(output.take(1_200), color = AppTheme.colors.textSecondary)
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.saveResultToDrive(result)
+                    pendingDriveSave = null
+                }) { Text("UPLOAD FULL OUTPUT") }
+            },
+            dismissButton = { TextButton(onClick = { pendingDriveSave = null }) { Text("CANCEL") } }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -79,7 +103,11 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
                     OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("DONE") }
                 }
             }
-            item { NativePhoneToolsCard() }
+            item {
+                NativePhoneToolsCard { text ->
+                    viewModel.saveTextToDrive("shared-tool-output.txt", text)
+                }
+            }
             if (installed && !permissionGranted) {
                 item {
                     Text("Android must grant ‘Run commands in Termux environment’ before any Termux command can start.", color = AppTheme.colors.textSecondary)
@@ -93,21 +121,21 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
                 item {
                     Text("OPENMANUS PREREQUISITES", fontWeight = FontWeight.Bold)
                     Text(
-                        "The fixed check reports whether Python 3.12+, the official source checkout, requirements, and a project .venv interpreter are present. It does not install dependencies or run the agent.",
+                        "The fixed check runs inside the Debian ARM32 PRoot guest and reports Python, source checkouts, requirements, and isolated venvs. It does not run an agent or test model-provider credentials.",
                         color = AppTheme.colors.textSecondary
                     )
                 }
                 item {
                     Text("OPENSWARM SOURCE", fontWeight = FontWeight.Bold)
                     Text(
-                        "The bundled installer selects VRSEN/OpenSwarm (Node.js 20+ / Python 3.12+). Other unrelated repositories use the same name. Setup clones public source and installs declared dependencies; agent execution still requires your own model/API provider configuration.",
+                        "The setup clones VRSEN/OpenSwarm source (not similarly named projects) and installs declared Python dependencies in the Debian ARM32 guest. Upstream's native CLI currently maps non-arm64 Linux to x64, so this installer deliberately does not fetch or run that unsupported binary. Agent execution and ARM32 dependency compatibility still need device testing and your own model/API provider configuration.",
                         color = AppTheme.colors.textSecondary
                     )
                 }
                 item {
                     Text("PATCHED ARM32 PRoot", fontWeight = FontWeight.Bold)
                     Text(
-                        "Installs the bundled statically linked armeabi-v7a PRoot and loader into Termux home and verifies the executable. This runtime installer does not yet launch OpenManus/OpenSwarm inside a Linux rootfs.",
+                        "Installs the bundled statically linked armeabi-v7a PRoot and loader into Termux home, then probes execution before replacing any previous runtime. Install this first; the auto-installer uses it to create and enter a Debian ARM32 rootfs.",
                         color = AppTheme.colors.textSecondary
                     )
                     Button(
@@ -164,6 +192,11 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
                         if (output.stdout.isNotBlank()) Text(output.stdout, color = AppTheme.colors.textSecondary)
                         if (output.stderr.isNotBlank()) Text("stderr: ${output.stderr}", color = AppTheme.colors.accentRed)
                         if (output.stdout.isBlank() && output.stderr.isBlank() && output.error == null) Text("Command completed without output.", color = AppTheme.colors.textSecondary)
+                        if (output.stdout.isNotBlank() || output.stderr.isNotBlank() || output.error != null) {
+                            OutlinedButton(onClick = { pendingDriveSave = output }) {
+                                Text("SAVE CAPTURED OUTPUT TO DRIVE")
+                            }
+                        }
                     }
                     Spacer(Modifier.height(6.dp))
                 }

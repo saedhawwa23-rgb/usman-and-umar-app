@@ -46,11 +46,13 @@ class TermuxGitHubCloneTest {
     @Test
     fun `OpenManus preflight uses fixed Python argv and only checks prerequisites`() {
         val task = TermuxTask.OPENMANUS_PREFLIGHT
-        assertEquals("python", task.executable)
-        assertEquals("-c", task.arguments[0])
+        assertEquals("sh", task.executable)
+        assertEquals("-lc", task.arguments[0])
         val script = task.arguments[1]
-        assertTrue(script.contains("sys.version_info >= (3, 12)"))
-        assertTrue(script.contains("FoundationAgents-OpenManus"))
+        assertTrue(script.contains("uua-proot"))
+        assertTrue(script.contains("Python 3.12+"))
+        assertTrue(script.contains("/opt/usman-and-umar/agents"))
+        assertTrue(script.contains("OpenSwarm source"))
         assertTrue(script.contains("requirements.txt"))
         assertTrue(script.contains(".venv"))
         assertFalse(script.contains("subprocess"))
@@ -83,6 +85,10 @@ class TermuxGitHubCloneTest {
         assertFalse(command.arguments[1].contains("QUJD"))
         assertTrue(command.arguments[1].contains("base64 -d | tar -xz"))
         assertTrue(command.arguments[1].contains("PROOT_LOADER=\"${'$'}tmp/loader\""))
+        assertTrue(command.arguments[1].contains("installed_new=1"))
+        assertTrue(command.arguments[1].contains("installed_wrapper=1"))
+        assertTrue(command.arguments[1].contains("committed=1"))
+        assertTrue(command.arguments[1].contains("mv \"${'$'}previous\" \"${'$'}base\""))
         assertThrows(IllegalArgumentException::class.java) {
             TermuxProotRuntime.installCommand("QUJD; id")
         }

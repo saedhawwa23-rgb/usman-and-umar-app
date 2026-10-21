@@ -22,13 +22,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun NativePhoneToolsCard() {
+fun NativePhoneToolsCard(onSaveToDrive: (String) -> Unit = {}) {
     val context = LocalContext.current
     var url by remember { mutableStateOf("") }
     var shareText by remember { mutableStateOf("") }
@@ -98,6 +99,7 @@ fun NativePhoneToolsCard() {
 
             Spacer(Modifier.height(2.dp))
             Text("SHARE TEXT", fontWeight = FontWeight.SemiBold)
+            Text("Save to Drive uploads the text you entered to the connected Google account. Review it for sensitive content first.")
             OutlinedTextField(
                 value = shareText,
                 onValueChange = { shareText = it },
@@ -105,7 +107,11 @@ fun NativePhoneToolsCard() {
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 2
             )
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                OutlinedButton(
+                    onClick = { onSaveToDrive(shareText) },
+                    enabled = shareText.isNotBlank()
+                ) { Text("SAVE TEXT TO DRIVE") }
                 Button(
                     onClick = {
                         val send = Intent(Intent.ACTION_SEND).apply {

@@ -32,23 +32,22 @@ enum class TermuxTask(val label: String, val executable: String, val arguments: 
         arrayOf("install", "-y", "git", "python", "nodejs", "clang", "make", "cmake")
     ),
     OPENMANUS_PREFLIGHT(
-        "Check OpenManus prerequisites",
-        "python",
+        "Check agent prerequisites in ARM32 PRoot",
+        "sh",
         arrayOf(
-            "-c",
+            "-lc",
             """
-            import pathlib, sys
-            root = pathlib.Path.home() / "FoundationAgents-OpenManus"
-            checks = {
-                "Python 3.12+": sys.version_info >= (3, 12),
-                "OpenManus checkout": root.is_dir(),
-                "requirements.txt": (root / "requirements.txt").is_file(),
-                "isolated .venv interpreter": (root / ".venv" / "bin" / "python").is_file(),
-            }
-            print("Python: " + sys.version.split()[0])
-            for label, ok in checks.items():
-                print(f"{label}: {'present' if ok else 'missing'}")
-            sys.exit(0 if all(checks.values()) else 2)
+            set -eu
+            rootfs=""
+            for candidate in "${'$'}PREFIX/var/lib/proot-distro/installed-rootfs/debian" "${'$'}PREFIX/var/lib/proot-distro/containers/debian/rootfs"; do
+              if [ -x "${'$'}candidate/bin/sh" ]; then rootfs="${'$'}candidate"; break; fi
+            done
+            [ -n "${'$'}rootfs" ] || { echo 'Debian PRoot rootfs is missing; run the installer.'; exit 2; }
+            [ -x "${'$'}HOME/.local/bin/uua-proot" ] || { echo 'Patched ARM32 PRoot is missing; install it first.'; exit 2; }
+            "${'$'}HOME/.local/bin/uua-proot" --link2symlink -0 -r "${'$'}rootfs" -b /dev -b /proc -b /sys -b /system -w /root /bin/sh -lc '
+              python3 -c "import pathlib,sys; b=pathlib.Path('/opt/usman-and-umar/agents'); c={'Python 3.12+':sys.version_info >= (3,12),'OpenManus source':(b/'openmanus/.git').exists(),'OpenManus requirements':(b/'openmanus/requirements.txt').is_file(),'OpenManus venv':(b/'openmanus/.venv/bin/python').is_file(),'OpenSwarm source':(b/'openswarm/.git').exists(),'OpenSwarm requirements':(b/'openswarm/requirements.txt').is_file(),'OpenSwarm venv':(b/'openswarm/.venv/bin/python').is_file()}; print('Python:',sys.version.split()[0]); [print(k+': '+('present' if v else 'missing')) for k,v in c.items()]; sys.exit(0 if all(c.values()) else 2)"
+              node --version
+            '
             """.trimIndent()
         )
     )
@@ -111,6 +110,9 @@ internal object TermuxProcessControl {
 
 internal object TermuxProotRuntime {
     private const val MAX_ARCHIVE_BASE64_CHARS = 400_000
+    const val ARCHIVE_SHA256 = "4b3ed9fc191431f193570f2a10f2a944db2fed4400d0195e114476979bd914b7"
+    private const val PROOT_SHA256 = "203e237e56f1894977674b2d0e96851035e98d9fb4b2a27b1c1797a014f7e288"
+    private const val LOADER_SHA256 = "19e9a2dd9bca570bfd4c92cdfca3eecd792e91aa0ae21067cc06bf719fcf152c"
     private val base64Pattern = Regex("[A-Za-z0-9+/]+={0,2}")
 
     fun installCommand(encodedArchive: String): TermuxCommand {
@@ -123,27 +125,75 @@ internal object TermuxProotRuntime {
             root="${'$'}HOME/.local/lib/usman-umar"
             base="${'$'}root/proot-arm32"
             tmp="${'$'}root/proot-arm32.new.${'$'}${'$'}"
+            previous="${'$'}root/proot-arm32.previous.${'$'}${'$'}"
+            wrapper="${'$'}HOME/.local/bin/uua-proot"
+            wrapper_tmp="${'$'}wrapper.new.${'$'}${'$'}"
+            wrapper_previous="${'$'}wrapper.previous.${'$'}${'$'}"
+            moved_old=0
+            installed_new=0
+            had_wrapper=0
+            installed_wrapper=0
+            committed=0
+            cleanup() {
+                result=${'$'}?
+                trap - EXIT
+                rm -rf "${'$'}tmp" "${'$'}wrapper_tmp"
+                if [ "${'$'}committed" != 1 ]; then
+                    if [ "${'$'}installed_wrapper" = 1 ]; then
+                        if [ "${'$'}had_wrapper" = 1 ] && [ -e "${'$'}wrapper_previous" ]; then
+                            mv -f "${'$'}wrapper_previous" "${'$'}wrapper"
+                        else
+                            rm -f "${'$'}wrapper"
+                        fi
+                    fi
+                    if [ "${'$'}moved_old" = 1 ] && [ -e "${'$'}previous" ]; then
+                        rm -rf "${'$'}base"
+                        mv "${'$'}previous" "${'$'}base"
+                    elif [ "${'$'}installed_new" = 1 ]; then
+                        rm -rf "${'$'}base"
+                    fi
+                fi
+                rm -rf "${'$'}previous" "${'$'}wrapper_previous"
+                exit "${'$'}result"
+            }
+            trap cleanup EXIT
+            trap 'exit 130' INT
+            trap 'exit 143' TERM
+            trap 'exit 129' HUP
             mkdir -p "${'$'}root" "${'$'}HOME/.local/bin"
+            chmod 700 "${'$'}root" "${'$'}HOME/.local/bin"
             rm -rf "${'$'}tmp"
             mkdir -p "${'$'}tmp"
             printf '%s' "${'$'}1" | base64 -d | tar -xz -C "${'$'}tmp"
             test -s "${'$'}tmp/proot" && test -s "${'$'}tmp/loader"
+            printf '%s  %s\n' "$PROOT_SHA256" "${'$'}tmp/proot" "$LOADER_SHA256" "${'$'}tmp/loader" | sha256sum -c -
             chmod 700 "${'$'}tmp/proot" "${'$'}tmp/loader"
-            PROOT_LOADER="${'$'}tmp/loader" "${'$'}tmp/proot" --version >/dev/null
-            rm -rf "${'$'}base.old"
-            if [ -e "${'$'}base" ]; then mv "${'$'}base" "${'$'}base.old"; fi
-            if ! mv "${'$'}tmp" "${'$'}base"; then
-                if [ -e "${'$'}base.old" ]; then mv "${'$'}base.old" "${'$'}base"; fi
-                exit 1
-            fi
-            rm -rf "${'$'}base.old"
-            cat > "${'$'}HOME/.local/bin/uua-proot" <<'UUA_PROOT_EOF'
+            version=${'$'}("${'$'}tmp/proot" --version 2>&1)
+            printf '%s\n' "${'$'}version" | grep -qi proot
+            probe=${'$'}(PROOT_LOADER="${'$'}tmp/loader" "${'$'}tmp/proot" -r / /system/bin/sh -c 'printf PRoot_RUNTIME_OK')
+            test "${'$'}probe" = PRoot_RUNTIME_OK
+            cat > "${'$'}wrapper_tmp" <<'UUA_PROOT_EOF'
             #!/data/data/com.termux/files/usr/bin/sh
             export PROOT_LOADER="${'$'}HOME/.local/lib/usman-umar/proot-arm32/loader"
             exec "${'$'}HOME/.local/lib/usman-umar/proot-arm32/proot" "${'$'}@"
             UUA_PROOT_EOF
-            chmod 700 "${'$'}HOME/.local/bin/uua-proot"
-            "${'$'}HOME/.local/bin/uua-proot" --version
+            chmod 700 "${'$'}wrapper_tmp"
+            sh -n "${'$'}wrapper_tmp"
+            if [ -e "${'$'}wrapper" ] || [ -L "${'$'}wrapper" ]; then
+                cp -p "${'$'}wrapper" "${'$'}wrapper_previous"
+                had_wrapper=1
+            fi
+            if [ -e "${'$'}base" ]; then
+                test -d "${'$'}base" && test ! -L "${'$'}base"
+                mv "${'$'}base" "${'$'}previous"
+                moved_old=1
+            fi
+            mv "${'$'}tmp" "${'$'}base"
+            installed_new=1
+            mv -f "${'$'}wrapper_tmp" "${'$'}wrapper"
+            installed_wrapper=1
+            "${'$'}wrapper" -r / /system/bin/sh -c 'printf PRoot_RUNTIME_OK' | grep -qx PRoot_RUNTIME_OK
+            committed=1
         """.trimIndent()
         return TermuxCommand(
             "Install ARM32 PRoot and loader",
@@ -253,6 +303,9 @@ class TermuxIntegration @Inject constructor(
     fun installPatchedProot(): Result<Int> = runCatching {
         val archive = context.assets.open("proot/arm32-runtime.tar.gz").use { it.readBytes() }
         require(archive.isNotEmpty() && archive.size <= 300_000) { "Bundled ARM32 PRoot archive is missing or oversized." }
+        val actualHash = java.security.MessageDigest.getInstance("SHA-256").digest(archive)
+            .joinToString("") { "%02x".format(it) }
+        check(actualHash == TermuxProotRuntime.ARCHIVE_SHA256) { "Bundled ARM32 PRoot archive failed its SHA-256 integrity check." }
         val encoded = android.util.Base64.encodeToString(archive, android.util.Base64.NO_WRAP)
         TermuxProotRuntime.installCommand(encoded)
     }.fold(onSuccess = ::run, onFailure = { Result.failure(it) })

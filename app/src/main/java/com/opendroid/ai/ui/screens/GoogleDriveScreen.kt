@@ -75,21 +75,28 @@ fun GoogleDriveScreen(viewModel: GoogleDriveViewModel, onBack: () -> Unit) {
     var searchText by remember { mutableStateOf("") }
     var pendingExport by remember { mutableStateOf<GoogleDriveItem?>(null) }
     var folderStack by remember { mutableStateOf(listOf("root" to "My Drive")) }
+    var pendingAuthorizationGeneration by remember { mutableStateOf<Long?>(null) }
 
     val authorizationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
+        val requestGeneration = pendingAuthorizationGeneration
+        pendingAuthorizationGeneration = null
+        if (requestGeneration == null) {
+            viewModel.onAuthorizationDenied("Google Drive authorization result could not be matched to its request.")
+            return@rememberLauncherForActivityResult
+        }
         if (result.resultCode == Activity.RESULT_OK) {
             runCatching {
                 val data = result.data ?: error("Google authorization returned no data.")
                 Identity.getAuthorizationClient(context).getAuthorizationResultFromIntent(data)
             }.onSuccess { authResult ->
-                acceptAuthorization(authResult, state.credentialEmail, viewModel)
+                acceptAuthorization(authResult, state.credentialEmail, requestGeneration, viewModel)
             }.onFailure {
-                viewModel.onAuthorizationDenied("Google Drive authorization could not be completed. Try granting access again.")
+                viewModel.onAuthorizationDenied("Google Drive authorization could not be completed. Try granting access again.", requestGeneration)
             }
         } else {
-            viewModel.onAuthorizationDenied("Google Drive access was not granted.")
+            viewModel.onAuthorizationDenied("Google Drive access was not granted.", requestGeneration)
         }
     }
 
@@ -109,8 +116,9 @@ fun GoogleDriveScreen(viewModel: GoogleDriveViewModel, onBack: () -> Unit) {
 
     fun requestDriveAuthorization() {
         val selectedEmail = state.credentialEmail
+        val requestGeneration = viewModel.currentAuthorizationGeneration()
         if (activity == null || selectedEmail.isNullOrBlank()) {
-            viewModel.onAuthorizationDenied("Sign in with Google before requesting Drive access.")
+            viewModel.onAuthorizationDenied("Sign in with Google before requesting Drive access.", requestGeneration)
             return
         }
         val request = AuthorizationRequest.builder()
@@ -121,35 +129,37 @@ fun GoogleDriveScreen(viewModel: GoogleDriveViewModel, onBack: () -> Unit) {
                 if (result.hasResolution()) {
                     val pending = result.pendingIntent
                     if (pending == null) {
-                        viewModel.onAuthorizationDenied("Google requested additional permission but did not provide an approval screen.")
+                        viewModel.onAuthorizationDenied("Google requested additional permission but did not provide an approval screen.", requestGeneration)
                     } else {
+                        pendingAuthorizationGeneration = requestGeneration
                         authorizationLauncher.launch(IntentSenderRequest.Builder(pending.intentSender).build())
                     }
                 } else {
-                    acceptAuthorization(result, selectedEmail, viewModel)
+                    acceptAuthorization(result, selectedEmail, requestGeneration, viewModel)
                 }
             }
             .addOnFailureListener {
-                viewModel.onAuthorizationDenied("Google Drive authorization failed. Check account selection and OAuth configuration.")
+                viewModel.onAuthorizationDenied("Google Drive authorization failed. Check account selection and OAuth configuration.", requestGeneration)
             }
     }
 
     fun revokeDriveAccess() {
         val email = state.connectedAccount?.email ?: return
+        val requestGeneration = viewModel.currentAuthorizationGeneration()
         val request = RevokeAccessRequest.builder()
             .setAccount(Account(email, "com.google"))
             .setScopes(listOf(Scope(DRIVE_READONLY_SCOPE), Scope(DRIVE_FILE_SCOPE)))
             .build()
         Identity.getAuthorizationClient(context).revokeAccess(request)
             .addOnSuccessListener {
-                viewModel.disconnect()
+                viewModel.disconnect(requestGeneration)
                 folderStack = listOf("root" to "My Drive")
                 coroutineScope.launch {
                     runCatching { credentialManager.clearCredentialState(ClearCredentialStateRequest()) }
                 }
             }
             .addOnFailureListener {
-                viewModel.onAuthorizationDenied("Google could not revoke Drive access. The app cleared its in-memory token; retry revocation or remove this app in your Google Account security settings.")
+                viewModel.onAuthorizationDenied("Google could not revoke Drive access. The app cleared its in-memory token; retry revocation or remove this app in your Google Account security settings.", requestGeneration)
             }
     }
 
@@ -182,8 +192,9 @@ fun GoogleDriveScreen(viewModel: GoogleDriveViewModel, onBack: () -> Unit) {
                 item {
                     Button(
                         onClick = {
+                            val identityGeneration = viewModel.beginGoogleIdentitySelection()
                             if (activity == null) {
-                                viewModel.onAuthorizationDenied("Google sign-in requires an Android Activity context.")
+                                viewModel.onAuthorizationDenied("Google sign-in requires an Android Activity context.", identityGeneration)
                             } else {
                                 coroutineScope.launch {
                                     try {
@@ -192,15 +203,15 @@ fun GoogleDriveScreen(viewModel: GoogleDriveViewModel, onBack: () -> Unit) {
                                         val result = credentialManager.getCredential(activity, request)
                                         val credential = result.credential as? CustomCredential
                                         if (credential == null || credential.type != GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
-                                            viewModel.onAuthorizationDenied("Google sign-in returned an unsupported credential.")
+                                            viewModel.onAuthorizationDenied("Google sign-in returned an unsupported credential.", identityGeneration)
                                         } else {
                                             val googleId = GoogleIdTokenCredential.createFrom(credential.data)
-                                            viewModel.onGoogleIdentitySelected(googleId.id)
+                                            viewModel.onGoogleIdentitySelected(googleId.id, identityGeneration)
                                         }
                                     } catch (_: GetCredentialException) {
-                                        viewModel.onAuthorizationDenied("Google sign-in was cancelled or unavailable. Check that Google Play services and OAuth configuration are available.")
+                                        viewModel.onAuthorizationDenied("Google sign-in was cancelled or unavailable. Check that Google Play services and OAuth configuration are available.", identityGeneration)
                                     } catch (_: Exception) {
-                                        viewModel.onAuthorizationDenied("Google sign-in could not be completed. Check the Web OAuth client configuration.")
+                                        viewModel.onAuthorizationDenied("Google sign-in could not be completed. Check the Web OAuth client configuration.", identityGeneration)
                                     }
                                 }
                             }
@@ -315,14 +326,13 @@ fun GoogleDriveScreen(viewModel: GoogleDriveViewModel, onBack: () -> Unit) {
 private fun acceptAuthorization(
     result: AuthorizationResult,
     expectedEmail: String?,
+    requestGeneration: Long,
     viewModel: GoogleDriveViewModel
 ) {
     val token = result.accessToken
     if (token.isNullOrBlank() || expectedEmail.isNullOrBlank()) {
-        viewModel.onAuthorizationDenied("Google did not return a usable Drive access grant. Please authorize again.")
+        viewModel.onAuthorizationDenied("Google did not return a usable Drive access grant. Please authorize again.", requestGeneration)
     } else {
-        viewModel.verifyAuthorization(token, expectedEmail)
+        viewModel.verifyAuthorization(token, expectedEmail, requestGeneration)
     }
 }
-import android.accounts.Account
-import com.google.android.gms.auth.api.identity.RevokeAccessRequest
