@@ -57,4 +57,19 @@ class TermuxGitHubCloneTest {
         assertFalse(script.contains("os.system"))
         assertFalse(script.contains("pip install"))
     }
+
+    @Test
+    fun `SIGINT command validates process id and start time before signaling`() {
+        val command = TermuxProcessControl.interruptCommand(1234)
+        assertEquals("sh", command.executable)
+        assertEquals("-c", command.arguments.first())
+        val script = command.arguments.last()
+        assertTrue(script.contains(".usman-umar-job-1234.pid"))
+        assertTrue(script.contains("/proc/\$pid/stat"))
+        assertTrue(script.contains("kill -INT \"\$pid\""))
+        assertTrue(script.contains("\$current\" != \"\$started"))
+        assertThrows(IllegalArgumentException::class.java) {
+            TermuxProcessControl.interruptCommand(-1)
+        }
+    }
 }

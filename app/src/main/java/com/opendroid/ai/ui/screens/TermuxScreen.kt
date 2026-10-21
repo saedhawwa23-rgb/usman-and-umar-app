@@ -42,6 +42,7 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
     val permissionGranted by viewModel.permissionGranted.collectAsState()
     val status by viewModel.status.collectAsState()
     val results by viewModel.results.collectAsState()
+    val activeJobs by viewModel.activeJobs.collectAsState()
     var repositoryUrl by remember { mutableStateOf("") }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         viewModel.refresh()
@@ -78,6 +79,7 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
                     OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("DONE") }
                 }
             }
+            item { NativePhoneToolsCard() }
             if (installed && !permissionGranted) {
                 item {
                     Text("Android must grant ‘Run commands in Termux environment’ before any Termux command can start.", color = AppTheme.colors.textSecondary)
@@ -87,20 +89,27 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
                 }
             }
             if (installed) {
-                item { Text("LOCAL TASKS", fontWeight = FontWeight.Bold) }
+                item { Text("LOCAL TERMUX TASKS", fontWeight = FontWeight.Bold) }
                 item {
                     Text("OPENMANUS PREREQUISITES", fontWeight = FontWeight.Bold)
                     Text(
-                        "This fixed Termux check reports whether Python 3.12+, the official source checkout, its requirements file, and a project .venv interpreter are present. It does not install dependencies or run the agent, and a passing check alone does not mean OpenManus is ready.",
+                        "The fixed check reports whether Python 3.12+, the official source checkout, requirements, and a project .venv interpreter are present. It does not install dependencies or run the agent.",
                         color = AppTheme.colors.textSecondary
                     )
                 }
                 item {
-                    Text("OPENSWARM", fontWeight = FontWeight.Bold)
+                    Text("OPENSWARM SOURCE", fontWeight = FontWeight.Bold)
                     Text(
-                        "Not configured: multiple unrelated projects use this name. No repository is cloned or executed until the exact project is selected.",
+                        "The bundled installer selects VRSEN/OpenSwarm (Node.js 20+ / Python 3.12+). Other unrelated repositories use the same name. Setup clones public source and installs declared dependencies; agent execution still requires your own model/API provider configuration.",
                         color = AppTheme.colors.textSecondary
                     )
+                }
+                item {
+                    Button(
+                        onClick = { viewModel.installAgentRuntimes() },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = permissionGranted && activeJobs.none { it.taskLabel == "Install OpenManus and OpenSwarm dependencies" }
+                    ) { Text("RUN TERMUX AUTO-INSTALLER · OPENMANUS + OPENSWARM") }
                 }
                 items(TermuxTask.entries.size) { index ->
                     val task = TermuxTask.entries[index]
@@ -120,6 +129,16 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
                         modifier = Modifier.fillMaxWidth(),
                         enabled = repositoryUrl.isNotBlank() && permissionGranted
                     ) { Text("CLONE IN TERMUX HOME") }
+                }
+            }
+            if (activeJobs.isNotEmpty()) {
+                item { Text("RUNNING TERMUX JOBS", fontWeight = FontWeight.Bold) }
+                items(activeJobs.size) { index ->
+                    val job = activeJobs[index]
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("${job.taskLabel} · job ${job.executionId}", modifier = Modifier.weight(1f), color = AppTheme.colors.textSecondary)
+                        OutlinedButton(onClick = { viewModel.abort(job.executionId) }, enabled = permissionGranted) { Text("SEND SIGINT") }
+                    }
                 }
             }
             if (status != null) item { Text(status!!, color = AppTheme.colors.textSecondary) }

@@ -93,6 +93,22 @@ data class TermuxResult(
     val succeeded: Boolean get() = error == null && exitCode == 0
 }
 
+data class TermuxActiveJob(val executionId: Int, val taskLabel: String)
+
+internal object TermuxProcessControl {
+    fun interruptCommand(executionId: Int): TermuxCommand {
+        require(executionId > 0) { "Invalid Termux job ID." }
+        val script = "pid_file=\"\$HOME/.usman-umar-job-$executionId.pid\"; " +
+            "if [ ! -r \"\$pid_file\" ]; then echo 'Termux process is already finished.'; exit 1; fi; " +
+            "record=\$(cat \"\$pid_file\"); pid=\${record%%:*}; started=\${record#*:}; " +
+            "case \"\$pid:\$started\" in *[!0-9:]*) echo 'Invalid process ID file.'; exit 2;; esac; " +
+            "current=\$(sed 's/.*) //' \"/proc/\$pid/stat\" 2>/dev/null | awk '{print \$20}'); " +
+            "if [ -z \"\$current\" ] || [ \"\$current\" != \"\$started\" ]; then echo 'Termux process is already finished.'; rm -f \"\$pid_file\"; exit 1; fi; " +
+            "kill -INT \"\$pid\" && rm -f \"\$pid_file\""
+        return TermuxCommand("Send SIGINT to Termux job $executionId", "sh", listOf("-c", script))
+    }
+}
+
 @Singleton
 class TermuxIntegration @Inject constructor(
     @ApplicationContext private val context: Context
@@ -118,6 +134,7 @@ class TermuxIntegration @Inject constructor(
         private const val EXTRA_ERROR_MESSAGE = "errmsg"
         private const val EXTRA_EXECUTION_ID = "execution_id"
         private const val MAX_RESULTS = 30
+        private const val PID_FILE_PREFIX = ".usman-umar-job-"
 
         private val nextExecutionId = AtomicInteger(SystemClock.elapsedRealtime().toInt().and(Int.MAX_VALUE).coerceAtLeast(1))
     }
@@ -125,11 +142,14 @@ class TermuxIntegration @Inject constructor(
     private val pendingTasks = ConcurrentHashMap<Int, TermuxCommand>()
     private val _results = MutableStateFlow<List<TermuxResult>>(emptyList())
     val results: StateFlow<List<TermuxResult>> = _results.asStateFlow()
+    private val _activeJobs = MutableStateFlow<List<TermuxActiveJob>>(emptyList())
+    val activeJobs: StateFlow<List<TermuxActiveJob>> = _activeJobs.asStateFlow()
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val id = intent.getIntExtra(EXTRA_EXECUTION_ID, -1)
             val task = pendingTasks.remove(id) ?: return
+            _activeJobs.value = _activeJobs.value.filterNot { it.executionId == id }
             val bundle = intent.getBundleExtra(EXTRA_RESULT_BUNDLE)
             val internalErrorCode = bundle?.getInt(EXTRA_ERROR, Activity.RESULT_OK) ?: Activity.RESULT_CANCELED
             val error = when {
@@ -170,13 +190,29 @@ class TermuxIntegration @Inject constructor(
     ) == PackageManager.PERMISSION_GRANTED
 
     /**
-     * Sends one allowlisted executable and argv array to Termux; no shell concatenation is used.
-     * User must separately enable Termux's `allow-external-apps` setting and grant RUN_COMMAND.
+     * Runs a fixed Termux sh wrapper which records process identity, then execs the
+     * allowlisted executable with arguments passed as argv, not shell source.
+     * Termux must separately enable `allow-external-apps` and grant RUN_COMMAND permission.
      */
     fun run(task: TermuxTask): Result<Int> = run(TermuxCommand(task.label, task.executable, task.arguments.toList()))
 
+    /** Copies the reviewed APK asset into Termux home and runs that fixed script. */
+    fun installAgentRuntimes(): Result<Int> = runCatching {
+        val script = context.assets.open("termux/setup.sh").bufferedReader().use { it.readText() }
+        require(script.isNotBlank() && script.length <= 100_000) { "Bundled Termux setup script is missing or unexpectedly large." }
+        val encoded = android.util.Base64.encodeToString(script.toByteArray(Charsets.UTF_8), android.util.Base64.NO_WRAP)
+        val fixedInstall = "mkdir -p \"\$HOME/.local/bin\"; printf '%s' '$encoded' | base64 -d > \"\$HOME/.local/bin/usman-umar-setup.sh\" && chmod 700 \"\$HOME/.local/bin/usman-umar-setup.sh\" && exec bash \"\$HOME/.local/bin/usman-umar-setup.sh\""
+        TermuxCommand("Install OpenManus and OpenSwarm dependencies", "bash", listOf("-lc", fixedInstall))
+    }.fold(onSuccess = ::run, onFailure = { Result.failure(it) })
+
     fun cloneGitHubRepository(url: String): Result<Int> = runCatching { TermuxGitHubClone.command(url) }
         .fold(onSuccess = ::run, onFailure = { Result.failure(it) })
+
+    /** Sends SIGINT to the process associated with an active Termux command. */
+    fun abort(executionId: Int): Result<Int> {
+        if (!pendingTasks.containsKey(executionId)) return Result.failure(IllegalArgumentException("That Termux job is no longer running."))
+        return run(TermuxProcessControl.interruptCommand(executionId))
+    }
 
     private fun termuxDataDir(): File = File(context.packageManager.getApplicationInfo(TERMUX_PACKAGE, 0).dataDir)
 
@@ -194,11 +230,14 @@ class TermuxIntegration @Inject constructor(
         val pendingIntent = PendingIntent.getBroadcast(context, executionId, callback, flags)
         val termuxDir = termuxDataDir()
         val executable = File(termuxDir, "files/usr/bin/${task.executable}").absolutePath
+        val shellExecutable = File(termuxDir, "files/usr/bin/sh").absolutePath
         val workdir = File(termuxDir, "files/home").absolutePath
         val command = Intent(RUN_COMMAND_ACTION).apply {
             setClassName(TERMUX_PACKAGE, RUN_COMMAND_SERVICE)
-            putExtra(EXTRA_PATH, executable)
-            putExtra(EXTRA_ARGUMENTS, task.arguments.toTypedArray())
+            putExtra(EXTRA_PATH, shellExecutable)
+            val pidFile = "\$HOME/$PID_FILE_PREFIX$executionId.pid"
+            val pidWrapper = "started=\$(sed 's/.*) //' \"/proc/\$\$/stat\" | awk '{print \$20}'); printf '%s:%s\\n' \"\$\$\" \"\$started\" > \"$pidFile\"; exec \"\$@\""
+            putExtra(EXTRA_ARGUMENTS, (listOf("-c", pidWrapper, "uua-termux", executable) + task.arguments).toTypedArray())
             putExtra(EXTRA_WORKDIR, workdir)
             putExtra(EXTRA_BACKGROUND, true)
             putExtra(EXTRA_PENDING_INTENT, pendingIntent)
@@ -208,6 +247,7 @@ class TermuxIntegration @Inject constructor(
         pendingTasks[executionId] = task
         try {
             context.startService(command)
+            _activeJobs.value = _activeJobs.value + TermuxActiveJob(executionId, task.label)
         } catch (failure: Throwable) {
             pendingTasks.remove(executionId)
             pendingIntent.cancel()
