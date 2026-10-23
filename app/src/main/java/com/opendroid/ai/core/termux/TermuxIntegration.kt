@@ -76,7 +76,7 @@ object TermuxGitHubClone {
             "The GitHub owner or repository name is invalid."
         }
         val destination = "${owner}-${repository}"
-        return TermuxCommand("Clone $owner/$repository", "git", listOf("clone", "--depth=1", "https://github.com/$owner/$repository.git", destination))
+        return TermuxCommand("Clone $owner/$repository", "git", listOf("clone", "https://github.com/$owner/$repository.git", destination))
     }
 }
 

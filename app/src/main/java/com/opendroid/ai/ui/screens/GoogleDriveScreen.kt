@@ -48,6 +48,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.NoCredentialException
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.AuthorizationResult
 import com.google.android.gms.auth.api.identity.Identity
@@ -208,6 +209,8 @@ fun GoogleDriveScreen(viewModel: GoogleDriveViewModel, onBack: () -> Unit) {
                                             val googleId = GoogleIdTokenCredential.createFrom(credential.data)
                                             viewModel.onGoogleIdentitySelected(googleId.id, identityGeneration)
                                         }
+                                    } catch (_: NoCredentialException) {
+                                        viewModel.onAuthorizationDenied("No Google sign-in credential is available. Add or choose a Google account, then try again.", identityGeneration)
                                     } catch (_: GetCredentialException) {
                                         viewModel.onAuthorizationDenied("Google sign-in was cancelled or unavailable. Check that Google Play services and OAuth configuration are available.", identityGeneration)
                                     } catch (_: Exception) {

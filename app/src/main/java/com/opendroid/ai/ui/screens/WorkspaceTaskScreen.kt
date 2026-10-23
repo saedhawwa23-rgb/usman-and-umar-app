@@ -31,6 +31,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,7 +59,7 @@ fun WorkspaceTaskScreen(
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
     var expectedOutcome by remember { mutableStateOf("") }
-    var priority by remember { mutableStateOf(0f) }
+    var priority by remember { mutableFloatStateOf(0f) }
     val selectedDependencies = remember { mutableStateListOf<String>() }
     var actionSearch by remember { mutableStateOf("") }
     var toolId by remember { mutableStateOf("") }

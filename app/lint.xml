@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <issue id="TrustAllX509TrustManager">
+        <!-- JGit 6.10 bundles NoCheckX509TrustManager for the explicit http.sslVerify=false option. The app accepts only HTTPS GitHub origins and uses JGit's default sslVerify=true. Scope this exception to the dependency artifact so app-defined trust managers remain linted. -->
+        <ignore path="**/org.eclipse.jgit-6.10.0.202406032230-r.jar" />
+    </issue>
+</lint>

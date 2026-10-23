@@ -158,7 +158,7 @@ fun DiscoveryScreen(
                                 context.startActivity(Intent(Intent.ACTION_VIEW, project.htmlUrl.toUri()))
                             }, onAdd = { viewModel.addProject(project) }, onUse = { viewModel.useProject(project) })
                             OutlinedButton(onClick = { viewModel.cloneRepository(project.cloneUrl) }, modifier = Modifier.fillMaxWidth()) {
-                                Text("CLONE TO TERMUX")
+                                Text("CLONE FULL HISTORY TO APP")
                             }
                         }
                     }

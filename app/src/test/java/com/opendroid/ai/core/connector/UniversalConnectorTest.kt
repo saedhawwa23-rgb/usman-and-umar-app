@@ -28,6 +28,9 @@ class UniversalConnectorTest {
                 ConnectorResult(true, "deployment-id")
         })
         assertEquals(tool, registry.findTool("connector_cloudflare__deploy"))
+        assertEquals(listOf(tool), registry.catalogTools.value)
+        registry.unregister("cloudflare")
+        assertTrue(registry.catalogTools.value.isEmpty())
     }
 
     @Test

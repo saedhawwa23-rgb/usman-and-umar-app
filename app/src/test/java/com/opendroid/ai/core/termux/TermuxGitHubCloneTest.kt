@@ -8,13 +8,13 @@ import org.junit.Test
 
 class TermuxGitHubCloneTest {
     @Test
-    fun `canonical github repository becomes safe argv without shell`() {
+    fun `canonical github repository becomes safe full-history argv without shell`() {
         val command = TermuxGitHubClone.command("https://github.com/example/mobile-app.git")
         assertEquals("Clone example/mobile-app", command.label)
         assertEquals("git", command.executable)
         assertEquals(
             listOf(
-                "clone", "--depth=1", "https://github.com/example/mobile-app.git",
+                "clone", "https://github.com/example/mobile-app.git",
                 "example-mobile-app"
             ),
             command.arguments

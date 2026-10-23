@@ -148,7 +148,8 @@ class CloudflareConnectorManager @Inject constructor(
             ConnectorTool(
                 CONNECTOR_ID, "list_deployments", "List Cloudflare Pages deployments for a project. Read-only.",
                 "{\"type\":\"object\",\"required\":[\"accountId\",\"projectName\"],\"properties\":{\"accountId\":{\"type\":\"string\"},\"projectName\":{\"type\":\"string\"}}}",
-                ConnectorRisk.READ_ONLY, ConnectorCredentialRef(CREDENTIAL_ID, "api_token")
+                ConnectorRisk.READ_ONLY, ConnectorCredentialRef(CREDENTIAL_ID, "api_token"),
+                category = "Cloud & APIs"
             )
         )
     }

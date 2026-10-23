@@ -9,6 +9,9 @@ import java.net.URLEncoder
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -24,7 +27,9 @@ data class ConnectorTool(
     val description: String,
     val parametersJsonSchema: String,
     val risk: ConnectorRisk = ConnectorRisk.READ_ONLY,
-    val credential: ConnectorCredentialRef? = null
+    val credential: ConnectorCredentialRef? = null,
+    val category: String = "Developer Tools",
+    val compatible: Boolean = true
 ) {
     val qualifiedName: String get() = "connector_${connectorId}__${name}"
 }
@@ -100,6 +105,14 @@ class InMemoryConnectorExecutionLog @Inject constructor() : ConnectorExecutionLo
 @Singleton
 class UniversalToolRegistry @Inject constructor() {
     private val connectors = LinkedHashMap<String, UniversalConnector>()
+    private val _catalogTools = MutableStateFlow<List<ConnectorTool>>(emptyList())
+    /** Observable snapshot of the actual registered tools; credentials are never exposed here. */
+    val catalogTools: StateFlow<List<ConnectorTool>> = _catalogTools.asStateFlow()
+
+    private fun publishCatalog() {
+        _catalogTools.value = connectors.values.flatMap { connector -> connector.tools() }
+            .sortedWith(compareBy<ConnectorTool> { it.name.lowercase() }.thenBy { it.qualifiedName })
+    }
 
     @Synchronized fun register(connector: UniversalConnector) {
         require(connector.id.matches(Regex("[a-z0-9][a-z0-9._-]{0,63}"))) { "Invalid connector id" }
@@ -107,9 +120,10 @@ class UniversalToolRegistry @Inject constructor() {
             "Connector tool names must be unique"
         }
         connectors[connector.id] = connector
+        publishCatalog()
     }
 
-    @Synchronized fun unregister(id: String) { connectors.remove(id) }
+    @Synchronized fun unregister(id: String) { connectors.remove(id); publishCatalog() }
     @Synchronized fun all(): List<UniversalConnector> = connectors.values.toList()
     @Synchronized fun allTools(): List<ConnectorTool> = connectors.values.flatMap { it.tools() }
     @Synchronized fun findTool(qualifiedName: String): ConnectorTool? = allTools().find { it.qualifiedName == qualifiedName }

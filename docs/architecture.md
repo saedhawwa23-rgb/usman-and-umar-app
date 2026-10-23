@@ -54,11 +54,15 @@ For high-impact actions, provider fallback is not an authorization bypass. Exist
 - **Open:** fetches live repository metadata, README text, and root entries; it does not change saved project state.
 - **ADD:** stores repository metadata in the user's project list.
 - **USE:** stores the metadata and sets its repository ID as the active project context.
-- **Clone:** passes a validated public HTTPS GitHub URL to Termux; this is a separate command execution step.
+- **Clone:** sends a validated public HTTPS GitHub URL to the app-private Git workspace; this is separate from lookup and saving project metadata.
 
 The project library is app settings data. GitHub lookup does not imply that a repository has been cloned, executed, or trusted.
 
-## 4. Termux command execution
+## 4. Local Git workspace
+
+`GitWorkspaceRepository` uses JGit to clone public GitHub repositories with full history into the app's internal `filesDir/git-workspace` directory. It lists local and remote branches, checks out local branches or creates tracking branches from remote refs, pages commit history, displays commit and working-tree diffs, and creates explicitly requested local commits. Commits are not pushed to a remote by this feature. Repository data is private to the app sandbox and is not shared with Termux. Clone, branch, history, status, diff, and commit operations run off the UI thread. Device-level network clone behavior remains **UNVERIFIED — REQUIRES DEVICE**.
+
+## 5. Termux command execution
 
 Termux is an optional, separately installed execution backend; it is not an LLM. `TermuxIntegration` sends the documented `com.termux.RUN_COMMAND` intent to Termux's `RunCommandService` only after checking installation and `com.termux.permission.RUN_COMMAND`. Termux must also have `allow-external-apps=true` enabled.
 
@@ -66,7 +70,7 @@ Commands are passed as an executable and argument array, not shell-interpolated 
 
 The callback contract and safe clone-argument construction have JVM tests. A real command and clone on an installed, permission-granted Termux app remain **UNVERIFIED — REQUIRES DEVICE**.
 
-## 5. Data and security boundaries
+## 6. Data and security boundaries
 
 - Provider API keys are stored through the app's protected credential store; never commit keys or release signing credentials.
 - Cloud requests are sent over HTTPS to the explicitly selected provider. User prompts and any included context are therefore transmitted to that provider for inference.
@@ -74,11 +78,11 @@ The callback contract and safe clone-argument construction have JVM tests. A rea
 - Termux execution is dispatched only through the explicit Termux API and its Android permission; the app does not simulate a shell inside the AI runtime.
 - GitHub lookups are public-only in this flow; private repository credentials are not requested or inferred.
 
-## 6. Retired local inference
+## 7. Retired local inference
 
 The current app has no bundled GGUF model, llama.cpp Gradle module, local inference JNI bridge, LiteRT LLM provider, or model download/import screen. The two small native libraries present in the APK are transitive Android library components, not an LLM engine or bundled model. The old Qwen implementation note is retained only as an archived retirement notice in [`qwen3-migration.md`](qwen3-migration.md).
 
-## 7. Build and verification
+## 8. Build and verification
 
 - Minimum Android version: API 28 (Android 9).
 - Target SDK: API 34.

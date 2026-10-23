@@ -35,6 +35,7 @@ class LocalActionConnector(
             description = definition.description,
             parametersJsonSchema = schemaFor(definition),
             risk = risk,
+            category = "Android & Phone",
         )
     }
 

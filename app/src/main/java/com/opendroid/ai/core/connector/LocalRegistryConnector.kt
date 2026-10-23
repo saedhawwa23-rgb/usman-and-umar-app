@@ -22,14 +22,16 @@ class LocalRegistryConnector(
             name = "list_available_tools",
             description = "List all tools currently registered on this device. Read-only and local.",
             parametersJsonSchema = "{\"type\":\"object\",\"properties\":{}}",
-            risk = ConnectorRisk.READ_ONLY
+            risk = ConnectorRisk.READ_ONLY,
+            category = "Developer Tools"
         ),
         ConnectorTool(
             connectorId = id,
             name = "list_connectors",
             description = "List all locally registered universal connectors. Read-only and local.",
             parametersJsonSchema = "{\"type\":\"object\",\"properties\":{}}",
-            risk = ConnectorRisk.READ_ONLY
+            risk = ConnectorRisk.READ_ONLY,
+            category = "Developer Tools"
         )
     )
 

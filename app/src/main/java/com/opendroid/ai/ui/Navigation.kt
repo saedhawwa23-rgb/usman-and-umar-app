@@ -61,6 +61,7 @@ object OpenDroidRoutes {
     const val TERMUX = "termux"
     const val GOOGLE_DRIVE = "google_drive"
     const val UNIVERSAL_AGENT = "universal_agent"
+    const val GIT_WORKSPACE = "git_workspace"
 }
 
 /**
@@ -190,6 +191,9 @@ fun OpenDroidNavigation(
                 },
                 onNavigateToGoogleDrive = {
                     navController.navigate(OpenDroidRoutes.GOOGLE_DRIVE)
+                },
+                onNavigateToGitWorkspace = {
+                    navController.navigate(OpenDroidRoutes.GIT_WORKSPACE)
                 }
             )
         }
@@ -319,6 +323,13 @@ fun OpenDroidNavigation(
             )
         }
 
+        composable(OpenDroidRoutes.GIT_WORKSPACE) {
+            GitWorkspaceScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() }
+            )
+        }
+
         composable(OpenDroidRoutes.GOOGLE_DRIVE) {
             GoogleDriveScreen(
                 viewModel = hiltViewModel(),
@@ -362,6 +373,7 @@ fun MainDashboard(
     onNavigateToTermux: () -> Unit = {},
     onNavigateToUniversalAgent: () -> Unit = {},
     onNavigateToGoogleDrive: () -> Unit = {},
+    onNavigateToGitWorkspace: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -483,10 +495,12 @@ fun MainDashboard(
                     Screen.Memory -> MemoryScreen(viewModel = memoryViewModel)
                     Screen.Social -> SocialScreen(viewModel = socialViewModel)
                     Screen.Tools -> CapabilitiesScreen(
+                        viewModel = hiltViewModel(),
                         onSearchAI = onNavigateToDiscovery,
                         onSearchGitHub = onNavigateToGitHubDiscovery,
                         onTermux = onNavigateToTermux,
-                        onUniversalAgent = onNavigateToUniversalAgent
+                        onUniversalAgent = onNavigateToUniversalAgent,
+                        onGitWorkspace = onNavigateToGitWorkspace
                     )
                     Screen.Macros -> MacrosScreen(
                         viewModel = macroViewModel,

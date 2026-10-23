@@ -1,7 +1,6 @@
 package com.opendroid.ai.ui.screens
 
 import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -27,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 
 @Composable
 fun NativePhoneToolsCard(onSaveToDrive: (String) -> Unit = {}) {
@@ -85,7 +85,7 @@ fun NativePhoneToolsCard(onSaveToDrive: (String) -> Unit = {}) {
             )
             Button(
                 onClick = {
-                    val target = runCatching { Uri.parse(url.trim()) }.getOrNull()
+                    val target = runCatching { url.trim().toUri() }.getOrNull()
                     if (target == null || target.scheme?.lowercase() !in setOf("http", "https") || target.host.isNullOrBlank() || target.userInfo != null) {
                         Toast.makeText(context, "Enter a valid http:// or https:// URL without credentials.", Toast.LENGTH_LONG).show()
                     } else {
