@@ -85,6 +85,16 @@
 -dontwarn com.google.errorprone.annotations.Immutable
 -dontwarn com.google.errorprone.annotations.RestrictedApi
 
+# ── JGit optional desktop/JVM integrations (not used by the Android workspace) ──
+# JGit's public HTTPS clone path defaults to certificate verification. The
+# workspace does not invoke GC PID locks, JMX monitoring, GSS/Negotiate auth, or
+# an SLF4J binding; Android does not provide these optional JVM classes.
+-dontwarn java.lang.ProcessHandle
+-dontwarn java.lang.management.**
+-dontwarn javax.management.**
+-dontwarn org.ietf.jgss.**
+-dontwarn org.slf4j.impl.StaticLoggerBinder
+
 # ── Accompanist ──
 -dontwarn com.google.accompanist.**
 -keep class com.google.accompanist.** { *; }
