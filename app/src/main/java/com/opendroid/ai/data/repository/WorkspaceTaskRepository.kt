@@ -1,6 +1,7 @@
 package com.opendroid.ai.data.repository
 
 import com.usmanandumar.workspace.core.task.TaskState
+import com.usmanandumar.workspace.core.task.TaskDependencyPolicy
 import com.usmanandumar.workspace.core.task.TaskStateMachine
 import com.opendroid.ai.data.db.dao.WorkspaceTaskDao
 import com.opendroid.ai.data.db.entities.WorkspaceTaskDependencyEntity
@@ -14,6 +15,17 @@ class WorkspaceTaskRepository @Inject constructor(
     private val dao: WorkspaceTaskDao,
 ) {
     fun observeTasks(): Flow<List<WorkspaceTaskEntity>> = dao.observeAll()
+
+    suspend fun getTask(taskId: String): WorkspaceTaskEntity? = dao.get(taskId)
+
+    suspend fun dependencyIds(taskId: String): List<String> = dao.dependenciesOf(taskId)
+
+    suspend fun unmetDependencies(taskId: String): List<WorkspaceTaskEntity> {
+        val ids = dao.dependenciesOf(taskId)
+        val dependencies = ids.map { id -> dao.get(id) ?: error("Prerequisite task is missing: $id") }
+        val unmetIds = TaskDependencyPolicy.unmet(dependencies.map { it.id to TaskState.valueOf(it.state) }).map { it.first }.toSet()
+        return dependencies.filter { it.id in unmetIds }
+    }
 
     suspend fun create(
         title: String,
@@ -38,6 +50,9 @@ class WorkspaceTaskRepository @Inject constructor(
         require(retryLimit in 0..5) { "Task retries must be bounded from 0 to 5" }
         require(timeoutMs > 0) { "Task timeout must be positive" }
         require(id !in dependencies) { "A task cannot depend on itself" }
+        require(dependencies.distinct().size == dependencies.size) { "Task dependencies must be unique" }
+        val missingDependencies = dependencies.filter { dao.get(it) == null }
+        require(missingDependencies.isEmpty()) { "Unknown task dependencies: ${missingDependencies.joinToString()}" }
         val task = WorkspaceTaskEntity(
             id = id,
             title = title.trim(),
@@ -71,6 +86,12 @@ class WorkspaceTaskRepository @Inject constructor(
         now: Long = System.currentTimeMillis(),
     ): WorkspaceTaskEntity {
         val current = dao.get(taskId) ?: error("Task not found: $taskId")
+        if (to == TaskState.QUEUED || to == TaskState.RUNNING) {
+            val unmet = unmetDependencies(taskId)
+            require(unmet.isEmpty()) {
+                "Task is blocked until dependencies succeed: ${unmet.joinToString { it.title }}"
+            }
+        }
         val from = TaskState.valueOf(current.state)
         TaskStateMachine.transition(from, to)
         val updated = current.copy(state = to.name, updatedAt = now)
