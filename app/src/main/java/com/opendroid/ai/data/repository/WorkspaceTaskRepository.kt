@@ -3,6 +3,8 @@ package com.opendroid.ai.data.repository
 import com.usmanandumar.workspace.core.task.TaskState
 import com.usmanandumar.workspace.core.task.TaskDependencyPolicy
 import com.usmanandumar.workspace.core.task.TaskStateMachine
+import com.usmanandumar.workspace.core.task.TaskOrchestrationStage
+import com.usmanandumar.workspace.core.task.TaskOrchestrationStageMachine
 import com.opendroid.ai.data.db.dao.WorkspaceTaskDao
 import com.opendroid.ai.data.db.entities.WorkspaceTaskDependencyEntity
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
@@ -17,6 +19,34 @@ class WorkspaceTaskRepository @Inject constructor(
     fun observeTasks(): Flow<List<WorkspaceTaskEntity>> = dao.observeAll()
 
     suspend fun getTask(taskId: String): WorkspaceTaskEntity? = dao.get(taskId)
+
+    suspend fun moveOrchestrationStage(
+        taskId: String,
+        to: TaskOrchestrationStage,
+        now: Long = System.currentTimeMillis(),
+    ): WorkspaceTaskEntity {
+        val task = dao.get(taskId) ?: error("Task not found: $taskId")
+        val from = TaskOrchestrationStage.valueOf(task.orchestrationStage)
+        TaskOrchestrationStageMachine.transition(from, to)
+        val updated = task.copy(orchestrationStage = to.name, updatedAt = now)
+        dao.update(updated)
+        dao.recordExecution(
+            WorkspaceTaskExecutionEntity(
+                taskId = taskId,
+                event = "orchestration_${from.name.lowercase()}_to_${to.name.lowercase()}",
+                fromState = task.state,
+                toState = task.state,
+                attempt = 0,
+                success = null,
+                outputRedacted = null,
+                errorCode = null,
+                errorMessageRedacted = null,
+                startedAt = now,
+                finishedAt = now,
+            ),
+        )
+        return updated
+    }
 
     suspend fun dependencyIds(taskId: String): List<String> = dao.dependenciesOf(taskId)
 
@@ -33,6 +63,8 @@ class WorkspaceTaskRepository @Inject constructor(
         projectId: String? = null,
         category: String = "general",
         priority: Int = 0,
+        deadlineAt: Long? = null,
+        aiAppPackage: String? = null,
         toolId: String? = null,
         workflowId: String? = null,
         inputJson: String = "{}",
@@ -61,7 +93,8 @@ class WorkspaceTaskRepository @Inject constructor(
             category = category,
             tagsJson = "[]",
             priority = priority,
-            deadlineAt = null,
+            deadlineAt = deadlineAt,
+            aiAppPackage = aiAppPackage?.trim()?.takeIf(String::isNotEmpty),
             toolId = toolId,
             workflowId = workflowId,
             inputJson = inputJson,
@@ -72,6 +105,7 @@ class WorkspaceTaskRepository @Inject constructor(
             requiresApproval = requiresApproval,
             schedule = null,
             state = TaskState.DRAFT.name,
+            orchestrationStage = TaskOrchestrationStage.PENDING.name,
             createdAt = now,
             updatedAt = now,
         )
@@ -112,6 +146,102 @@ class WorkspaceTaskRepository @Inject constructor(
             ),
         )
         return updated
+    }
+
+    /** Saves an external AI response but deliberately leaves the task uncompleted. */
+    suspend fun recordExternalAiResponse(
+        taskId: String,
+        response: String,
+        now: Long = System.currentTimeMillis(),
+    ): WorkspaceTaskEntity {
+        require(response.isNotBlank()) { "AI response cannot be blank." }
+        val task = dao.get(taskId) ?: error("Task not found: $taskId")
+        val runningState = ensureAiTaskRunningState(task)
+        val fromStage = TaskOrchestrationStage.valueOf(task.orchestrationStage)
+        TaskOrchestrationStageMachine.transition(fromStage, TaskOrchestrationStage.VERIFYING)
+        val newNotes = listOf(task.notes.trim(), "External AI response (captured by user/device):", response.trim())
+            .filter(String::isNotBlank).joinToString("\n\n")
+        val updated = task.copy(
+            state = runningState.name,
+            notes = newNotes.take(MAX_NOTES_CHARS),
+            orchestrationStage = TaskOrchestrationStage.VERIFYING.name,
+            updatedAt = now,
+        )
+        dao.update(updated)
+        dao.recordExecution(
+            WorkspaceTaskExecutionEntity(
+                taskId = taskId,
+                event = "external_ai_response_captured",
+                fromState = task.state,
+                toState = runningState.name,
+                attempt = 0,
+                success = null,
+                outputRedacted = "Response captured; output verification still required.",
+                errorCode = null,
+                errorMessageRedacted = null,
+                startedAt = now,
+                finishedAt = now,
+            ),
+        )
+        return updated
+    }
+
+    /** Completes an external-AI task only after a user-selected, non-empty artifact was read. */
+    suspend fun completeWithVerifiedArtifact(
+        taskId: String,
+        artifactUri: String,
+        bytes: Long,
+        now: Long = System.currentTimeMillis(),
+    ): WorkspaceTaskEntity {
+        require(artifactUri.isNotBlank()) { "Choose an output file before verification." }
+        require(bytes > 0) { "The selected output file is empty." }
+        val task = dao.get(taskId) ?: error("Task not found: $taskId")
+        ensureAiTaskRunningState(task)
+        val fromStage = TaskOrchestrationStage.valueOf(task.orchestrationStage)
+        TaskOrchestrationStageMachine.transition(fromStage, TaskOrchestrationStage.COMPLETED)
+        TaskStateMachine.transition(TaskState.RUNNING, TaskState.SUCCEEDED)
+        val updated = task.copy(
+            state = TaskState.SUCCEEDED.name,
+            orchestrationStage = TaskOrchestrationStage.COMPLETED.name,
+            verifiedArtifactUri = artifactUri,
+            notes = (task.notes.trim() + "\n\nVerified output file was readable and non-empty ($bytes bytes). User confirmed its contents.").trim().take(MAX_NOTES_CHARS),
+            updatedAt = now,
+        )
+        dao.update(updated)
+        dao.recordExecution(
+            WorkspaceTaskExecutionEntity(
+                taskId = taskId,
+                event = "external_ai_artifact_verified",
+                fromState = task.state,
+                toState = TaskState.SUCCEEDED.name,
+                attempt = 0,
+                success = true,
+                outputRedacted = "User-selected output file was readable and non-empty ($bytes bytes).",
+                errorCode = null,
+                errorMessageRedacted = null,
+                startedAt = now,
+                finishedAt = now,
+            ),
+        )
+        return updated
+    }
+
+    /** Returns RUNNING, recovering an interrupted user-wait task through the existing state machine. */
+    private suspend fun ensureAiTaskRunningState(task: WorkspaceTaskEntity): TaskState {
+        return when (TaskState.valueOf(task.state)) {
+            TaskState.RUNNING -> TaskState.RUNNING
+            TaskState.WAITING_USER -> {
+                val unmet = unmetDependencies(task.id)
+                require(unmet.isEmpty()) {
+                    "Task is still blocked by prerequisite task(s): ${unmet.joinToString { it.title }}"
+                }
+                TaskStateMachine.transition(TaskState.WAITING_USER, TaskState.READY)
+                TaskStateMachine.transition(TaskState.READY, TaskState.QUEUED)
+                TaskStateMachine.transition(TaskState.QUEUED, TaskState.RUNNING)
+                TaskState.RUNNING
+            }
+            else -> error("Only an in-progress or interrupted AI task can capture a response or verify an output file.")
+        }
     }
 
     suspend fun recordOutcome(
@@ -169,5 +299,9 @@ class WorkspaceTaskRepository @Inject constructor(
                 recovered
             } else task
         }
+    }
+
+    private companion object {
+        const val MAX_NOTES_CHARS = 20_000
     }
 }

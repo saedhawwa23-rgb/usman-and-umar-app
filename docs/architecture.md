@@ -1,6 +1,6 @@
 # USMAN AND UMAR — Cloud-First Android Architecture
 
-This document describes the current `3.0.0-cloud-ai` application. The app uses configured cloud LLM providers for reasoning; it does not bundle a local LLM or model artifact.
+This document describes the current `3.4.0-taskuary-ai` application. The app uses configured LLM providers for reasoning; it does not bundle a local LLM or model artifact.
 
 ## 1. Architecture at a glance
 
@@ -86,8 +86,19 @@ The current app has no bundled GGUF model, llama.cpp Gradle module, local infere
 
 - Minimum Android version: API 28 (Android 9).
 - Target SDK: API 34.
-- Version: `3.0.0-cloud-ai`, versionCode 23.
+- Version: `3.4.0-taskuary-ai`, versionCode 24.
 - JVM suite: `./gradlew :app:testDebugUnitTest`.
 - Unsigned validation release: `./gradlew clean :app:assembleRelease -PallowUnsignedRelease=true`.
 
 JVM tests and APK inspection cannot validate manufacturer-specific behavior, Android permissions on a real device, or the Termux external-command handshake. All such device-level checks are explicitly **UNVERIFIED — REQUIRES DEVICE** until executed on the intended phone.
+
+
+## 9. Task Manager, AI-app handoff and output verification
+
+The task Room schema is now version 12, with additive migration 11→12 for assigned AI-app package, a persisted artifact URI and a separate `PENDING → PLANNING → RUNNING → VERIFYING → COMPLETED` orchestration-stage column. The pre-existing task state machine and dependency-gated execution remain authoritative. The Compose screen adds Tasks, Inbox, Dashboard and Analytics tabs; task rows persist Work/Coding/Personal categories and optional due timestamps. Inbox triage uses the active user-configured provider and validated JSON parsing; it does not embed credentials or silently clear invalid input.
+
+AI-app discovery uses launchable installed apps identified by app label/package hints. Handoff is a package-specific Android text-share intent. The selected app controls whether the prompt is accepted and whether the user must press Send. Accessibility capture is explicitly armed for that one target package, skipped if its active accessibility tree contains a password field, held only in memory and expires after ten minutes. This is not a provider API and does not bypass Android or target-app restrictions. Manual response paste remains available.
+
+External AI task completion is blocked until a user-selected output file is readable and non-empty and the user confirms its contents. That check establishes file presence/readability, not semantic correctness. The existing Drive repository can upload the captured response or verified file after authorization; multipart uploads remain capped at 5 MiB and Drive still requires live device/account verification.
+
+The bundled PRoot/loader/bootstrap remain ARM32-only for the Galaxy M10 baseline. AMD64 runtime support is not implemented in the current artifact: there is no matching x86_64 archive/bootstrap, and the app refuses to substitute the ARM32 binary on another architecture.

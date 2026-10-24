@@ -65,6 +65,9 @@ class OpenDroidAccessibilityService : AccessibilityService() {
     private var isDeviceLocked = false
     private var showFloatingButtonSetting = false
     private val imeSubmitLabels = listOf("search", "go", "send", "done", "submit", "ok", "enter")
+    @Volatile private var externalAiCaptureTarget: String? = null
+    @Volatile private var lastExternalAiText: String? = null
+    @Volatile private var externalAiCaptureExpiresAt: Long = 0L
 
     /**
      * BroadcastReceiver that tracks device lock/unlock state.
@@ -127,10 +130,31 @@ class OpenDroidAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+        if (externalAiCaptureTarget != null && android.os.SystemClock.elapsedRealtime() > externalAiCaptureExpiresAt) {
+            externalAiCaptureTarget = null
+            lastExternalAiText = null
+        }
+        val eventPackage = event.packageName?.toString()
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val pkg = event.packageName?.toString()
-            if (!pkg.isNullOrBlank() && pkg != packageName) {
-                habitRoutineEngine.get().recordAppOpen(pkg)
+            if (!eventPackage.isNullOrBlank() && eventPackage != packageName) {
+                habitRoutineEngine.get().recordAppOpen(eventPackage)
+            }
+        }
+        if (eventPackage == externalAiCaptureTarget && event.eventType in setOf(
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+                AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED,
+                AccessibilityEvent.TYPE_VIEW_SCROLLED,
+            )
+        ) {
+            val rootNode = rootInActiveWindow ?: return
+            try {
+                if (!nodeTraversal.containsPasswordField(rootNode)) {
+                    val visibleText = nodeTraversal.screenText(rootNode).trim().take(MAX_EXTERNAL_AI_CAPTURE_CHARS)
+                    if (visibleText.isNotBlank()) lastExternalAiText = visibleText
+                }
+            } finally {
+                rootNode.recycle()
             }
         }
     }
@@ -148,6 +172,8 @@ class OpenDroidAccessibilityService : AccessibilityService() {
         }
         serviceScope.cancel()
         removeFloatingButton()
+        externalAiCaptureTarget = null
+        lastExternalAiText = null
         instance = null
     }
 
@@ -687,6 +713,42 @@ class OpenDroidAccessibilityService : AccessibilityService() {
         @Volatile
         private var instance: OpenDroidAccessibilityService? = null
 
+        private const val MAX_EXTERNAL_AI_CAPTURE_CHARS = 20_000
+        private const val EXTERNAL_AI_CAPTURE_WINDOW_MS = 10 * 60 * 1000L
+
         fun getInstance(): OpenDroidAccessibilityService? = instance
+
+        /** Arms screen-text capture only for the package the user explicitly chose for this task. */
+        fun armExternalAiCapture(packageName: String): Boolean {
+            val service = instance ?: return false
+            service.lastExternalAiText = null
+            service.externalAiCaptureTarget = packageName
+            service.externalAiCaptureExpiresAt = android.os.SystemClock.elapsedRealtime() + EXTERNAL_AI_CAPTURE_WINDOW_MS
+            return true
+        }
+
+        /** Returns and clears the latest captured text for the selected AI app. */
+        fun consumeExternalAiCapture(packageName: String): String? {
+            val service = instance ?: return null
+            if (service.externalAiCaptureTarget != packageName) return null
+            if (android.os.SystemClock.elapsedRealtime() > service.externalAiCaptureExpiresAt) {
+                service.externalAiCaptureTarget = null
+                service.lastExternalAiText = null
+                return null
+            }
+            val result = service.lastExternalAiText
+            service.lastExternalAiText = null
+            service.externalAiCaptureTarget = null
+            return result
+        }
+
+        fun cancelExternalAiCapture(packageName: String? = null) {
+            val service = instance ?: return
+            if (packageName == null || service.externalAiCaptureTarget == packageName) {
+                service.externalAiCaptureTarget = null
+                service.lastExternalAiText = null
+                service.externalAiCaptureExpiresAt = 0L
+            }
+        }
     }
 }

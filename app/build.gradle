@@ -17,8 +17,8 @@ android {
         applicationId "com.usmanandumar.app"
         minSdk 28
         targetSdk 34
-        versionCode 23
-        versionName "3.0.0-cloud-ai"
+        versionCode 24
+        versionName "3.4.0-taskuary-ai"
 
         // OAuth client IDs are public application identifiers, not client secrets.
         // The Web client ID is used as Credential Manager's serverClientId; the

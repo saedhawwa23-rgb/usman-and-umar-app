@@ -72,7 +72,7 @@ import com.opendroid.ai.data.db.dao.SocialAuditLogDao
         WorkspaceTaskDependencyEntity::class,
         WorkspaceTaskExecutionEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = true
 )
 abstract class OpenDroidDatabase : RoomDatabase() {
@@ -517,6 +517,14 @@ abstract class OpenDroidDatabase : RoomDatabase() {
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_executions_taskId ON workspace_task_executions(taskId)")
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_executions_startedAt ON workspace_task_executions(startedAt)")
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_executions_toState ON workspace_task_executions(toState)")
+            }
+        }
+
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE workspace_tasks ADD COLUMN aiAppPackage TEXT")
+                database.execSQL("ALTER TABLE workspace_tasks ADD COLUMN verifiedArtifactUri TEXT")
+                database.execSQL("ALTER TABLE workspace_tasks ADD COLUMN orchestrationStage TEXT NOT NULL DEFAULT 'PENDING'")
             }
         }
     }

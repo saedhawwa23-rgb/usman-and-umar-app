@@ -3,6 +3,7 @@ package com.opendroid.ai.data.db.entities
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import androidx.room.ColumnInfo
 
 @Entity(
     tableName = "workspace_tasks",
@@ -29,6 +30,9 @@ data class WorkspaceTaskEntity(
     val state: String,
     val createdAt: Long,
     val updatedAt: Long,
+    val aiAppPackage: String? = null,
+    val verifiedArtifactUri: String? = null,
+    @ColumnInfo(defaultValue = "'PENDING'") val orchestrationStage: String = "PENDING",
 )
 
 @Entity(
