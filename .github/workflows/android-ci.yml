@@ -186,11 +186,6 @@ jobs:
           cores: 2
           ram-size: 2048M
           disk-size: 2048M
-          pre-emulator-launch-script: |
-            config="$HOME/.android/avd/test.avd/config.ini"
-            sed -i '/^disk\.dataPartition\.size=/d' "$config"
-            printf '%s\n' 'disk.dataPartition.size=2048M' >> "$config"
-            grep '^disk.dataPartition.size=' "$config"
           # Headless launch; KVM is explicitly retained rather than falling
           # back to slow software CPU emulation on hosted Linux runners.
           disable-linux-hw-accel: false
