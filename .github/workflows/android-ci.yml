@@ -1,6 +1,7 @@
 name: Android CI
 
 on:
+  workflow_dispatch:
   pull_request:
     branches:
       - main
@@ -163,15 +164,18 @@ jobs:
           arch: x86_64
           target: ${{ matrix.api-level >= 30 && 'google_apis' || 'default' }}
           force-avd-creation: true
-          cores: 4
-          ram-size: 4096M
+          cores: 2
+          ram-size: 2048M
           disk-size: 2048M
           pre-emulator-launch-script: |
             config="$HOME/.android/avd/test.avd/config.ini"
             sed -i '/^disk\.dataPartition\.size=/d' "$config"
             printf '%s\n' 'disk.dataPartition.size=2048M' >> "$config"
             grep '^disk.dataPartition.size=' "$config"
-          emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          # Headless launch; KVM is explicitly retained rather than falling
+          # back to slow software CPU emulation on hosted Linux runners.
+          disable-linux-hw-accel: false
+          emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -camera-back none -accel on
           emulator-boot-timeout: 1200
           disable-spellchecker: true
           disable-animations: true

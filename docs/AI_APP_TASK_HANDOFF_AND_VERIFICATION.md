@@ -24,7 +24,7 @@ A captured response and a verified output can each be uploaded to Google Drive f
 
 ## Device and runtime scope
 
-The target Samsung Galaxy M10 baseline remains Android 9 / ARM32 (`armeabi-v7a`). The bundled patched PRoot archive and `setup.sh` are explicitly ARM32: the script accepts Termux `dpkg --print-architecture=arm`, creates a Debian ARM rootfs and refuses other Termux architectures. The current APK does not package an x86_64 PRoot/loader or an AMD64 Debian bootstrap. No 64-bit executable is substituted for the M10. AMD64 support requires a separately built, integrity-pinned matching PRoot/loader archive and an x86_64 Termux/Debian test device; it is not claimed by this release.
+The target Samsung Galaxy M10 baseline remains Android 9 / ARM32 (`armeabi-v7a`) and continues to use the 32-bit ARM runtime; no x86_64 executable is substituted on that phone. The app now bundles separately integrity-pinned ARM32 and x86_64 PRoot/loader archives, declares those two Android ABIs, selects the matching archive from the device ABI, and maps Termux to a Debian `armhf` or `amd64` guest. Unsupported or mismatched architectures are rejected. The x86_64 archive has been structurally verified as static ELF64/x86-64, but has not been run on an x86_64 Android/Termux device. The Galaxy M10 has not been used to rerun the installer in this session. See [Android multi-ABI runtime evidence](ANDROID_MULTI_ABI_RUNTIME.md); physical-device behavior remains unverified.
 
 ## Galaxy M10 manual verification
 

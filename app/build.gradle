@@ -20,6 +20,10 @@ android {
         versionCode 24
         versionName "3.4.0-taskuary-ai"
 
+        ndk {
+            abiFilters 'armeabi-v7a', 'x86_64'
+        }
+
         // OAuth client IDs are public application identifiers, not client secrets.
         // The Web client ID is used as Credential Manager's serverClientId; the
         // Android client is matched by package name and signing-certificate SHA-1.

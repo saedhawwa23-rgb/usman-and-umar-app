@@ -121,28 +121,28 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
                 item {
                     Text("OPENMANUS PREREQUISITES", fontWeight = FontWeight.Bold)
                     Text(
-                        "The fixed check runs inside the Debian ARM32 PRoot guest and reports Python, source checkouts, requirements, and isolated venvs. It does not run an agent or test model-provider credentials.",
+                        "The fixed check runs inside the matching Debian PRoot guest (armhf on ARM32 or amd64 on x86_64) and reports Python, source checkouts, requirements, and isolated venvs. It does not run an agent or test model-provider credentials.",
                         color = AppTheme.colors.textSecondary
                     )
                 }
                 item {
                     Text("OPENSWARM SOURCE", fontWeight = FontWeight.Bold)
                     Text(
-                        "The setup clones VRSEN/OpenSwarm source (not similarly named projects) and installs declared Python dependencies in the Debian ARM32 guest. Upstream's native CLI currently maps non-arm64 Linux to x64, so this installer deliberately does not fetch or run that unsupported binary. Agent execution and ARM32 dependency compatibility still need device testing and your own model/API provider configuration.",
+                        "The setup clones VRSEN/OpenSwarm source (not similarly named projects) and installs declared dependencies in the selected Debian guest. Its x86_64 guest matches the upstream CLI's x64 target, while ARM32 does not; this setup still does not download or run the native CLI. Dependency compatibility and agent execution need device testing and your own model/API provider configuration.",
                         color = AppTheme.colors.textSecondary
                     )
                 }
                 item {
-                    Text("PATCHED ARM32 PRoot", fontWeight = FontWeight.Bold)
+                    Text("PATCHED PRoot RUNTIME · ARM32 / x86_64", fontWeight = FontWeight.Bold)
                     Text(
-                        "Installs the bundled statically linked armeabi-v7a PRoot and loader into Termux home, then probes execution before replacing any previous runtime. Install this first; the auto-installer uses it to create and enter a Debian ARM32 rootfs.",
+                        "Installs the bundled statically linked PRoot and loader selected for the Android ABI (ARM32 or x86_64), then probes execution before replacing the prior runtime. Install this first; the auto-installer creates the matching Debian armhf or amd64 rootfs.",
                         color = AppTheme.colors.textSecondary
                     )
                     Button(
                         onClick = { viewModel.installPatchedProot() },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = permissionGranted && activeJobs.none { it.taskLabel == "Install ARM32 PRoot and loader" }
-                    ) { Text("INSTALL ARM32 PRoot + LOADER") }
+                        enabled = permissionGranted && activeJobs.none { it.taskLabel == "Install PRoot runtime and loader" }
+                    ) { Text("INSTALL PRoot + LOADER") }
                 }
                 item {
                     Button(

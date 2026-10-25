@@ -11,13 +11,30 @@ fail() {
   exit 1
 }
 
-printf 'USMAN AND UMAR ARM32 Termux/PRoot agent setup started.\n'
+printf 'USMAN AND UMAR multi-ABI Termux/PRoot agent setup started.\n'
 printf 'No model/API credentials will be requested, created, or written.\n'
 printf 'Termux log: %s\n' "$LOG_FILE"
 
 command -v pkg >/dev/null 2>&1 || fail 'Run this installer from Termux, not Android shell.'
-[ "$(dpkg --print-architecture 2>/dev/null || true)" = 'arm' ] || fail 'This bundled runtime targets the 32-bit ARM Termux ABI only.'
-[ -x "$HOME/.local/bin/uua-proot" ] || fail 'Install the bundled ARM32 PRoot + loader in the app first; its runtime probe must pass.'
+host_arch="$(dpkg --print-architecture 2>/dev/null || true)"
+case "$host_arch" in
+  arm)
+    runtime_arch=arm32
+    distro_arch=arm
+    expected_guest_arch=armhf
+    ;;
+  x86_64)
+    runtime_arch=x86_64
+    distro_arch=x86_64
+    expected_guest_arch=amd64
+    ;;
+  *)
+    fail "No bundled PRoot runtime for Termux architecture '${host_arch:-unknown}'; supported targets are ARM32 and x86_64."
+    ;;
+esac
+runtime_dir="$HOME/.local/lib/usman-umar/proot-$runtime_arch"
+[ -x "$HOME/.local/bin/uua-proot" ] || fail 'Install the bundled PRoot runtime and loader in the app first; its runtime probe must pass.'
+[ -s "$runtime_dir/architecture" ] && [ "$(cat "$runtime_dir/architecture")" = "$runtime_arch" ] || fail "Installed PRoot runtime does not match this Termux architecture ($runtime_arch)."
 
 available_kib="$(df -Pk "$HOME" | awk 'NR == 2 { print $4 }')"
 [ "${available_kib:-0}" -ge 4194304 ] || fail "At least 4 GiB free space is recommended for Debian, source checkouts, wheels, and build dependencies (available: ${available_kib:-unknown} KiB)."
@@ -32,8 +49,8 @@ for candidate in \
   if [ -x "$candidate/bin/sh" ]; then rootfs="$candidate"; break; fi
 done
 if [ -z "$rootfs" ]; then
-  printf 'Installing Debian armhf rootfs through official proot-distro…\n'
-  proot-distro install debian --architecture arm
+  printf 'Installing Debian %s rootfs through official proot-distro…\n' "$expected_guest_arch"
+  proot-distro install debian --architecture "$distro_arch"
   for candidate in \
     "$PREFIX/var/lib/proot-distro/installed-rootfs/debian" \
     "$PREFIX/var/lib/proot-distro/containers/debian/rootfs"; do
@@ -41,6 +58,8 @@ if [ -z "$rootfs" ]; then
   done
 fi
 [ -n "$rootfs" ] || fail 'proot-distro reported completion but the Debian rootfs could not be located.'
+actual_guest_arch=$("$HOME/.local/bin/uua-proot" --link2symlink -0 -r "$rootfs" -b /dev -b /proc -b /sys -b /system /usr/bin/dpkg --print-architecture)
+[ "$actual_guest_arch" = "$expected_guest_arch" ] || fail "The existing Debian rootfs is $actual_guest_arch, but $expected_guest_arch is required for this $runtime_arch Termux runtime. Remove/reinstall the Debian rootfs from Termux, then retry."
 
 state_dir="$HOME/.local/state/usman-umar"
 mkdir -p "$state_dir"
@@ -108,7 +127,7 @@ install_python_project() {
   fi
   if ! PIP_NO_CACHE_DIR=1 MAX_JOBS=1 MAKEFLAGS=-j1 CMAKE_BUILD_PARALLEL_LEVEL=1 \
        "$venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$dest/requirements.txt"; then
-    printf '%s_DEPENDENCY_INSTALL_FAILED (ARM32 wheel/source-build incompatibility may be the cause)\n' "$name" >&2
+    printf '%s_DEPENDENCY_INSTALL_FAILED (ABI wheel/source-build incompatibility may be the cause)\n' "$name" >&2
     return 35
   fi
   printf '%s_SOURCE_AND_DEPENDENCIES_INSTALLED\n' "$name"
@@ -126,10 +145,14 @@ if [ -f /opt/usman-and-umar/agents/openswarm/package-lock.json ]; then
   fi
 fi
 
-printf '\n=== ARM32 compatibility note ===\n'
+printf '\n=== %s agent platform compatibility note ===\n' "$expected_guest_arch"
 printf 'The VRSEN Python source and requirements are installed separately from its native OpenSwarm CLI.\n'
-printf 'The upstream CLI currently maps non-arm64 Linux machines to x64; this installer does not fetch or run that unsupported x86_64 binary on ARM32.\n'
-printf 'A successful dependency install is not proof that every upstream agent tool runs on ARM32.\n'
+if [ "$runtime_arch" = 'arm32' ]; then
+  printf 'The upstream CLI maps non-arm64 Linux machines to x64; this installer does not fetch or run that unsupported binary on ARM32.\n'
+else
+  printf 'The x86_64 guest matches the upstream CLI x64 target, but this installer still does not download or run the native CLI.\n'
+fi
+printf 'A successful dependency install is not proof that every upstream agent tool runs on this architecture.\n'
 
 if [ "$status" -ne 0 ]; then
   printf '\nAGENT_SETUP_INCOMPLETE: one or more project steps failed. Review the error above; successful checkout/venv work is retained for retry.\n' >&2
@@ -144,7 +167,7 @@ printf 'Configure model provider credentials yourself before running any model-b
 GUEST_SETUP_EOF
 chmod 700 "$guest_setup"
 
-printf 'Checking patched PRoot against the installed rootfs before dependency work…\n'
+printf 'Checking patched %s PRoot against the installed rootfs before dependency work…\n' "$runtime_arch"
 "$HOME/.local/bin/uua-proot" --link2symlink -0 -r "$rootfs" -b /dev -b /proc -b /sys -b /system /usr/bin/dpkg --print-architecture
 
 dns_source=""
@@ -154,7 +177,7 @@ done
 proot_args=(--link2symlink -0 -r "$rootfs" -b /dev -b /proc -b /sys -b /system -b "$guest_setup:/tmp/uua-agent-setup.sh" -w /root)
 if [ -n "$dns_source" ]; then proot_args+=(-b "$dns_source:/etc/resolv.conf"); fi
 
-printf 'Starting Debian package/dependency setup inside ARM32 PRoot. This can take a long time; output will return to the app.\n'
+printf 'Starting Debian package/dependency setup inside %s PRoot. This can take a long time; output will return to the app.\n' "$expected_guest_arch"
 "$HOME/.local/bin/uua-proot" "${proot_args[@]}" /bin/sh /tmp/uua-agent-setup.sh
 
 printf '\nInstaller finished. Review the returned output and saved log before relying on agent/runtime status.\n'

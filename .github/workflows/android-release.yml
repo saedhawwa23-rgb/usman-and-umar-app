@@ -6,11 +6,11 @@ on:
       ref:
         description: Commit, branch, or tag to build
         required: true
-        default: feat/free-agent-task-execution
+        default: feature/source-migration
       tag:
         description: GitHub Release tag to create
         required: true
-        default: v3.0.0-cloud-ai-pr4
+        default: v3.4.0-taskuary-ai
       publish_release:
         description: Publish the verified artifact as a GitHub prerelease
         required: true
@@ -39,46 +39,39 @@ jobs:
       - name: Set up Android SDK and NDK
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;27.2.12479018 cmake;3.22.1'
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;27.2.12479018'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Install ARM32 cross-compilation toolchain
-        run: |
-          sudo dpkg --add-architecture armhf
-          sudo tee /etc/apt/sources.list.d/armhf-ports.list >/dev/null <<'EOF'
-          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main universe
-          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe
-          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main universe
-          EOF
-          sudo apt-get update || true
-          sudo apt-get install -y gcc-arm-linux-gnueabihf libseccomp-dev:armhf libtalloc-dev:armhf pkg-config
-
-      - name: Build pinned ARM32 PRoot asset
+      - name: Verify pinned ARM32 and x86_64 PRoot assets
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf /tmp/proot
-          git clone https://github.com/termux/proot.git /tmp/proot
-          git -C /tmp/proot checkout --quiet b8c1f5c5c6730dc9d521d5bd5ce1cfeedecde087
-          grep -R --line-number -- '--link2symlink' /tmp/proot/src/cli/proot.c /tmp/proot/src/cli/proot.h
-          make -C /tmp/proot/src -j"$(nproc)" \
-            CROSS_COMPILE=arm-linux-gnueabihf- \
-            CC=arm-linux-gnueabihf-gcc \
-            STRIP=arm-linux-gnueabihf-strip \
-            CFLAGS='-marm -DARM_cpsr=uregs[16] -DPSR_T_BIT=0x00000020' \
-            LDFLAGS="-static -ltalloc -Wl,-z,noexecstack"
-          file /tmp/proot/src/proot | tee /tmp/proot-file.txt
-          grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' /tmp/proot-file.txt
-          mkdir -p app/src/main/assets/proot
-          cp /tmp/proot/src/proot app/src/main/assets/proot/proot
-          chmod 755 app/src/main/assets/proot/proot
+          cat <<'EOF' | sha256sum --check --status
+          4b3ed9fc191431f193570f2a10f2a944db2fed4400d0195e114476979bd914b7  app/src/main/assets/proot/arm32-runtime.bundle
+          8b424b4723124fae45bdd3120d55e5b4fb7a2450a52623cdf9371eacc42cd205  app/src/main/assets/proot/x86_64-runtime.bundle
+          EOF
+          mkdir -p /tmp/proot-runtime-check
+          for arch in arm32 x86_64; do
+            archive="app/src/main/assets/proot/${arch}-runtime.bundle"
+            tar -tzf "$archive" | sort > "/tmp/proot-runtime-check/${arch}-members.txt"
+            printf 'loader\nproot\n' > "/tmp/proot-runtime-check/${arch}-expected.txt"
+            diff -u "/tmp/proot-runtime-check/${arch}-expected.txt" "/tmp/proot-runtime-check/${arch}-members.txt"
+            tar -xOzf "$archive" proot > "/tmp/proot-runtime-check/${arch}-proot"
+            tar -xOzf "$archive" loader > "/tmp/proot-runtime-check/${arch}-loader"
+            file "/tmp/proot-runtime-check/${arch}-proot" "/tmp/proot-runtime-check/${arch}-loader"
+          done
+          file /tmp/proot-runtime-check/arm32-proot | grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked'
+          file /tmp/proot-runtime-check/arm32-loader | grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked'
+          file /tmp/proot-runtime-check/x86_64-proot | grep -E 'ELF 64-bit.*x86-64.*statically linked'
+          file /tmp/proot-runtime-check/x86_64-loader | grep -E 'ELF 64-bit.*x86-64.*statically linked'
+          sha256sum /tmp/proot-runtime-check/*-proot /tmp/proot-runtime-check/*-loader | tee /tmp/proot-runtime-check/member-sha256.txt
 
       - name: Run unit tests and build debug APK
         run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
 
-      - name: Verify package, ABI, signature, and checksums
+      - name: Verify package, version, signature, and runtime assets
         id: build-meta
         shell: bash
         run: |
@@ -88,20 +81,20 @@ jobs:
           out=dist
           mkdir -p "$out"
           test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.0.0-cloud-ai'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep '^native-code:' | grep -F "'armeabi-v7a'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.4.0-taskuary-ai'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$apk" | tee "$out/SIGNING_STATUS.txt"
           printf '\nSigning type: CI-generated Android debug key; not a production release signature.\n' >> "$out/SIGNING_STATUS.txt"
-          unzip -l "$apk" | grep -F 'assets/proot/proot'
-          unzip -p "$apk" assets/proot/proot > /tmp/proot-from-apk
-          file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
-          grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' "$out/PROOT_ELF.txt"
-          sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
+          for runtime in arm32-runtime.bundle x86_64-runtime.bundle; do
+            unzip -p "$apk" "assets/proot/$runtime" > "/tmp/$runtime"
+            cmp "app/src/main/assets/proot/$runtime" "/tmp/$runtime"
+          done
+          printf 'Bundled PRoot targets: ARM32/armeabi-v7a and x86_64; see Gradle ABI filters and pinned runtime assets.\n' > "$out/PROOT_RUNTIME_STATUS.txt"
           apk_name="usman-and-umar-${GITHUB_SHA:0:12}.apk"
           cp "$apk" "$out/$apk_name"
           stat -c '%n %s bytes' "$out/$apk_name" | tee "$out/APK_SIZE.txt"
           sha256sum "$out/$apk_name" | tee "$out/SHA256SUMS.txt"
-          printf 'commit=%s\nref=%s\ntag=%s\n' "$(git rev-parse HEAD)" "${{ inputs.ref }}" "${{ inputs.tag }}" > "$out/BUILD_METADATA.txt"
+          printf 'commit=%s\nref=%s\ntag=%s\npackage=com.usmanandumar.app\nversion=3.4.0-taskuary-ai\n' \
+            "$(git rev-parse HEAD)" "${{ inputs.ref }}" "${{ inputs.tag }}" > "$out/BUILD_METADATA.txt"
 
       - name: Upload verified APK and build evidence
         uses: actions/upload-artifact@v4
@@ -118,14 +111,14 @@ jobs:
           tag_name: ${{ inputs.tag }}
           name: USMAN AND UMAR ${{ inputs.tag }}
           body: |
-            Verified Android ARM32 debug artifact from the specified commit.
+            Verified Android debug artifact from the specified commit.
 
             Commit: `${{ steps.build-meta.outputs.commit }}`
             Package: `com.usmanandumar.app`
-            Version: `3.0.0-cloud-ai`
-            ABI: `armeabi-v7a`
+            Version: `3.4.0-taskuary-ai`
+            PRoot assets: `armeabi-v7a` and `x86_64` (selected at runtime)
 
-            Physical Samsung Galaxy M10 runtime verification remains separate and is not claimed by this release.
+            Physical Galaxy M10 and x86_64 Android/Termux runtime verification are separate and are not claimed by this release.
           files: dist/*
           fail_on_unmatched_files: true
           draft: false

@@ -82,9 +82,11 @@ class TermuxGitHubCloneTest {
         assertEquals("-c", command.arguments[0])
         assertEquals("uua-proot-installer", command.arguments[2])
         assertEquals("QUJD", command.arguments[3])
+        assertEquals("arm32", command.arguments[4])
         assertFalse(command.arguments[1].contains("QUJD"))
         assertTrue(command.arguments[1].contains("base64 -d | tar -xz"))
         assertTrue(command.arguments[1].contains("PROOT_LOADER=\"${'$'}tmp/loader\""))
+        assertTrue(command.arguments[1].contains("proot-arm32"))
         assertTrue(command.arguments[1].contains("installed_new=1"))
         assertTrue(command.arguments[1].contains("installed_wrapper=1"))
         assertTrue(command.arguments[1].contains("committed=1"))
@@ -93,7 +95,24 @@ class TermuxGitHubCloneTest {
             TermuxProotRuntime.installCommand("QUJD; id")
         }
         assertThrows(IllegalArgumentException::class.java) {
-            TermuxProotRuntime.installCommand("A".repeat(400_004))
+            TermuxProotRuntime.installCommand("A".repeat(500_004))
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            TermuxProotRuntime.installCommand("QUJD", "arm64-v8a")
+        }
+    }
+
+    @Test
+    fun `runtime selection maps only bundled Android ABIs`() {
+        assertEquals("x86_64", TermuxProotRuntime.selectArchitecture(listOf("x86_64", "x86")))
+        assertEquals("arm32", TermuxProotRuntime.selectArchitecture(listOf("arm64-v8a", "armeabi-v7a")))
+        assertEquals("proot/x86_64-runtime.bundle", TermuxProotRuntime.assetName("x86_64"))
+        assertEquals("proot/arm32-runtime.bundle", TermuxProotRuntime.assetName("arm32"))
+        assertThrows(IllegalArgumentException::class.java) {
+            TermuxProotRuntime.selectArchitecture(listOf("arm64-v8a"))
+        }
+        assertThrows(IllegalStateException::class.java) {
+            TermuxProotRuntime.verifyArchive("x86_64", "not-the-runtime".toByteArray())
         }
     }
 }

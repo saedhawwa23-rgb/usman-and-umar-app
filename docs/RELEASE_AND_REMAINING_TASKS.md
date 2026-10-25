@@ -1,5 +1,7 @@
 # Release delivery and remaining verification
 
+> The v3.0.0 links, repository owner, APK checksums, and CI diagnostics below are retained as historical records from an earlier repository snapshot. They are not download/build evidence for the current Taskuary or multi-ABI changes. See [ANDROID_MULTI_ABI_RUNTIME.md](ANDROID_MULTI_ABI_RUNTIME.md) for current PRoot assets and validation limits.
+
 ## GitHub APK release
 
 A private GitHub prerelease was created at [v3.0.0-cloud-ai-debug](https://github.com/umarashebir-cpu/usman-and-umar-app/releases/tag/v3.0.0-cloud-ai-debug). Its asset is [app-debug.apk](https://github.com/umarashebir-cpu/usman-and-umar-app/releases/download/v3.0.0-cloud-ai-debug/app-debug.apk). Because the repository is private, downloading requires a GitHub account with repository access.
@@ -12,11 +14,11 @@ For repository `umarashebir-cpu/usman-and-umar-app`, GitHub reports Actions enab
 
 The latest checked PR run, [39644953027](https://github.com/umarashebir-cpu/usman-and-umar-app/actions/runs/39644953027) on `cff1f52d72deeca85b18f608aa0d5e20702cf75a`, failed all five jobs before their first step. Each job has an empty step list and blank runner name/group. This is direct evidence of failure before runner assignment, not a Kotlin/Gradle compilation failure. The available GitHub integration cannot read check-run output or the account billing endpoint (`403 Resource not accessible by integration`); the repository Actions-usage endpoint returned `404`. Therefore Actions being disabled and workflow YAML syntax are ruled out by the observed settings and job creation, but the available evidence does **not** distinguish quota/billing restrictions from a GitHub-hosted runner provisioning or account policy issue. No exact billing diagnosis can responsibly be claimed from these permissions.
 
-## OpenSwarm ARM32 finding
+## OpenSwarm native CLI limitation
 
-The installer does not download or run an x64 binary in the ARM32 Debian guest. I did not change upstream's architecture selector to return an ARM32 package name because that package does not exist and would leave OpenSwarm without its native CLI.
+The installer does not download or run the OpenSwarm native CLI in either guest. The x86_64 Debian guest matches upstream's x64 selector; the ARM32 Debian guest does not. I did not change upstream's selector to return an ARM32 package name because that package does not exist and would leave OpenSwarm without its native CLI.
 
-The inspected upstream `run_utils.py` returns `arm64` only for `arm64`/`aarch64` and otherwise returns `x64` [1]. OpenSwarm's package metadata lists Linux ARM64 and x64 CLI packages, not ARM32 [2]. Queries to the npm registry for Linux `arm`, `arm32`, `armhf`, `armv7`, and `armv7l` packages returned `404`. The official platform-binary build/package workflow likewise lists Linux ARM64 and x64 assets, but no ARM32 target [3]. The underlying [VRSEN AgentSwarm CLI release](https://github.com/VRSEN/agentswarm-cli/releases/tag/v1.4.43) publishes ARM64 and x64 Linux builds, not ARM32 [4]. Pointing the selector at `arm32` would therefore not create a runnable binary; substituting x64 would violate the device ABI requirement. Genuine ARM32 support requires an upstream ARM32-compatible CLI/runtime build or a separately supported source implementation. Until then, OpenSwarm source/dependency provisioning is not equivalent to a working OpenSwarm CLI on this device.
+The inspected upstream `run_utils.py` returns `arm64` only for `arm64`/`aarch64` and otherwise returns `x64` [1]. OpenSwarm's package metadata and published binaries list Linux ARM64 and x64 CLI packages, not ARM32 [2–4]. Thus an x86_64 guest is architecture-compatible with the upstream x64 target, but that CLI has not been installed or run here. On the Galaxy M10's ARM32 guest, the x64 binary must not be substituted. Source/dependency provisioning is not equivalent to successful OpenSwarm CLI or agent execution on either architecture.
 
 ## Galaxy M10 Google Drive upload test
 

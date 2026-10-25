@@ -32,7 +32,7 @@ enum class TermuxTask(val label: String, val executable: String, val arguments: 
         arrayOf("install", "-y", "git", "python", "nodejs", "clang", "make", "cmake")
     ),
     OPENMANUS_PREFLIGHT(
-        "Check agent prerequisites in ARM32 PRoot",
+        "Check agent prerequisites in Debian PRoot",
         "sh",
         arrayOf(
             "-lc",
@@ -43,7 +43,7 @@ enum class TermuxTask(val label: String, val executable: String, val arguments: 
               if [ -x "${'$'}candidate/bin/sh" ]; then rootfs="${'$'}candidate"; break; fi
             done
             [ -n "${'$'}rootfs" ] || { echo 'Debian PRoot rootfs is missing; run the installer.'; exit 2; }
-            [ -x "${'$'}HOME/.local/bin/uua-proot" ] || { echo 'Patched ARM32 PRoot is missing; install it first.'; exit 2; }
+            [ -x "${'$'}HOME/.local/bin/uua-proot" ] || { echo 'Patched PRoot is missing; install the runtime first.'; exit 2; }
             "${'$'}HOME/.local/bin/uua-proot" --link2symlink -0 -r "${'$'}rootfs" -b /dev -b /proc -b /sys -b /system -w /root /bin/sh -lc '
               python3 -c "import pathlib,sys; b=pathlib.Path('/opt/usman-and-umar/agents'); c={'Python 3.12+':sys.version_info >= (3,12),'OpenManus source':(b/'openmanus/.git').exists(),'OpenManus requirements':(b/'openmanus/requirements.txt').is_file(),'OpenManus venv':(b/'openmanus/.venv/bin/python').is_file(),'OpenSwarm source':(b/'openswarm/.git').exists(),'OpenSwarm requirements':(b/'openswarm/requirements.txt').is_file(),'OpenSwarm venv':(b/'openswarm/.venv/bin/python').is_file()}; print('Python:',sys.version.split()[0]); [print(k+': '+('present' if v else 'missing')) for k,v in c.items()]; sys.exit(0 if all(c.values()) else 2)"
               node --version
@@ -109,26 +109,72 @@ internal object TermuxProcessControl {
 }
 
 internal object TermuxProotRuntime {
-    private const val MAX_ARCHIVE_BASE64_CHARS = 400_000
-    const val ARCHIVE_SHA256 = "4b3ed9fc191431f193570f2a10f2a944db2fed4400d0195e114476979bd914b7"
-    private const val PROOT_SHA256 = "203e237e56f1894977674b2d0e96851035e98d9fb4b2a27b1c1797a014f7e288"
-    private const val LOADER_SHA256 = "19e9a2dd9bca570bfd4c92cdfca3eecd792e91aa0ae21067cc06bf719fcf152c"
+    private const val MAX_ARCHIVE_BYTES = 350_000
+    private const val MAX_ARCHIVE_BASE64_CHARS = 500_000
+    const val INSTALL_TASK_LABEL = "Install PRoot runtime and loader"
+
+    private data class RuntimeHashes(val archive: String, val proot: String, val loader: String)
+
+    private val arm32Hashes = RuntimeHashes(
+        archive = "4b3ed9fc191431f193570f2a10f2a944db2fed4400d0195e114476979bd914b7",
+        proot = "203e237e56f1894977674b2d0e96851035e98d9fb4b2a27b1c1797a014f7e288",
+        loader = "19e9a2dd9bca570bfd4c92cdfca3eecd792e91aa0ae21067cc06bf719fcf152c"
+    )
+    private val x86_64Hashes = RuntimeHashes(
+        archive = "8b424b4723124fae45bdd3120d55e5b4fb7a2450a52623cdf9371eacc42cd205",
+        proot = "6ea2add4dd8886ea7e9ef279f1fbf0a45a941796a2c24a67ccecc5fe5e63d4ae",
+        loader = "2e386f6a2e0288bcfa5bba5dbc93dad288e8e22e435c4af9014ce16f23c241ba"
+    )
     private val base64Pattern = Regex("[A-Za-z0-9+/]+={0,2}")
 
-    fun installCommand(encodedArchive: String): TermuxCommand {
+    private fun hashesFor(runtimeArchitecture: String): RuntimeHashes = when (runtimeArchitecture) {
+        "arm32" -> arm32Hashes
+        "x86_64" -> x86_64Hashes
+        else -> throw IllegalArgumentException("No bundled PRoot runtime exists for $runtimeArchitecture.")
+    }
+
+    fun selectArchitecture(supportedAbis: List<String>): String = when {
+        "x86_64" in supportedAbis -> "x86_64"
+        "armeabi-v7a" in supportedAbis -> "arm32"
+        else -> throw IllegalArgumentException(
+            "Bundled PRoot supports ARM32 (armeabi-v7a) and x86_64 Android devices only; found ${supportedAbis.joinToString()}."
+        )
+    }
+
+    fun assetName(runtimeArchitecture: String): String {
+        hashesFor(runtimeArchitecture)
+        return "proot/$runtimeArchitecture-runtime.bundle"
+    }
+
+    fun verifyArchive(runtimeArchitecture: String, archive: ByteArray) {
+        val hashes = hashesFor(runtimeArchitecture)
+        require(archive.isNotEmpty() && archive.size <= MAX_ARCHIVE_BYTES) {
+            "Bundled $runtimeArchitecture PRoot archive is missing or oversized."
+        }
+        val actualHash = java.security.MessageDigest.getInstance("SHA-256").digest(archive)
+            .joinToString("") { "%02x".format(it) }
+        check(actualHash == hashes.archive) { "Bundled $runtimeArchitecture PRoot archive failed its SHA-256 integrity check." }
+    }
+
+    fun installCommand(encodedArchive: String, runtimeArchitecture: String = "arm32"): TermuxCommand {
+        val hashes = hashesFor(runtimeArchitecture)
         require(encodedArchive.length in 1..MAX_ARCHIVE_BASE64_CHARS && encodedArchive.length % 4 == 0 && base64Pattern.matches(encodedArchive)) {
-            "The bundled ARM32 PRoot archive is invalid or exceeds the safe transfer limit."
+            "The bundled $runtimeArchitecture PRoot archive is invalid or exceeds the safe transfer limit."
         }
         val script = """
             set -eu
             pkg install -y coreutils tar
+            runtime_arch="${'$'}2"
+            [ "${'$'}runtime_arch" = "$runtimeArchitecture" ] || { echo 'Runtime architecture argument mismatch.' >&2; exit 2; }
             root="${'$'}HOME/.local/lib/usman-umar"
-            base="${'$'}root/proot-arm32"
-            tmp="${'$'}root/proot-arm32.new.${'$'}${'$'}"
-            previous="${'$'}root/proot-arm32.previous.${'$'}${'$'}"
+            base="${'$'}root/proot-${'$'}runtime_arch"
+            tmp="${'$'}root/proot-${'$'}runtime_arch.new.${'$'}${'$'}"
+            previous="${'$'}root/proot-${'$'}runtime_arch.previous.${'$'}${'$'}"
             wrapper="${'$'}HOME/.local/bin/uua-proot"
             wrapper_tmp="${'$'}wrapper.new.${'$'}${'$'}"
             wrapper_previous="${'$'}wrapper.previous.${'$'}${'$'}"
+            PROOT_SHA256="${hashes.proot}"
+            LOADER_SHA256="${hashes.loader}"
             moved_old=0
             installed_new=0
             had_wrapper=0
@@ -166,7 +212,9 @@ internal object TermuxProotRuntime {
             mkdir -p "${'$'}tmp"
             printf '%s' "${'$'}1" | base64 -d | tar -xz -C "${'$'}tmp"
             test -s "${'$'}tmp/proot" && test -s "${'$'}tmp/loader"
-            printf '%s  %s\n' "$PROOT_SHA256" "${'$'}tmp/proot" "$LOADER_SHA256" "${'$'}tmp/loader" | sha256sum -c -
+            printf '%s\n' "${'$'}runtime_arch" > "${'$'}tmp/architecture"
+            chmod 600 "${'$'}tmp/architecture"
+            printf '%s  %s\n' "${'$'}PROOT_SHA256" "${'$'}tmp/proot" "${'$'}LOADER_SHA256" "${'$'}tmp/loader" | sha256sum -c -
             chmod 700 "${'$'}tmp/proot" "${'$'}tmp/loader"
             version=${'$'}("${'$'}tmp/proot" --version 2>&1)
             printf '%s\n' "${'$'}version" | grep -qi proot
@@ -174,8 +222,8 @@ internal object TermuxProotRuntime {
             test "${'$'}probe" = PRoot_RUNTIME_OK
             cat > "${'$'}wrapper_tmp" <<'UUA_PROOT_EOF'
             #!/data/data/com.termux/files/usr/bin/sh
-            export PROOT_LOADER="${'$'}HOME/.local/lib/usman-umar/proot-arm32/loader"
-            exec "${'$'}HOME/.local/lib/usman-umar/proot-arm32/proot" "${'$'}@"
+            export PROOT_LOADER="${'$'}HOME/.local/lib/usman-umar/proot-${runtimeArchitecture}/loader"
+            exec "${'$'}HOME/.local/lib/usman-umar/proot-${runtimeArchitecture}/proot" "${'$'}@"
             UUA_PROOT_EOF
             chmod 700 "${'$'}wrapper_tmp"
             sh -n "${'$'}wrapper_tmp"
@@ -196,9 +244,9 @@ internal object TermuxProotRuntime {
             committed=1
         """.trimIndent()
         return TermuxCommand(
-            "Install ARM32 PRoot and loader",
+            INSTALL_TASK_LABEL,
             "sh",
-            listOf("-c", script, "uua-proot-installer", encodedArchive)
+            listOf("-c", script, "uua-proot-installer", encodedArchive, runtimeArchitecture)
         )
     }
 }
@@ -299,15 +347,13 @@ class TermuxIntegration @Inject constructor(
         TermuxCommand("Install OpenManus and OpenSwarm dependencies", "bash", listOf("-lc", fixedInstall))
     }.fold(onSuccess = ::run, onFailure = { Result.failure(it) })
 
-    /** Installs only the bundled statically linked ARM32 PRoot and loader into Termux home. */
+    /** Installs only the bundled statically linked runtime matching the Android ABI into Termux home. */
     fun installPatchedProot(): Result<Int> = runCatching {
-        val archive = context.assets.open("proot/arm32-runtime.tar.gz").use { it.readBytes() }
-        require(archive.isNotEmpty() && archive.size <= 300_000) { "Bundled ARM32 PRoot archive is missing or oversized." }
-        val actualHash = java.security.MessageDigest.getInstance("SHA-256").digest(archive)
-            .joinToString("") { "%02x".format(it) }
-        check(actualHash == TermuxProotRuntime.ARCHIVE_SHA256) { "Bundled ARM32 PRoot archive failed its SHA-256 integrity check." }
+        val runtimeArchitecture = TermuxProotRuntime.selectArchitecture(Build.SUPPORTED_ABIS.toList())
+        val archive = context.assets.open(TermuxProotRuntime.assetName(runtimeArchitecture)).use { it.readBytes() }
+        TermuxProotRuntime.verifyArchive(runtimeArchitecture, archive)
         val encoded = android.util.Base64.encodeToString(archive, android.util.Base64.NO_WRAP)
-        TermuxProotRuntime.installCommand(encoded)
+        TermuxProotRuntime.installCommand(encoded, runtimeArchitecture)
     }.fold(onSuccess = ::run, onFailure = { Result.failure(it) })
 
     fun cloneGitHubRepository(url: String): Result<Int> = runCatching { TermuxGitHubClone.command(url) }

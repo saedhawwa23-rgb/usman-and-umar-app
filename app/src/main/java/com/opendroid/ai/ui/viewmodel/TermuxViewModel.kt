@@ -47,7 +47,7 @@ class TermuxViewModel @Inject constructor(
         termux.installAgentRuntimes()
     }
 
-    fun installPatchedProot() = dispatch("ARM32 PRoot and loader installation") {
+    fun installPatchedProot() = dispatch("Patched PRoot runtime and loader installation") {
         termux.installPatchedProot()
     }
 
