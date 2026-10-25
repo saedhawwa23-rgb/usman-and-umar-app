@@ -4,6 +4,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.opendroid.ai.accessibility.testfixtures.A11yProbeActivity
 import com.opendroid.ai.accessibility.testfixtures.AccessibilityServiceTestHarness
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
@@ -91,7 +92,7 @@ class KnownScreenScrapeInstrumentationTest {
             AccessibilityServiceTestHarness.await(message = "service sees password probe") {
                 service.getScreenText().contains(A11yProbeActivity.HEADLINE_TEXT)
             }
-            assertNull(service.takeScreenshotAndEncode())
+            assertNull(runBlocking { service.takeScreenshotAndEncode() })
         }
     }
 }
