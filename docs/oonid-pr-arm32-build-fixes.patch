@@ -1,0 +1,69 @@
+diff --git a/scripts/build.sh b/scripts/build.sh
+index f51ed8a..f716417 100755
+--- a/scripts/build.sh
++++ b/scripts/build.sh
+@@ -16,11 +16,13 @@ API_LEVEL=28
+ 
+ ARCHS=("arm64" "arm")
+ 
+-declare -A NDK_ARCH TRIPLE
++declare -A NDK_ARCH TRIPLE SYSROOT_LIB
+ NDK_ARCH[arm64]="arm64"
+ NDK_ARCH[arm]="arm"
+ TRIPLE[arm64]="aarch64-linux-android"
+ TRIPLE[arm]="armv7a-linux-androideabi"
++SYSROOT_LIB[arm64]="aarch64-linux-android"
++SYSROOT_LIB[arm]="arm-linux-androideabi"
+ 
+ usage() {
+     echo "Usage: $0 [OPTIONS]"
+@@ -123,6 +125,7 @@ get_sysroot() {
+ setup_sysroot() {
+     local arch="$1"
+     local triple="${TRIPLE[$arch]}"
++    local sysroot_lib="${SYSROOT_LIB[$arch]}"
+     local sysroot
+     sysroot="$(get_sysroot "$arch")"
+ 
+@@ -138,7 +141,7 @@ setup_sysroot() {
+     mkdir -p "${sysroot}/usr/lib" "${sysroot}/usr/include"
+ 
+     cp -a "${ndk_sysroot}/usr/include" "${sysroot}/usr/"
+-    cp -a "${ndk_sysroot}/usr/lib/${triple}" "${sysroot}/usr/lib/"
++    cp -a "${ndk_sysroot}/usr/lib/${sysroot_lib}" "${sysroot}/usr/lib/"
+ 
+     info "Sysroot created at: ${sysroot}"
+ }
+@@ -290,16 +293,27 @@ import struct, sys
+ with open('${binary}', 'rb') as f:
+     data = bytearray(f.read())
+ 
+-e_phoff = struct.unpack_from('<Q', data, 32)[0]
+-e_phentsize = struct.unpack_from('<H', data, 54)[0]
+-e_phnum = struct.unpack_from('<H', data, 56)[0]
++if len(data) < 64 or data[:4] != b'\x7fELF' or data[5] != 1:
++    raise SystemExit('Expected a little-endian ELF file')
++if data[4] == 1:  # ELF32
++    e_phoff = struct.unpack_from('<I', data, 28)[0]
++    e_phentsize = struct.unpack_from('<H', data, 42)[0]
++    e_phnum = struct.unpack_from('<H', data, 44)[0]
++    p_align_offset, p_align_format = 28, '<I'
++elif data[4] == 2:  # ELF64
++    e_phoff = struct.unpack_from('<Q', data, 32)[0]
++    e_phentsize = struct.unpack_from('<H', data, 54)[0]
++    e_phnum = struct.unpack_from('<H', data, 56)[0]
++    p_align_offset, p_align_format = 48, '<Q'
++else:
++    raise SystemExit('Unsupported ELF class')
+ 
+ PT_TLS = 7
+ for i in range(e_phnum):
+     off = e_phoff + i * e_phentsize
+     p_type = struct.unpack_from('<I', data, off)[0]
+     if p_type == PT_TLS:
+-        struct.pack_into('<Q', data, off + 48, 64)
++        struct.pack_into(p_align_format, data, off + p_align_offset, 64)
+         break
+ 
+ with open('${binary}', 'wb') as f:
+     f.write(data)

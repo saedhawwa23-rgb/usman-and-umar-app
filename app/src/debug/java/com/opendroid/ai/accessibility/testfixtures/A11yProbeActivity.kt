@@ -3,6 +3,7 @@ package com.opendroid.ai.accessibility.testfixtures
 import android.app.Activity
 import android.os.Bundle
 import android.view.MotionEvent
+import android.text.InputType
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -59,6 +60,16 @@ class A11yProbeActivity : Activity() {
 
         root.addView(EditText(this).apply {
             hint = FIELD_HINT
+        })
+
+        root.addView(EditText(this).apply {
+            hint = PASSWORD_FIELD_HINT
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(PASSWORD_VALUE)
+            textSize = 10f
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(8, 0, 8, 0)
         })
 
         // (1) Text targeting with a decoy on each side of the match boundary:
@@ -130,6 +141,8 @@ class A11yProbeActivity : Activity() {
         const val HEADLINE_TEXT = "A11Y PROBE HEADLINE"
         const val BUTTON_TEXT = "A11Y PROBE TAP ME"
         const val FIELD_HINT = "A11Y PROBE FIELD"
+        const val PASSWORD_FIELD_HINT = "A11Y PROBE PASSWORD"
+        const val PASSWORD_VALUE = "A11Y_SECRET_PASSWORD_4831"
 
         /** (1) Shares a prefix with [EXACT_TARGET_TEXT] but must never be clicked for it. */
         const val PREFIX_DECOY_TEXT = "A11Y CLICK SEND"

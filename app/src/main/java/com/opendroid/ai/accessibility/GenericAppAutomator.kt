@@ -57,6 +57,15 @@ object GenericAppAutomator {
         return service.getScreenText()
     }
 
+    fun armExternalAiCapture(packageName: String): Boolean =
+        OpenDroidAccessibilityService.armExternalAiCapture(packageName)
+
+    fun consumeExternalAiCapture(packageName: String): String? =
+        OpenDroidAccessibilityService.consumeExternalAiCapture(packageName)
+
+    fun cancelExternalAiCapture(packageName: String? = null) =
+        OpenDroidAccessibilityService.cancelExternalAiCapture(packageName)
+
     fun pressBack(): Boolean {
         val service = OpenDroidAccessibilityService.getInstance() ?: return false
         return service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)

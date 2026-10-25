@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -20,6 +21,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,11 +44,34 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
     val permissionGranted by viewModel.permissionGranted.collectAsState()
     val status by viewModel.status.collectAsState()
     val results by viewModel.results.collectAsState()
+    val activeJobs by viewModel.activeJobs.collectAsState()
     var repositoryUrl by remember { mutableStateOf("") }
+    var pendingDriveSave by remember { mutableStateOf<com.opendroid.ai.core.termux.TermuxResult?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         viewModel.refresh()
     }
     LaunchedEffect(Unit) { viewModel.refresh() }
+
+    pendingDriveSave?.let { result ->
+        val output = viewModel.resultDriveText(result)
+        AlertDialog(
+            onDismissRequest = { pendingDriveSave = null },
+            title = { Text("Review output before upload") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("The entire captured output will be uploaded to the connected Google Drive account. Logs can contain tokens, private paths, or other sensitive content. Redact secrets before continuing. The preview below shows at most 1,200 characters.")
+                    Text(output.take(1_200), color = AppTheme.colors.textSecondary)
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.saveResultToDrive(result)
+                    pendingDriveSave = null
+                }) { Text("UPLOAD FULL OUTPUT") }
+            },
+            dismissButton = { TextButton(onClick = { pendingDriveSave = null }) { Text("CANCEL") } }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -78,6 +103,11 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
                     OutlinedButton(onClick = onBack, modifier = Modifier.weight(1f)) { Text("DONE") }
                 }
             }
+            item {
+                NativePhoneToolsCard { text ->
+                    viewModel.saveTextToDrive("shared-tool-output.txt", text)
+                }
+            }
             if (installed && !permissionGranted) {
                 item {
                     Text("Android must grant ‘Run commands in Termux environment’ before any Termux command can start.", color = AppTheme.colors.textSecondary)
@@ -87,7 +117,40 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
                 }
             }
             if (installed) {
-                item { Text("LOCAL TASKS", fontWeight = FontWeight.Bold) }
+                item { Text("LOCAL TERMUX TASKS", fontWeight = FontWeight.Bold) }
+                item {
+                    Text("OPENMANUS PREREQUISITES", fontWeight = FontWeight.Bold)
+                    Text(
+                        "The fixed check runs inside the matching Debian PRoot guest (armhf on ARM32 or amd64 on x86_64) and reports Python, source checkouts, requirements, and isolated venvs. It does not run an agent or test model-provider credentials.",
+                        color = AppTheme.colors.textSecondary
+                    )
+                }
+                item {
+                    Text("OPENSWARM SOURCE", fontWeight = FontWeight.Bold)
+                    Text(
+                        "The setup clones VRSEN/OpenSwarm source (not similarly named projects) and installs declared dependencies in the selected Debian guest. Its x86_64 guest matches the upstream CLI's x64 target, while ARM32 does not; this setup still does not download or run the native CLI. Dependency compatibility and agent execution need device testing and your own model/API provider configuration.",
+                        color = AppTheme.colors.textSecondary
+                    )
+                }
+                item {
+                    Text("PATCHED PRoot RUNTIME · ARM32 / x86_64", fontWeight = FontWeight.Bold)
+                    Text(
+                        "Installs the bundled statically linked PRoot and loader selected for the Android ABI (ARM32 or x86_64), then probes execution before replacing the prior runtime. Install this first; the auto-installer creates the matching Debian armhf or amd64 rootfs.",
+                        color = AppTheme.colors.textSecondary
+                    )
+                    Button(
+                        onClick = { viewModel.installPatchedProot() },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = permissionGranted && activeJobs.none { it.taskLabel == "Install PRoot runtime and loader" }
+                    ) { Text("INSTALL PRoot + LOADER") }
+                }
+                item {
+                    Button(
+                        onClick = { viewModel.installAgentRuntimes() },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = permissionGranted && activeJobs.none { it.taskLabel == "Install OpenManus and OpenSwarm dependencies" }
+                    ) { Text("RUN TERMUX AUTO-INSTALLER · OPENMANUS + OPENSWARM") }
+                }
                 items(TermuxTask.entries.size) { index ->
                     val task = TermuxTask.entries[index]
                     OutlinedButton(onClick = { viewModel.run(task) }, modifier = Modifier.fillMaxWidth(), enabled = permissionGranted) { Text(task.label) }
@@ -108,6 +171,16 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
                     ) { Text("CLONE IN TERMUX HOME") }
                 }
             }
+            if (activeJobs.isNotEmpty()) {
+                item { Text("RUNNING TERMUX JOBS", fontWeight = FontWeight.Bold) }
+                items(activeJobs.size) { index ->
+                    val job = activeJobs[index]
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("${job.taskLabel} · job ${job.executionId}", modifier = Modifier.weight(1f), color = AppTheme.colors.textSecondary)
+                        OutlinedButton(onClick = { viewModel.abort(job.executionId) }, enabled = permissionGranted) { Text("SEND SIGINT") }
+                    }
+                }
+            }
             if (status != null) item { Text(status!!, color = AppTheme.colors.textSecondary) }
             if (results.isNotEmpty()) {
                 item { Text("RECENT TERMUX JOBS", fontWeight = FontWeight.Bold) }
@@ -119,6 +192,11 @@ fun TermuxScreen(viewModel: TermuxViewModel, onBack: () -> Unit) {
                         if (output.stdout.isNotBlank()) Text(output.stdout, color = AppTheme.colors.textSecondary)
                         if (output.stderr.isNotBlank()) Text("stderr: ${output.stderr}", color = AppTheme.colors.accentRed)
                         if (output.stdout.isBlank() && output.stderr.isBlank() && output.error == null) Text("Command completed without output.", color = AppTheme.colors.textSecondary)
+                        if (output.stdout.isNotBlank() || output.stderr.isNotBlank() || output.error != null) {
+                            OutlinedButton(onClick = { pendingDriveSave = output }) {
+                                Text("SAVE CAPTURED OUTPUT TO DRIVE")
+                            }
+                        }
                     }
                     Spacer(Modifier.height(6.dp))
                 }

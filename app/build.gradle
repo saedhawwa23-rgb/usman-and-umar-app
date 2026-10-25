@@ -17,8 +17,17 @@ android {
         applicationId "com.usmanandumar.app"
         minSdk 28
         targetSdk 34
-        versionCode 23
-        versionName "3.0.0-cloud-ai"
+        versionCode 24
+        versionName "3.4.0-taskuary-ai"
+
+        ndk {
+            abiFilters 'armeabi-v7a', 'x86_64'
+        }
+
+        // OAuth client IDs are public application identifiers, not client secrets.
+        // The Web client ID is used as Credential Manager's serverClientId; the
+        // Android client is matched by package name and signing-certificate SHA-1.
+        buildConfigField "String", "GOOGLE_WEB_OAUTH_CLIENT_ID", '"314587321554-7nmt1gk0cotier4dbcrctl1qcv1950u3.apps.googleusercontent.com"'
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -205,6 +214,10 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
     implementation 'androidx.activity:activity-compose:1.13.0'
+    implementation 'androidx.credentials:credentials:1.6.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.6.0'
+    implementation 'com.google.android.libraries.identity.googleid:googleid:1.2.1'
+    implementation 'com.google.android.gms:play-services-auth:21.6.0'
 
     // Jetpack Compose
     implementation platform('androidx.compose:compose-bom:2026.06.01')
@@ -243,6 +256,9 @@ dependencies {
     implementation 'com.squareup.okhttp3:logging-interceptor'
     implementation 'com.squareup.retrofit2:retrofit:3.0.0'
     implementation 'com.squareup.retrofit2:converter-gson:3.0.0'
+
+    // In-process Git for full-history clones and local branch/commit/diff operations.
+    implementation 'org.eclipse.jgit:org.eclipse.jgit:6.10.0.202406032230-r'
 
     // Optional privileged execution through Shizuku/Sui. Root execution remains a runtime
     // fallback when a su binary is available.

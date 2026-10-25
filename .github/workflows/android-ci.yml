@@ -1,6 +1,7 @@
 name: Android CI
 
 on:
+  workflow_dispatch:
   pull_request:
     branches:
       - main
@@ -111,7 +112,11 @@ jobs:
       fail-fast: false
       matrix:
         # minSdk and targetSdk from app/build.gradle - keep in sync.
-        api-level: [28, 36]
+        include:
+          - api-level: 28
+            image-target: default
+          - api-level: 36
+            image-target: google_apis
 
     steps:
       - name: Checkout repository
@@ -123,10 +128,36 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      # Emulator userdata requires about 7.4 GB. Remove large preinstalled
+      # toolchains unused by this Android job before installing its SDK image.
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell /usr/local/share/boost
+          df -h "$HOME"
+
       - name: Set up Android SDK and NDK
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;27.2.12479018'
+          # Install only this matrix leg's image; the other system image and
+          # NDK are not required for connectedDebugAndroidTest.
+          packages: 'platform-tools emulator platforms;android-28 platforms;android-36 build-tools;36.0.0 system-images;android-${{ matrix.api-level }};${{ matrix.image-target }};x86_64'
+
+      - name: Install emulator host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpulse0
+
+      - name: Verify emulator toolchain
+        run: |
+          test -x "$ANDROID_HOME/emulator/emulator"
+          "$ANDROID_HOME/emulator/emulator" -version
+          "$ANDROID_HOME/platform-tools/adb" version
+          available_bytes=$(df -B1 --output=avail "$HOME" | tail -1 | tr -d ' ')
+          echo "Available home filesystem bytes: $available_bytes"
+          if [ "$available_bytes" -lt 10000000000 ]; then
+            echo "::error::At least 10 GB free is required for the emulator userdata partition and test build."
+            exit 1
+          fi
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -150,11 +181,15 @@ jobs:
         with:
           api-level: ${{ matrix.api-level }}
           arch: x86_64
-          target: ${{ matrix.api-level >= 30 && 'google_apis' || 'default' }}
+          target: ${{ matrix.image-target }}
           force-avd-creation: true
-          cores: 4
-          ram-size: 4096M
-          emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          cores: 2
+          ram-size: 2048M
+          disk-size: 2048M
+          # Headless launch; KVM is explicitly retained rather than falling
+          # back to slow software CPU emulation on hosted Linux runners.
+          disable-linux-hw-accel: false
+          emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -camera-back none -accel on
           emulator-boot-timeout: 1200
           disable-spellchecker: true
           disable-animations: true

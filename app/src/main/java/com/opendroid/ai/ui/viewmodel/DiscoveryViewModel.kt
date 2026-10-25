@@ -8,7 +8,7 @@ import com.opendroid.ai.core.llm.AIModel
 import com.opendroid.ai.core.llm.ModelFetcher
 import com.opendroid.ai.core.llm.ModelFetchOutcome
 import com.opendroid.ai.core.llm.ProviderCatalog
-import com.opendroid.ai.core.termux.TermuxIntegration
+import com.opendroid.ai.core.git.GitWorkspaceRepository
 import com.opendroid.ai.data.repository.DiscoveryRepository
 import com.opendroid.ai.data.repository.SettingsRepository
 import com.opendroid.ai.data.models.withActiveProvider
@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -26,7 +28,7 @@ class DiscoveryViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val discoveryRepository: DiscoveryRepository,
     private val modelFetcher: ModelFetcher,
-    private val termuxIntegration: TermuxIntegration
+    private val gitWorkspace: GitWorkspaceRepository
 ) : ViewModel() {
     private val _githubResults = MutableStateFlow<List<GitHubProject>>(emptyList())
     val githubResults: StateFlow<List<GitHubProject>> = _githubResults.asStateFlow()
@@ -126,10 +128,12 @@ class DiscoveryViewModel @Inject constructor(
     }
 
     fun cloneRepository(url: String) = viewModelScope.launch {
-        _message.value = termuxIntegration.cloneGitHubRepository(url).fold(
-            onSuccess = { "Git clone started in Termux (job $it). Open the Termux screen to view its exit code and output." },
-            onFailure = { it.message ?: "Could not start the GitHub clone in Termux." }
-        )
+        _busy.value = true
+        _message.value = null
+        runCatching { withContext(Dispatchers.IO) { gitWorkspace.clone(url) } }
+            .onSuccess { _message.value = "Cloned ${it.name} with full history into app-private storage. Open Tools → Local Git Workspace to manage branches, commits, and diffs." }
+            .onFailure { _message.value = it.message ?: "Could not clone the GitHub repository into app storage." }
+        _busy.value = false
     }
 
     fun openRepository(url: String) = viewModelScope.launch {
