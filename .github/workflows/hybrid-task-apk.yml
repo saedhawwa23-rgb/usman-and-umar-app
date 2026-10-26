@@ -1,0 +1,107 @@
+name: Build hybrid task orchestrator APK
+
+on:
+  push:
+    branches:
+      - feature/hybrid-task-orchestrator
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    name: Build, verify, and publish the hybrid APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pushed feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK and NDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;27.2.12479018 cmake;3.22.1'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install ARM32 cross-compilation toolchain
+        run: |
+          sudo dpkg --add-architecture armhf
+          sudo tee /etc/apt/sources.list.d/armhf-ports.list >/dev/null <<'EOF'
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main universe
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main universe
+          EOF
+          sudo apt-get update || true
+          sudo apt-get install -y gcc-arm-linux-gnueabihf libseccomp-dev:armhf libtalloc-dev:armhf pkg-config
+
+      - name: Build pinned ARM32 PRoot asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/proot
+          git clone https://github.com/termux/proot.git /tmp/proot
+          git -C /tmp/proot checkout --quiet b8c1f5c5c6730dc9d521d5bd5ce1cfeedecde087
+          grep -R --line-number -- '--link2symlink' /tmp/proot/src/cli/proot.c /tmp/proot/src/cli/proot.h
+          make -C /tmp/proot/src -j"$(nproc)" \
+            CROSS_COMPILE=arm-linux-gnueabihf- \
+            CC=arm-linux-gnueabihf-gcc \
+            STRIP=arm-linux-gnueabihf-strip \
+            CFLAGS='-marm -DARM_cpsr=uregs[16] -DPSR_T_BIT=0x00000020' \
+            LDFLAGS="-static -ltalloc -Wl,-z,noexecstack"
+          file /tmp/proot/src/proot | tee /tmp/proot-file.txt
+          grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' /tmp/proot-file.txt
+          mkdir -p app/src/main/assets/proot
+          cp /tmp/proot/src/proot app/src/main/assets/proot/proot
+          chmod 755 app/src/main/assets/proot/proot
+
+      - name: Run unit tests and build debug APK
+        run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
+
+      - name: Verify package, signature, and bundled PRoot asset
+        id: build-meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          out=dist
+          mkdir -p "$out"
+          test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.0.0-cloud-ai'"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
+          unzip -l "$apk" | grep -F 'assets/proot/proot'
+          unzip -p "$apk" assets/proot/proot > /tmp/proot-from-apk
+          file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
+          grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' "$out/PROOT_ELF.txt"
+          sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
+          cp "$apk" "$out/USMAN-AND-UMAR-hybrid-task-orchestrator.apk"
+          sha256sum "$out/USMAN-AND-UMAR-hybrid-task-orchestrator.apk" | tee "$out/SHA256SUMS.txt"
+          printf 'commit=%s\nref=%s\n' "$(git rev-parse HEAD)" "${GITHUB_REF_NAME}" > "$out/BUILD_METADATA.txt"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Publish prerelease APK
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
+        with:
+          tag_name: v3.5.0-hybrid-orchestrator-${{ github.run_number }}
+          name: USMAN AND UMAR Hybrid Task Orchestrator build ${{ github.run_number }}
+          body: |
+            Hybrid task orchestrator feature-branch Android debug APK.
+
+            Commit: `${{ steps.build-meta.outputs.commit }}`
+            Package: `com.usmanandumar.app`
+            Version: `3.0.0-cloud-ai`
+            The APK contains a verified ARM32 PRoot binary under assets; the app does not require an ARM32 native library.
+
+            This debug-signed APK is intended for evaluation. Physical device runtime testing is not claimed.
+          files: dist/*
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: true

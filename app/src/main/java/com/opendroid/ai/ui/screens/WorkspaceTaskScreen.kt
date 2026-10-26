@@ -187,7 +187,7 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
                 }
                 TaskuaryPage.DASHBOARD -> {
                     val today = startOfToday()
-                    val tomorrow = today + 24 * 60 * 60 * 1000L
+                    val tomorrow = startOfTomorrow()
                     val todayTasks = tasks.filter { it.deadlineAt != null && it.deadlineAt in today until tomorrow }
                     val overdue = tasks.filter { it.deadlineAt != null && it.deadlineAt < today && it.state != TaskState.SUCCEEDED.name }
                     item { SectionTitle("TODAY") }
@@ -317,3 +317,4 @@ private fun modeLabel(toolId: String?): String = when {
 }
 
 private fun startOfToday(): Long = java.time.LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+private fun startOfTomorrow(): Long = java.time.LocalDate.now().plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
