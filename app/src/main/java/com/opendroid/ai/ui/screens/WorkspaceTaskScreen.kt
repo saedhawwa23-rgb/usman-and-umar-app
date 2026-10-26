@@ -1,5 +1,6 @@
 package com.opendroid.ai.ui.screens
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -9,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -17,68 +20,195 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.usmanandumar.workspace.core.task.LocalAiProvider
+import com.usmanandumar.workspace.core.task.TaskExecutionMode
 import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.ui.theme.AppTheme
 import com.opendroid.ai.ui.viewmodel.WorkspaceTaskViewModel
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+private enum class TaskuaryPage(val label: String) { INBOX("Inbox"), DASHBOARD("Dashboard"), BOARD("Kanban") }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WorkspaceTaskScreen(
-    viewModel: WorkspaceTaskViewModel,
-    modifier: Modifier = Modifier,
-) {
+fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = Modifier) {
     val tasks by viewModel.tasks.collectAsState()
-    var title by remember { mutableStateOf("") }
+    val serverUrl by viewModel.openSwarmServerUrl.collectAsState()
+    val clientToken by viewModel.openSwarmClientToken.collectAsState()
+    val autoRunCode by viewModel.autoRunGeneratedCode.collectAsState()
+    val message by viewModel.message.collectAsState()
+    var rawText by remember { mutableStateOf("") }
+    var mode by remember { mutableStateOf(TaskExecutionMode.LOCAL_AI_APP) }
+    var provider by remember { mutableStateOf(LocalAiProvider.GROK) }
+    var scriptLanguage by remember { mutableStateOf("bash") }
+    var page by remember { mutableStateOf(TaskuaryPage.INBOX) }
+    var settingsExpanded by remember { mutableStateOf(false) }
+    var urlDraft by remember(serverUrl) { mutableStateOf(serverUrl) }
 
     Scaffold(
         modifier = modifier,
-        topBar = { TopAppBar(title = { Text("TASK MANAGER") }) },
+        topBar = { TopAppBar(title = { Text("TASK ORCHESTRATOR") }) },
         containerColor = AppTheme.colors.background,
     ) { padding ->
-        Column(
+        LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true,
-                    label = { Text("New task") },
-                )
-                Button(
-                    onClick = { viewModel.createTask(title); title = "" },
-                    enabled = title.isNotBlank(),
-                    contentPadding = PaddingValues(horizontal = 12.dp),
-                ) {
-                    androidx.compose.material3.Icon(Icons.Default.AddTask, contentDescription = "Create task")
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    TaskuaryPage.entries.forEach { candidate ->
+                        FilterChip(selected = page == candidate, onClick = { page = candidate }, label = { Text(candidate.label) })
+                    }
                 }
             }
-            Spacer(Modifier.height(12.dp))
-            if (tasks.isEmpty()) {
-                Text("No persistent tasks yet.", color = AppTheme.colors.textSecondary)
-            } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(tasks, key = { it.id }) { task ->
-                        TaskRow(task = task, onTransition = { viewModel.transition(task, it) })
+            item {
+                OutlinedTextField(
+                    value = rawText,
+                    onValueChange = { rawText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = {
+                        Text(if (mode == TaskExecutionMode.TERMUX_SCRIPT) "Script source — paste bash or Python code" else "Quick Add — e.g. Fix bug tomorrow at 5pm")
+                    },
+                    minLines = 2,
+                )
+            }
+            item {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ModeMenu(mode = mode, onSelect = { mode = it }, modifier = Modifier.weight(1f))
+                    if (mode == TaskExecutionMode.LOCAL_AI_APP) {
+                        ProviderMenu(provider = provider, onSelect = { provider = it }, modifier = Modifier.weight(1f))
+                    } else if (mode == TaskExecutionMode.TERMUX_SCRIPT) {
+                        ScriptLanguageMenu(language = scriptLanguage, onSelect = { scriptLanguage = it }, modifier = Modifier.weight(1f))
+                    }
+                }
+            }
+            item {
+                Button(
+                    onClick = { viewModel.createTask(rawText, mode, provider, scriptLanguage) { rawText = "" } },
+                    enabled = rawText.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    androidx.compose.material3.Icon(Icons.Default.AddTask, contentDescription = null)
+                    Text("  Add to Inbox")
+                }
+            }
+            item {
+                Text(
+                    text = when (mode) {
+                        TaskExecutionMode.LOCAL_AI_APP -> "Local AI App uses Accessibility. Select a provider; no model API is called."
+                        TaskExecutionMode.CLOUD_OPENSWARM -> "Cloud mode sends the full prompt to your Render server. Do not include secrets or private data."
+                        TaskExecutionMode.TERMUX_SCRIPT -> "Only the explicit script text you enter is sent to Termux; ordinary task prose is never interpreted as shell."
+                    },
+                    color = AppTheme.colors.textSecondary,
+                    fontSize = 12.sp,
+                )
+            }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                        Text("CLOUD OPENSWARM SETTINGS", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
+                        Spacer(Modifier.height(4.dp))
+                        Button(onClick = { settingsExpanded = !settingsExpanded }) {
+                            Text(if (settingsExpanded) "Hide server settings" else "Configure Render server")
+                        }
+                        if (settingsExpanded) {
+                            OutlinedTextField(
+                                value = urlDraft,
+                                onValueChange = { urlDraft = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                label = { Text("Render HTTPS base URL") },
+                                placeholder = { Text("https://your-service.onrender.com") },
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { viewModel.saveOpenSwarmServerUrl(urlDraft) }) { Text("Save URL") }
+                                Button(onClick = { urlDraft = ""; viewModel.saveOpenSwarmServerUrl("") }) { Text("Clear") }
+                            }
+                            var tokenDraft by remember(clientToken) { mutableStateOf(clientToken) }
+                            OutlinedTextField(
+                                value = tokenDraft,
+                                onValueChange = { tokenDraft = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                                label = { Text("APP_CLIENT_TOKEN") },
+                                supportingText = { Text("Match the Render secret. Stored with Android Keystore encryption.") },
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { viewModel.saveOpenSwarmClientToken(tokenDraft) }) { Text("Save token") }
+                                Button(onClick = { tokenDraft = ""; viewModel.saveOpenSwarmClientToken("") }) { Text("Clear token") }
+                            }
+                        }
+                    }
+                }
+            }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
+                    Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column(Modifier.weight(1f)) {
+                            Text("AUTO-RUN AI-GENERATED CODE", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
+                            Text("High risk: sends returned bash/python blocks to Termux without per-block confirmation.", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
+                        }
+                        Switch(checked = autoRunCode, onCheckedChange = viewModel::setAutoRunGeneratedCode)
+                    }
+                }
+            }
+            if (message != null) item {
+                Text(message.orEmpty(), color = AppTheme.colors.textSecondary, fontSize = 13.sp)
+            }
+            when (page) {
+                TaskuaryPage.INBOX -> {
+                    item { SectionTitle("INBOX") }
+                    val inbox = tasks.filter { it.state in setOf(TaskState.DRAFT.name, TaskState.WAITING_FOR_NETWORK.name, TaskState.FAILED.name, TaskState.WAITING_USER.name) }
+                    if (inbox.isEmpty()) item { Text("Inbox is clear.", color = AppTheme.colors.textSecondary) }
+                    items(inbox, key = { "inbox-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) }
+                }
+                TaskuaryPage.DASHBOARD -> {
+                    val today = startOfToday()
+                    val tomorrow = today + 24 * 60 * 60 * 1000L
+                    val todayTasks = tasks.filter { it.deadlineAt != null && it.deadlineAt in today until tomorrow }
+                    val overdue = tasks.filter { it.deadlineAt != null && it.deadlineAt < today && it.state != TaskState.SUCCEEDED.name }
+                    item { SectionTitle("TODAY") }
+                    if (todayTasks.isEmpty()) item { Text("Nothing due today.", color = AppTheme.colors.textSecondary) }
+                    items(todayTasks, key = { "today-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) }
+                    item { SectionTitle("OVERDUE") }
+                    if (overdue.isEmpty()) item { Text("No overdue tasks.", color = AppTheme.colors.textSecondary) }
+                    items(overdue, key = { "overdue-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) }
+                }
+                TaskuaryPage.BOARD -> {
+                    item {
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                            KanbanColumn("DRAFT", tasks.filter { it.state == TaskState.DRAFT.name }, viewModel::runTask)
+                            KanbanColumn("RUNNING", tasks.filter { it.state == TaskState.RUNNING.name }, viewModel::runTask)
+                            KanbanColumn("SUCCEEDED", tasks.filter { it.state == TaskState.SUCCEEDED.name }, viewModel::runTask)
+                        }
+                    }
+                    val waiting = tasks.filter { it.state == TaskState.WAITING_FOR_NETWORK.name }
+                    if (waiting.isNotEmpty()) {
+                        item { SectionTitle("WAITING FOR NETWORK") }
+                        items(waiting, key = { "waiting-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) }
                     }
                 }
             }
@@ -87,26 +217,103 @@ fun WorkspaceTaskScreen(
 }
 
 @Composable
-private fun TaskRow(task: WorkspaceTaskEntity, onTransition: (TaskState) -> Unit) {
-    val state = TaskState.valueOf(task.state)
-    Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            Text(task.title, color = AppTheme.colors.textPrimary, fontSize = 16.sp)
-            Spacer(Modifier.height(4.dp))
-            Text("${task.state} · priority ${task.priority}", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
-            Spacer(Modifier.height(8.dp))
-            when (state) {
-                TaskState.DRAFT -> Button(onClick = { onTransition(TaskState.READY) }) { Text("Prepare") }
-                TaskState.READY -> Button(onClick = { onTransition(TaskState.QUEUED) }) {
-                    androidx.compose.material3.Icon(Icons.Default.PlayArrow, contentDescription = null)
-                    Text(" Queue")
-                }
-                TaskState.QUEUED -> Button(onClick = { onTransition(TaskState.RUNNING) }) { Text("Start") }
-                TaskState.RUNNING -> Button(onClick = { onTransition(TaskState.WAITING_USER) }) { Text("Pause for review") }
-                TaskState.FAILED -> Button(onClick = { onTransition(TaskState.READY) }) { Text("Retry") }
-                TaskState.WAITING_USER -> Button(onClick = { onTransition(TaskState.READY) }) { Text("Resume") }
-                else -> Unit
+private fun ModeMenu(mode: TaskExecutionMode, onSelect: (TaskExecutionMode) -> Unit, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(modifier) {
+        Button(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(when (mode) {
+                TaskExecutionMode.LOCAL_AI_APP -> "Mode A · Local AI"
+                TaskExecutionMode.CLOUD_OPENSWARM -> "Mode B · Cloud"
+                TaskExecutionMode.TERMUX_SCRIPT -> "Termux · Local"
+            }, fontSize = 12.sp)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            TaskExecutionMode.entries.forEach { item ->
+                DropdownMenuItem(text = { Text(item.name.replace('_', ' ')) }, onClick = { onSelect(item); expanded = false })
             }
         }
     }
 }
+
+@Composable
+private fun ProviderMenu(provider: LocalAiProvider, onSelect: (LocalAiProvider) -> Unit, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(modifier) {
+        Button(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) { Text(provider.label, fontSize = 12.sp) }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            LocalAiProvider.entries.forEach { item ->
+                DropdownMenuItem(text = { Text(item.label) }, onClick = { onSelect(item); expanded = false })
+            }
+        }
+    }
+}
+
+@Composable
+private fun ScriptLanguageMenu(language: String, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(modifier) {
+        Button(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) { Text(language, fontSize = 12.sp) }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            listOf("bash", "python").forEach { item ->
+                DropdownMenuItem(text = { Text(item) }, onClick = { onSelect(item); expanded = false })
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaskCard(task: WorkspaceTaskEntity, onRun: (WorkspaceTaskEntity) -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+            Text(task.title, color = AppTheme.colors.textPrimary, fontSize = 16.sp)
+            Spacer(Modifier.height(4.dp))
+            Text("${task.state} · ${modeLabel(task.toolId)}", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+            if (task.deadlineAt != null) {
+                val formatted = remember(task.deadlineAt) {
+                    Instant.ofEpochMilli(task.deadlineAt).atZone(ZoneId.systemDefault())
+                        .format(DateTimeFormatter.ofPattern("EEE, MMM d · h:mm a"))
+                }
+                Text("Due $formatted", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+            }
+            if (task.state == TaskState.WAITING_FOR_NETWORK.name) {
+                Text("Offline — this task will wait. No AI app or server was contacted.", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+            }
+            if (task.state == TaskState.WAITING_USER.name && task.notes.contains("AI code blocks were NOT executed")) {
+                Text("Code awaits review. Nothing from the model response was executed.", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+            }
+            if (task.notes.startsWith("Execution output:")) {
+                Spacer(Modifier.height(6.dp))
+                Text(task.notes.take(1_000), color = AppTheme.colors.textSecondary, fontSize = 11.sp)
+            }
+            if (task.state in setOf(TaskState.DRAFT.name, TaskState.WAITING_FOR_NETWORK.name, TaskState.FAILED.name)) {
+                Button(onClick = { onRun(task) }) {
+                    androidx.compose.material3.Icon(Icons.Default.PlayArrow, contentDescription = null)
+                    Text(if (task.state == TaskState.WAITING_FOR_NETWORK.name) " Retry when online" else " Run")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KanbanColumn(title: String, tasks: List<WorkspaceTaskEntity>, onRun: (WorkspaceTaskEntity) -> Unit) {
+    Column(Modifier.width(280.dp).padding(end = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionTitle("$title · ${tasks.size}")
+        if (tasks.isEmpty()) Text("No tasks", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+        tasks.forEach { task -> TaskCard(task, onRun) }
+    }
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(text, color = AppTheme.colors.textSecondary, fontSize = 12.sp, letterSpacing = 1.sp)
+}
+
+private fun modeLabel(toolId: String?): String = when {
+    toolId?.startsWith("hybrid:LOCAL_AI_APP:") == true -> "Local AI · ${toolId.substringAfterLast(':')}"
+    toolId == "hybrid:CLOUD_OPENSWARM" -> "Cloud OpenSwarm"
+    toolId?.startsWith("hybrid:TERMUX_SCRIPT") == true -> "Local Termux · ${toolId.substringAfterLast(':')}"
+    else -> "No execution mode"
+}
+
+private fun startOfToday(): Long = java.time.LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()

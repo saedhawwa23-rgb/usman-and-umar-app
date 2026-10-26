@@ -23,6 +23,7 @@ class WorkspaceTaskRepository @Inject constructor(
         priority: Int = 0,
         toolId: String? = null,
         workflowId: String? = null,
+        deadlineAt: Long? = null,
         inputJson: String = "{}",
         expectedOutcome: String = "",
         notes: String = "",
@@ -46,7 +47,7 @@ class WorkspaceTaskRepository @Inject constructor(
             category = category,
             tagsJson = "[]",
             priority = priority,
-            deadlineAt = null,
+            deadlineAt = deadlineAt,
             toolId = toolId,
             workflowId = workflowId,
             inputJson = inputJson,
@@ -107,7 +108,10 @@ class WorkspaceTaskRepository @Inject constructor(
         val task = dao.get(taskId) ?: error("Task not found: $taskId")
         val state = if (success) TaskState.SUCCEEDED else TaskState.FAILED
         TaskStateMachine.transition(TaskState.valueOf(task.state), state)
-        dao.update(task.copy(state = state.name, updatedAt = now))
+        val updatedNotes = outputRedacted?.takeIf { it.isNotBlank() }?.let { output ->
+            "Execution output:\n$output"
+        } ?: task.notes
+        dao.update(task.copy(state = state.name, notes = updatedNotes, updatedAt = now))
         dao.recordExecution(
             WorkspaceTaskExecutionEntity(
                 taskId = taskId,
@@ -119,6 +123,32 @@ class WorkspaceTaskRepository @Inject constructor(
                 outputRedacted = outputRedacted,
                 errorCode = errorCode,
                 errorMessageRedacted = errorMessageRedacted,
+                startedAt = now,
+                finishedAt = now,
+            ),
+        )
+    }
+
+    suspend fun recordPendingUserReview(
+        taskId: String,
+        output: String,
+        event: String = "awaiting_generated_code_review",
+        now: Long = System.currentTimeMillis(),
+    ) {
+        val task = dao.get(taskId) ?: error("Task not found: $taskId")
+        TaskStateMachine.transition(TaskState.valueOf(task.state), TaskState.WAITING_USER)
+        dao.update(task.copy(state = TaskState.WAITING_USER.name, notes = "Execution output:\n$output", updatedAt = now))
+        dao.recordExecution(
+            WorkspaceTaskExecutionEntity(
+                taskId = taskId,
+                event = event,
+                fromState = task.state,
+                toState = TaskState.WAITING_USER.name,
+                attempt = 0,
+                success = null,
+                outputRedacted = output.take(20_000),
+                errorCode = "CODE_REQUIRES_REVIEW",
+                errorMessageRedacted = "AI-generated code was not auto-executed because the setting is off.",
                 startedAt = now,
                 finishedAt = now,
             ),

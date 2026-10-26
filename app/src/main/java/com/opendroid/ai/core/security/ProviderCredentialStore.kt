@@ -53,6 +53,11 @@ sealed class ProviderCredentialId protected constructor(
         legacyPreferenceKey = "huggingface_token"
     )
 
+    data object OpenSwarmClientToken : ProviderCredentialId(
+        logicalId = "openswarm-client-token",
+        legacyPreferenceKey = "openswarm_client_token"
+    )
+
     internal companion object {
         private const val STORAGE_KEY_PREFIX = "credential."
         private const val API_KEY_LOGICAL_PREFIX = "provider-api-key:"
@@ -82,6 +87,7 @@ sealed class ProviderCredentialId protected constructor(
         private fun fromLogicalId(logicalId: String): ProviderCredentialId? = when {
             logicalId == ElevenLabsApiKey.logicalId -> ElevenLabsApiKey
             logicalId == HuggingFaceToken.logicalId -> HuggingFaceToken
+            logicalId == OpenSwarmClientToken.logicalId -> OpenSwarmClientToken
             logicalId.startsWith(API_KEY_LOGICAL_PREFIX) -> runCatching {
                 ApiKey(logicalId.removePrefix(API_KEY_LOGICAL_PREFIX))
             }.getOrNull()

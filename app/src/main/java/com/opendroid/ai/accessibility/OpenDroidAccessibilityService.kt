@@ -14,6 +14,8 @@ import android.graphics.Path
 import android.graphics.PixelFormat
 import android.os.Bundle
 import android.view.Gravity
+import android.os.Handler
+import android.os.Looper
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -26,12 +28,17 @@ import com.opendroid.ai.core.agent.AgentLoop
 import com.opendroid.ai.core.agent.AgentState
 import com.opendroid.ai.core.service.OpenDroidService
 import com.opendroid.ai.data.repository.SettingsRepository
+import com.opendroid.ai.data.repository.WorkspaceTaskRepository
+import com.opendroid.ai.core.termux.TermuxIntegration
+import com.usmanandumar.workspace.core.task.LocalAiProvider
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -52,12 +59,20 @@ class OpenDroidAccessibilityService : AccessibilityService() {
     lateinit var settingsRepository: SettingsRepository
 
     @Inject
+    lateinit var workspaceTaskRepository: WorkspaceTaskRepository
+
+    @Inject
+    lateinit var termuxIntegration: TermuxIntegration
+
+    @Inject
     lateinit var nodeTraversal: AccessibilityNodeTraversal
 
     @Inject
     lateinit var habitRoutineEngine: dagger.Lazy<com.opendroid.ai.core.routine.HabitRoutineEngine>
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val localAiHandler = Handler(Looper.getMainLooper())
+    private var activeLocalAiRequest: LocalAiRequest? = null
     private var windowManager: WindowManager? = null
     private var floatingView: FloatingWidgetView? = null
     private var touchTargetView: TouchTargetView? = null
@@ -127,6 +142,7 @@ class OpenDroidAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+        handleLocalAiAccessibilityEvent(event)
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString()
             if (!pkg.isNullOrBlank() && pkg != packageName) {
@@ -140,6 +156,21 @@ class OpenDroidAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        val interruptedRequest = activeLocalAiRequest
+        activeLocalAiRequest = null
+        if (interruptedRequest != null && !interruptedRequest.finished) {
+            CoroutineScope(Dispatchers.IO).launch {
+                runCatching {
+                    workspaceTaskRepository.recordOutcome(
+                        interruptedRequest.taskId,
+                        success = false,
+                        errorCode = "ACCESSIBILITY_SERVICE_STOPPED",
+                        errorMessageRedacted = "Accessibility service stopped before the local AI task completed.",
+                        event = "local_ai_interrupted",
+                    )
+                }
+            }
+        }
         super.onDestroy()
         try {
             unregisterReceiver(screenStateReceiver)
@@ -147,6 +178,8 @@ class OpenDroidAccessibilityService : AccessibilityService() {
             // Receiver may not have been registered
         }
         serviceScope.cancel()
+        localAiHandler.removeCallbacksAndMessages(null)
+        activeLocalAiRequest = null
         removeFloatingButton()
         instance = null
     }
@@ -316,6 +349,205 @@ class OpenDroidAccessibilityService : AccessibilityService() {
             floatingView = null
             touchTargetView = null
             isButtonAdded = false
+        }
+    }
+
+    private data class LocalAiRequest(
+        val taskId: String,
+        val provider: LocalAiProvider,
+        val prompt: String,
+        val startedAt: Long = android.os.SystemClock.elapsedRealtime(),
+        var sent: Boolean = false,
+        var sending: Boolean = false,
+        var beforeSendText: String = "",
+        var lastText: String = "",
+        var stableReads: Int = 0,
+        var finished: Boolean = false,
+    )
+
+    private fun beginLocalAiTask(taskId: String, provider: LocalAiProvider, prompt: String): Boolean {
+        if (activeLocalAiRequest != null || prompt.isBlank()) return false
+        val launchIntent = packageManager.getLaunchIntentForPackage(provider.packageName) ?: return false
+        val request = LocalAiRequest(taskId, provider, prompt)
+        activeLocalAiRequest = request
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return try {
+            startActivity(launchIntent)
+            localAiHandler.postDelayed({ enterPromptAndSend(request) }, 1_200)
+            true
+        } catch (_: Exception) {
+            activeLocalAiRequest = null
+            false
+        }
+    }
+
+    private fun handleLocalAiAccessibilityEvent(event: AccessibilityEvent) {
+        val request = activeLocalAiRequest ?: return
+        if (request.finished || event.packageName?.toString() != request.provider.packageName) return
+        if (!request.sent && !request.sending) {
+            localAiHandler.removeCallbacks(promptEntryRunnable)
+            localAiHandler.postDelayed({ enterPromptAndSend(request) }, 350)
+        } else if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            localAiHandler.removeCallbacks(responseCaptureRunnable)
+            localAiHandler.postDelayed(responseCaptureRunnable, 1_200)
+        }
+    }
+
+    private var promptEntryRunnable = Runnable { activeLocalAiRequest?.let(::enterPromptAndSend) }
+    private var responseCaptureRunnable = Runnable { captureLocalAiResponse() }
+
+    private fun enterPromptAndSend(request: LocalAiRequest) {
+        if (activeLocalAiRequest !== request || request.finished || request.sent || request.sending) return
+        if (android.os.SystemClock.elapsedRealtime() - request.startedAt > 75_000) {
+            finishLocalAi(request, null, "Timed out waiting for an editable field in ${request.provider.label}.")
+            return
+        }
+        val root = rootInActiveWindow ?: run {
+            localAiHandler.postDelayed({ enterPromptAndSend(request) }, 900)
+            return
+        }
+        val entered = try {
+            if (!isSelectedAiApp(root, request)) false else setEditableText(root, request.prompt)
+        } finally { root.recycle() }
+        if (!entered) {
+            localAiHandler.postDelayed({ enterPromptAndSend(request) }, 900)
+            return
+        }
+        request.sending = true
+        localAiHandler.postDelayed({ clickSend(request) }, 700)
+    }
+
+    private fun setEditableText(node: AccessibilityNodeInfo, value: String): Boolean {
+        if (node.isEditable && node.isEnabled && node.isVisibleToUser) {
+            return node.performAction(
+                AccessibilityNodeInfo.ACTION_SET_TEXT,
+                Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value) },
+            )
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val success = try { setEditableText(child, value) } finally { child.recycle() }
+            if (success) return true
+        }
+        return false
+    }
+
+    private fun clickSend(request: LocalAiRequest) {
+        if (activeLocalAiRequest !== request || request.finished || request.sent) return
+        val root = rootInActiveWindow ?: run {
+            localAiHandler.postDelayed({ clickSend(request) }, 800)
+            return
+        }
+        val clicked = try {
+            if (!isSelectedAiApp(root, request)) {
+                finishLocalAi(request, null, "The active window changed; the Send button was not clicked.")
+                return
+            }
+            request.beforeSendText = nodeTraversal.screenText(root)
+            nodeTraversal.findAndClickSubmitControl(root, listOf("send", "send message", "submit"))
+        } finally { root.recycle() }
+        if (!clicked) {
+            finishLocalAi(request, null, "No accessible Send control was found; the prompt was not submitted.")
+            return
+        }
+        request.sent = true
+        localAiHandler.postDelayed(responseCaptureRunnable, 2_500)
+    }
+
+    private fun captureLocalAiResponse() {
+        val request = activeLocalAiRequest ?: return
+        if (request.finished) return
+        if (android.os.SystemClock.elapsedRealtime() - request.startedAt > 180_000) {
+            finishLocalAi(request, null, "Timed out waiting for a stable AI response.")
+            return
+        }
+        val root = rootInActiveWindow ?: run {
+            localAiHandler.postDelayed(responseCaptureRunnable, 1_500)
+            return
+        }
+        val screen = try {
+            if (!isSelectedAiApp(root, request)) {
+                finishLocalAi(request, null, "The selected AI app is no longer the active window; no response was captured.")
+                return
+            }
+            nodeTraversal.screenText(root)
+        } finally { root.recycle() }
+        val response = screen.replace(request.prompt, "").trim()
+        val baseline = request.beforeSendText.replace(request.prompt, "").trim()
+        val changedAfterSend = response.isNotBlank() && response != baseline
+        if (changedAfterSend && response.length >= 12 && response == request.lastText) request.stableReads++ else request.stableReads = 0
+        request.lastText = response
+        if (request.stableReads >= 2) {
+            serviceScope.launch { executeReturnedCode(request, response) }
+        } else {
+            localAiHandler.postDelayed(responseCaptureRunnable, 1_500)
+        }
+    }
+
+    private suspend fun executeReturnedCode(request: LocalAiRequest, response: String) {
+        val blocks = Regex("(?is)```(bash|sh|python|py)\\s*\\n(.*?)```").findAll(response).toList()
+        val output = StringBuilder("Captured response from ${request.provider.label}:\n").append(response.take(16_000))
+        if (blocks.isNotEmpty() && !settingsRepository.autoRunGeneratedCode.first()) {
+            output.append("\n\nAI code blocks were NOT executed. Review the code, then enable the explicit high-risk auto-run setting to allow future AI tasks to send code to Termux.")
+            finishLocalAi(request, output.toString().take(20_000), null, awaitingReview = true)
+            return
+        }
+        for ((index, block) in blocks.withIndex()) {
+            val executionId = termuxIntegration.runCode(block.groupValues[1], block.groupValues[2]).getOrElse { failure ->
+                finishLocalAi(request, null, "AI response captured, but Termux could not start: ${failure.message}")
+                return
+            }
+            val result = withTimeoutOrNull(120_000) {
+                termuxIntegration.results.first { rows -> rows.any { it.executionId == executionId } }
+                    .first { it.executionId == executionId }
+            }
+            if (result == null) {
+                finishLocalAi(request, null, "Termux did not return an execution result before timeout.")
+                return
+            }
+            output.append("\n\nTermux code block ").append(index + 1)
+                .append(" exitCode=").append(result.exitCode ?: "unknown")
+            if (result.stdout.isNotBlank()) output.append("\nstdout:\n").append(result.stdout.take(8_000))
+            if (result.stderr.isNotBlank()) output.append("\nstderr:\n").append(result.stderr.take(8_000))
+            result.error?.let { output.append("\nerror:\n").append(it) }
+            if (!result.succeeded) {
+                finishLocalAi(request, null, "Termux script failed: ${result.error ?: "exit code ${result.exitCode}"}.")
+                return
+            }
+        }
+        finishLocalAi(request, output.toString().take(20_000), null)
+    }
+
+    private fun isSelectedAiApp(root: AccessibilityNodeInfo, request: LocalAiRequest): Boolean =
+        root.packageName?.toString() == request.provider.packageName
+
+    private fun finishLocalAi(request: LocalAiRequest, output: String?, error: String?, awaitingReview: Boolean = false) {
+        if (request.finished) return
+        request.finished = true
+        activeLocalAiRequest = null
+        serviceScope.launch {
+            runCatching {
+                if (output != null) {
+                    if (awaitingReview) {
+                        workspaceTaskRepository.recordPendingUserReview(request.taskId, output, event = "local_ai_code_review")
+                    } else {
+                        workspaceTaskRepository.recordOutcome(request.taskId, true, outputRedacted = output, event = "local_ai_accessibility")
+                    }
+                } else {
+                    workspaceTaskRepository.recordOutcome(
+                        request.taskId, false, errorCode = "LOCAL_AI_FAILED",
+                        errorMessageRedacted = error ?: "No response was captured.", event = "local_ai_accessibility",
+                    )
+                }
+            }
+            // Android cannot force-stop a different app. Return to this app and leave the AI
+            // client in the background, rather than claiming it was terminated.
+            performGlobalAction(GLOBAL_ACTION_HOME)
+            localAiHandler.postDelayed({
+                startActivity(Intent(this@OpenDroidAccessibilityService, com.opendroid.ai.MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                })
+            }, 250)
         }
     }
 
@@ -672,5 +904,8 @@ class OpenDroidAccessibilityService : AccessibilityService() {
         private var instance: OpenDroidAccessibilityService? = null
 
         fun getInstance(): OpenDroidAccessibilityService? = instance
+
+        fun startLocalAiTask(taskId: String, provider: LocalAiProvider, prompt: String): Boolean =
+            instance?.beginLocalAiTask(taskId, provider, prompt) ?: false
     }
 }

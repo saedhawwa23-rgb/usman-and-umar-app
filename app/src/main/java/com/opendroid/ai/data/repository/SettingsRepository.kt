@@ -57,6 +57,10 @@ class SettingsRepository internal constructor(
 
     private val json = Json { ignoreUnknownKeys = true }
     private val llmConfigKey = stringPreferencesKey("llm_config")
+    private val openSwarmServerUrlKey = stringPreferencesKey("openswarm_render_url")
+    private val autoRunGeneratedCodeKey = booleanPreferencesKey("auto_run_generated_code")
+    private val mutableOpenSwarmClientToken = MutableStateFlow("")
+    val openSwarmClientToken: StateFlow<String> = mutableOpenSwarmClientToken.asStateFlow()
 
     /** A UI-safe recovery signal; it never contains credential or ciphertext data. */
     val providerCredentialRecoveryState = providerCredentialStore.recoveryState
@@ -68,11 +72,11 @@ class SettingsRepository internal constructor(
         mutableProviderCredentialPersistenceState.asStateFlow()
 
     init {
-        if (runStartupMigration) {
-            // Legacy encrypted-preference credentials are imported before DataStore
-            // secrets are stripped. If either store is unavailable, updateConfig still strips
-            // plaintext rather than using it as a recovery fallback.
-            CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+        CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+            if (runStartupMigration) {
+                // Legacy encrypted-preference credentials are imported before DataStore
+                // secrets are stripped. If either store is unavailable, updateConfig still strips
+                // plaintext rather than using it as a recovery fallback.
                 try {
                     providerCredentialStore.migrateLegacyCredentials()
                     updateConfig { it }
@@ -80,6 +84,7 @@ class SettingsRepository internal constructor(
                     // The credential store has no plaintext fallback; a later update retries.
                 }
             }
+            readOpenSwarmClientToken()
         }
     }
 
@@ -180,7 +185,7 @@ class SettingsRepository internal constructor(
             val previousValue = when (credential) {
                 is ProviderCredentialId.ApiKey -> snapshot.providerApiKeys[credential.providerName]
                 ProviderCredentialId.ElevenLabsApiKey -> snapshot.elevenLabsApiKey
-                ProviderCredentialId.HuggingFaceToken -> null
+                ProviderCredentialId.HuggingFaceToken, ProviderCredentialId.OpenSwarmClientToken -> null
             }
             val result = persistCredential(credential, previousValue)
             if (result !is CredentialStoreResult.Success) return result.toPersistenceState()
@@ -280,6 +285,56 @@ class SettingsRepository internal constructor(
             customPrompt = preferences[autoReplyCustomPromptKey],
             maxRepliesPerContactPerHour = preferences[autoReplyMaxPerHourKey] ?: 3
         )
+    }
+
+    /** Render URL for the user's own OpenSwarm bridge; blank means not configured. */
+    val openSwarmServerUrl: Flow<String> = dataStore.data
+        .map { preferences -> preferences[openSwarmServerUrlKey].orEmpty() }
+        .flowOn(Dispatchers.IO)
+
+    suspend fun saveOpenSwarmServerUrl(value: String) {
+        val normalized = value.trim().trimEnd('/')
+        if (normalized.isNotEmpty()) {
+            val uri = java.net.URI(normalized)
+            require(uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()) {
+                "Enter the HTTPS URL of your Render server."
+            }
+            require(uri.userInfo == null && uri.query == null && uri.fragment == null) {
+                "The server URL must not contain credentials, a query, or a fragment."
+            }
+        }
+        dataStore.edit { preferences ->
+            if (normalized.isBlank()) preferences.remove(openSwarmServerUrlKey)
+            else preferences[openSwarmServerUrlKey] = normalized
+        }
+    }
+
+    private fun readOpenSwarmClientToken() {
+        val result = providerCredentialStore.read(ProviderCredentialId.OpenSwarmClientToken)
+        mutableOpenSwarmClientToken.value = (result as? CredentialStoreResult.Success)?.value.orEmpty()
+    }
+
+    suspend fun saveOpenSwarmClientToken(value: String) = withContext(Dispatchers.IO) {
+        val normalized = value.trim()
+        require(normalized.length <= 512) { "The bridge token is too long." }
+        val result = if (normalized.isBlank()) {
+            providerCredentialStore.remove(ProviderCredentialId.OpenSwarmClientToken)
+        } else {
+            providerCredentialStore.write(ProviderCredentialId.OpenSwarmClientToken, normalized)
+        }
+        when (result) {
+            is CredentialStoreResult.Success -> mutableOpenSwarmClientToken.value = normalized
+            CredentialStoreResult.CredentialsMustBeReentered -> error("Credential storage needs recovery before the cloud token can be saved.")
+            CredentialStoreResult.StorageUnavailable -> error("Android secure storage is unavailable; the cloud token was not saved.")
+        }
+    }
+
+    val autoRunGeneratedCode: Flow<Boolean> = dataStore.data
+        .map { preferences -> preferences[autoRunGeneratedCodeKey] ?: false }
+        .flowOn(Dispatchers.IO)
+
+    suspend fun setAutoRunGeneratedCode(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[autoRunGeneratedCodeKey] = enabled }
     }
 
     suspend fun updateConfig(
