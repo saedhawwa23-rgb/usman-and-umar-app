@@ -11,7 +11,7 @@ This FastAPI service is a thin HTTP bridge for the Android task manager. It uses
 5. Deploy. Verify `GET https://<your-render-host>/health` returns `{"status":"ok"}`.
 6. In USMAN AND UMAR → Task Orchestrator → Configure Render server, save the base HTTPS URL (without `/execute`) and the client token. The Android app posts to `/execute` and waits up to 65 seconds.
 
-The Render free tier may sleep between requests, so the first request can take longer or time out. A timeout is shown as an execution failure; the app does not claim a result that was not received. The bridge requires `X-App-Token` and limits each source IP to 20 requests per minute per instance. This in-memory limit is a basic abuse guard, not a distributed quota system. This bridge does not launch an OpenSwarm instance by itself: the actual upstream URL and any required authorization must be supplied by the operator.
+The Render free tier may sleep between requests, so the first request can take longer or time out. A timeout is shown as an execution failure; the app does not claim a result that was not received. `/execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and limits each source IP to 20 requests per minute per instance. This in-memory limit is a basic abuse guard, not a distributed quota system. This bridge does not launch an OpenSwarm instance by itself: the actual upstream URL and any required authorization must be supplied by the operator.
 
 ## Local development
 

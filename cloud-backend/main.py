@@ -52,12 +52,18 @@ def health() -> dict[str, str]:
 async def execute(
     request: ExecuteRequest,
     http_request: Request,
-    app_token: str | None = Header(default=None, alias="X-App-Token"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict[str, Any]:
     expected_token = os.getenv("APP_CLIENT_TOKEN", "").strip()
     if not expected_token:
         raise HTTPException(status_code=503, detail="Render APP_CLIENT_TOKEN is not configured.")
-    if app_token is None or not hmac.compare_digest(app_token, expected_token):
+    scheme, separator, supplied_token = (authorization or "").partition(" ")
+    if (
+        not separator
+        or scheme.lower() != "bearer"
+        or not supplied_token.strip()
+        or not hmac.compare_digest(supplied_token.strip(), expected_token)
+    ):
         raise HTTPException(status_code=401, detail="Invalid application token.")
 
     client_ip = http_request.client.host if http_request.client else "unknown"

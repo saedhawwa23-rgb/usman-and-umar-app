@@ -192,7 +192,7 @@ class WorkspaceTaskViewModel @Inject constructor(
         val prompt = promptOf(task)
         val payload = JSONObject().put("task_id", task.id).put("prompt", prompt)
             .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-        val request = Request.Builder().url("$baseUrl/execute").header("X-App-Token", clientToken).post(payload).build()
+        val request = Request.Builder().url("$baseUrl/execute").header("Authorization", "Bearer $clientToken").post(payload).build()
         cloudClient.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             check(response.isSuccessful) { "OpenSwarm bridge returned HTTP ${response.code}; response body is not displayed." }
