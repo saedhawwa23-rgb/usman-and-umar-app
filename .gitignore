@@ -37,3 +37,7 @@ cloud-backend/.env.*
 # Local AI assistant guidance — not tracked
 CLAUDE.md
 docs/superpowers/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
