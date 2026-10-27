@@ -51,7 +51,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.ui.platform.LocalContext
 import android.content.Context
 import kotlinx.coroutines.launch
@@ -194,46 +193,6 @@ fun SettingsScreen(
                                 color = TextSecondary
                             )
                         }
-                    }
-                }
-            }
-
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth().clickable { onNavigateToDiscovery() },
-                    colors = CardDefaults.cardColors(containerColor = CardBackground)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("DISCOVER EXTENSIONS", fontWeight = FontWeight.Bold, color = AccentCyan)
-                            Spacer(Modifier.height(4.dp))
-                            Text("Search AI providers and GitHub projects without a fixed list.", color = TextSecondary, fontSize = 12.sp)
-                        }
-                        Icon(Icons.Default.ArrowForward, contentDescription = "Open discovery", tint = AccentCyan)
-                    }
-                }
-            }
-
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth().clickable { onNavigateToTermux() },
-                    colors = CardDefaults.cardColors(containerColor = CardBackground)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("LOCAL TERMUX", fontWeight = FontWeight.Bold, color = AccentCyan)
-                            Spacer(Modifier.height(4.dp))
-                            Text("Optional local terminal tasks with visible results; cloud execution is separate.", color = TextSecondary, fontSize = 12.sp)
-                        }
-                        Icon(Icons.Default.ArrowForward, contentDescription = "Open local Termux", tint = AccentCyan)
                     }
                 }
             }

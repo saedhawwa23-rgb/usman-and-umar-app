@@ -1,12 +1,14 @@
 """Render-hosted bridge to a user-configured OpenSwarm execution endpoint.
 
 This service contains no LLM API integration and never generates placeholder output.
-Configure OPEN_SWARM_EXECUTE_URL to the actual OpenSwarm HTTP endpoint before deployment.
+The explicitly opt-in mock mode is only for connection testing and marks every response
+as mock data; disable it before using the real OpenSwarm upstream.
 """
 from __future__ import annotations
 
-import os
 import hmac
+import logging
+import os
 import threading
 import time
 from collections import defaultdict
@@ -15,13 +17,16 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="USMAN AND UMAR OpenSwarm Bridge", version="1.0.0")
+logger = logging.getLogger(__name__)
 _rate_lock = threading.Lock()
 _request_times: dict[str, list[float]] = defaultdict(list)
 _RATE_WINDOW_SECONDS = 60.0
 _RATE_LIMIT = 20
+_MOCK_OUTPUT = "[MOCK RESPONSE — NOT A REAL OPENSWARM RESULT] Hello from the Cloud Server!"
 
 
 class ExecuteRequest(BaseModel):
@@ -43,16 +48,26 @@ def _upstream_config() -> tuple[str, str | None]:
     return endpoint, token
 
 
+def _mock_execution_enabled() -> bool:
+    return os.getenv("ENABLE_MOCK_EXECUTION", "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _error_response(status_code: int, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "error", "error": message},
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/execute")
-async def execute(
+async def _execute_impl(
     request: ExecuteRequest,
     http_request: Request,
-    authorization: str | None = Header(default=None, alias="Authorization"),
+    authorization: str | None,
 ) -> dict[str, Any]:
     expected_token = os.getenv("APP_CLIENT_TOKEN", "").strip()
     if not expected_token:
@@ -74,6 +89,11 @@ async def execute(
             raise HTTPException(status_code=429, detail="Request rate limit exceeded.")
         recent.append(now)
         _request_times[client_ip] = recent
+
+    # Opt in explicitly in Render settings for connection testing. The marker is returned
+    # in both fields consumed by app versions and cannot be confused with a real agent result.
+    if _mock_execution_enabled():
+        return {"status": "mock", "mock": True, "result": _MOCK_OUTPUT, "output": _MOCK_OUTPUT}
 
     endpoint, token = _upstream_config()
     headers = {"Accept": "application/json, text/plain"}
@@ -114,3 +134,18 @@ async def execute(
     if isinstance(payload, (str, int, float, bool, list)):
         return {"result": payload}
     raise HTTPException(status_code=502, detail="OpenSwarm returned an unsupported JSON value.")
+
+
+@app.post("/execute", response_model=None)
+async def execute(
+    request: ExecuteRequest,
+    http_request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> dict[str, Any] | JSONResponse:
+    try:
+        return await _execute_impl(request, http_request, authorization)
+    except HTTPException as exc:
+        return _error_response(exc.status_code, str(exc.detail))
+    except Exception:
+        logger.exception("Unhandled error in POST /execute")
+        return _error_response(500, "Unexpected server error. Check Render logs for details.")

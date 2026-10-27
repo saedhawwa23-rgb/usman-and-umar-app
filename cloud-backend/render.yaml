@@ -12,5 +12,7 @@ services:
         sync: false
       - key: APP_CLIENT_TOKEN
         sync: false
+      - key: ENABLE_MOCK_EXECUTION
+        sync: false
       - key: OPEN_SWARM_BEARER_TOKEN
         sync: false
