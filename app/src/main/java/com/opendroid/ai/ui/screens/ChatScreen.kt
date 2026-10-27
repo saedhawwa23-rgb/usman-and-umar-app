@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.opendroid.ai.core.agent.AgentState
+import com.opendroid.ai.core.agent.ChatToolCall
+import com.opendroid.ai.core.agent.ChatToolCallParser
 import com.opendroid.ai.core.agent.AutoApprovalPolicy
 import com.opendroid.ai.core.agent.ChatErrorPrimaryAction
 import com.opendroid.ai.core.agent.ChatErrorUiState
@@ -374,7 +376,8 @@ fun ChatScreen(
                             message = msg,
                             viewModel = viewModel,
                             context = context,
-                            onEditRequested = { startEditingMessage(it) }
+                            onEditRequested = { startEditingMessage(it) },
+                            onToolApproved = { call -> viewModel.approveChatToolCall(call, context) },
                         )
                     }
                     
@@ -726,9 +729,14 @@ fun ChatBubble(
     message: ChatMessage,
     viewModel: ChatViewModel? = null,
     context: android.content.Context? = null,
-    onEditRequested: ((ChatMessage) -> Unit)? = null
+    onEditRequested: ((ChatMessage) -> Unit)? = null,
+    onToolApproved: ((ChatToolCall) -> Unit)? = null,
 ) {
     val isAgent = message.sender == ChatMessage.Sender.AGENT
+    val toolCall = remember(message.id, message.text) {
+        if (isAgent) ChatToolCallParser.parse(message.text) else null
+    }
+    var toolApproved by remember(message.id) { mutableStateOf(false) }
     val alignment = if (isAgent) Alignment.Start else Alignment.End
     val bubbleColor = if (isAgent) {
         CardBackground
@@ -814,12 +822,56 @@ fun ChatBubble(
                     )
                 }
 
-                Text(
-                    text = message.text,
-                    fontSize = 14.sp,
-                    color = textColor,
-                    lineHeight = 20.sp
-                )
+                if (toolCall != null) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkBackground),
+                        border = BorderStroke(1.dp, AccentCyan.copy(alpha = 0.5f)),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("PROPOSED TOOL ACTION", color = AccentCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = toolCall.command ?: toolCall.url ?: toolCall.packageName ?: toolCall.appName ?: toolCall.action,
+                                color = TextPrimary,
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp,
+                            )
+                            Text(
+                                text = when (toolCall.action) {
+                                    "shell" -> "Only supported Android actions run natively. Python/Git/npm/Node explicitly route through Termux."
+                                    "open_app", "launch_app", "open_url", "open_uri", "pm_list_packages", "list_packages" -> "Uses Android PackageManager or an Android Intent after your approval."
+                                    else -> "This action is unsupported and will return an error without executing."
+                                },
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                            )
+                            if (toolApproved) {
+                                Text("Approved. The result or error will be posted as the next chat message.", color = TextSecondary, fontSize = 11.sp)
+                            }
+                            Button(
+                                onClick = {
+                                    if (!toolApproved) {
+                                        toolApproved = true
+                                        onToolApproved?.invoke(toolCall)
+                                    }
+                                },
+                                enabled = !toolApproved && onToolApproved != null,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(if (toolApproved) "Approved" else "Approve & Run")
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        text = message.text,
+                        fontSize = 14.sp,
+                        color = textColor,
+                        lineHeight = 20.sp
+                    )
+                }
                 
                 Spacer(modifier = Modifier.height(4.dp))
 

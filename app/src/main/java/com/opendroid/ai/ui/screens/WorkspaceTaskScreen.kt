@@ -36,9 +36,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.usmanandumar.workspace.core.task.LocalAiProvider
+import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.usmanandumar.workspace.core.task.TaskExecutionMode
 import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
@@ -53,6 +55,10 @@ private enum class TaskuaryPage(val label: String) { INBOX("Inbox"), DASHBOARD("
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val installedAiApps = remember(context.packageManager) {
+        InstalledAiAppDiscovery.scan(context.packageManager)
+    }
     val tasks by viewModel.tasks.collectAsState()
     val serverUrl by viewModel.openSwarmServerUrl.collectAsState()
     val clientToken by viewModel.openSwarmClientToken.collectAsState()
@@ -60,7 +66,9 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
     val message by viewModel.message.collectAsState()
     var rawText by remember { mutableStateOf("") }
     var mode by remember { mutableStateOf(TaskExecutionMode.LOCAL_AI_APP) }
-    var provider by remember { mutableStateOf(LocalAiProvider.GROK) }
+    var provider by remember(installedAiApps) {
+        mutableStateOf(installedAiApps.firstOrNull()?.provider ?: LocalAiProvider.GROK)
+    }
     var scriptLanguage by remember { mutableStateOf("bash") }
     var page by remember { mutableStateOf(TaskuaryPage.INBOX) }
     var settingsExpanded by remember { mutableStateOf(false) }
@@ -98,7 +106,12 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ModeMenu(mode = mode, onSelect = { mode = it }, modifier = Modifier.weight(1f))
                     if (mode == TaskExecutionMode.LOCAL_AI_APP) {
-                        ProviderMenu(provider = provider, onSelect = { provider = it }, modifier = Modifier.weight(1f))
+                        ProviderMenu(
+                            provider = provider,
+                            installedApps = installedAiApps,
+                            onSelect = { provider = it },
+                            modifier = Modifier.weight(1f),
+                        )
                     } else if (mode == TaskExecutionMode.TERMUX_SCRIPT) {
                         ScriptLanguageMenu(language = scriptLanguage, onSelect = { scriptLanguage = it }, modifier = Modifier.weight(1f))
                     }
@@ -107,7 +120,8 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
             item {
                 Button(
                     onClick = { viewModel.createTask(rawText, mode, provider, scriptLanguage) { rawText = "" } },
-                    enabled = rawText.isNotBlank(),
+                    enabled = rawText.isNotBlank() &&
+                        (mode != TaskExecutionMode.LOCAL_AI_APP || installedAiApps.any { it.provider == provider }),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     androidx.compose.material3.Icon(Icons.Default.AddTask, contentDescription = null)
@@ -117,7 +131,11 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
             item {
                 Text(
                     text = when (mode) {
-                        TaskExecutionMode.LOCAL_AI_APP -> "Local AI App uses Accessibility. Select a provider; no model API is called."
+                        TaskExecutionMode.LOCAL_AI_APP -> if (installedAiApps.isEmpty()) {
+                            "No supported AI chat app was found. Install Grok, ChatGPT, Gemini, or DeepSeek and reopen this screen."
+                        } else {
+                            "Detected ${installedAiApps.size} installed AI app(s) with PackageManager. Local AI App uses Accessibility; no model API is called."
+                        }
                         TaskExecutionMode.CLOUD_OPENSWARM -> "Cloud mode sends the full prompt to your Render server. Do not include secrets or private data."
                         TaskExecutionMode.TERMUX_SCRIPT -> "Only the explicit script text you enter is sent to Termux; ordinary task prose is never interpreted as shell."
                     },
@@ -236,13 +254,20 @@ private fun ModeMenu(mode: TaskExecutionMode, onSelect: (TaskExecutionMode) -> U
 }
 
 @Composable
-private fun ProviderMenu(provider: LocalAiProvider, onSelect: (LocalAiProvider) -> Unit, modifier: Modifier = Modifier) {
+private fun ProviderMenu(
+    provider: LocalAiProvider,
+    installedApps: List<InstalledAiAppDiscovery.InstalledAiApp>,
+    onSelect: (LocalAiProvider) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var expanded by remember { mutableStateOf(false) }
     Column(modifier) {
-        Button(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) { Text(provider.label, fontSize = 12.sp) }
+        Button(onClick = { expanded = true }, enabled = installedApps.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+            Text(installedApps.firstOrNull { it.provider == provider }?.displayName ?: "No AI app installed", fontSize = 12.sp)
+        }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            LocalAiProvider.entries.forEach { item ->
-                DropdownMenuItem(text = { Text(item.label) }, onClick = { onSelect(item); expanded = false })
+            installedApps.forEach { app ->
+                DropdownMenuItem(text = { Text(app.displayName) }, onClick = { onSelect(app.provider); expanded = false })
             }
         }
     }

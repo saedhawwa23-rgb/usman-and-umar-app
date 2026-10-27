@@ -1,10 +1,16 @@
 package com.opendroid.ai.ui.viewmodel
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.opendroid.ai.core.agent.AgentLoop
 import com.opendroid.ai.core.agent.AgentState
+import com.opendroid.ai.core.agent.ChatToolCall
 import com.opendroid.ai.core.agent.ChatErrorPrimaryAction
 import com.opendroid.ai.core.agent.ChatErrorUiState
 import com.opendroid.ai.core.agent.primaryAction
@@ -15,20 +21,27 @@ import com.opendroid.ai.data.models.resolvedAutoMode
 import com.opendroid.ai.data.repository.ChatSession
 import com.opendroid.ai.data.repository.ConversationRepository
 import com.opendroid.ai.data.repository.SettingsRepository
+import com.opendroid.ai.core.termux.TermuxIntegration
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import java.util.UUID
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val agentLoop: AgentLoop,
     private val conversationRepository: ConversationRepository,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val termuxIntegration: TermuxIntegration,
 ) : ViewModel() {
 
     val llmConfig: StateFlow<LLMConfig> = settingsRepository.llmConfig
@@ -161,6 +174,117 @@ class ChatViewModel @Inject constructor(
         if (query.isBlank()) return
         val sessionId = pinTaskSessionSnapshot()
         agentLoop.processQuery(query, context, sessionId)
+    }
+
+    /** Runs only after the user presses the per-message approval button. */
+    fun approveChatToolCall(call: ChatToolCall, context: Context) {
+        val targetSession = sessions.value.firstOrNull { it.isCurrent }?.id
+        viewModelScope.launch {
+            val result = runCatching { withContext(Dispatchers.IO) { executeApprovedChatTool(call, context) } }
+                .fold(onSuccess = { it }, onFailure = { "Action failed: ${it.message ?: "Unknown error."}" })
+            val sessionId = targetSession ?: conversationRepository.ensureCurrentSessionId()
+            conversationRepository.insertMessage(
+                sessionId,
+                ChatMessage(id = UUID.randomUUID().toString(), text = result.take(12_000), sender = ChatMessage.Sender.AGENT),
+            )
+        }
+    }
+
+    private suspend fun executeApprovedChatTool(call: ChatToolCall, context: Context): String {
+        val packageManager = context.packageManager
+        return when (call.action) {
+            "shell" -> {
+                val command = call.command?.trim().orEmpty()
+                require(command.isNotBlank()) { "The proposed shell action has no command." }
+                when {
+                    Regex("^pm\\s+list\\s+packages(?:\\s+-3)?$").matches(command) -> {
+                        val thirdPartyOnly = command.endsWith("-3")
+                        val apps = installedApplications(packageManager)
+                            .filter { !thirdPartyOnly || it.flags and ApplicationInfo.FLAG_SYSTEM == 0 }
+                            .map { it.packageName }.sorted()
+                        "Native PackageManager result (${apps.size} package(s)):\n" +
+                            apps.take(500).joinToString("\n").ifBlank { "No packages found." }
+                    }
+                    Regex("^(python3?|python[0-9.]*|git|npm|node)(?:\\s|$)", RegexOption.IGNORE_CASE).containsMatchIn(command) -> {
+                        require(!Regex("[;&|<>`\\n\\r$]").containsMatchIn(command)) {
+                            "Only one simple Linux command may be approved at a time; shell chaining and redirection are blocked."
+                        }
+                        executeExplicitLinuxTask(command)
+                    }
+                    command.startsWith("open app ", ignoreCase = true) ->
+                        openInstalledApp(context, command.substringAfter("open app ").trim())
+                    command.startsWith("open url ", ignoreCase = true) ->
+                        openUrl(context, command.substringAfter("open url ").trim())
+                    else -> error("Unsupported shell action. Native mode supports only 'pm list packages', 'open app …', and 'open url …'. Python/Git/npm/Node tasks require Termux.")
+                }
+            }
+            "pm_list_packages", "list_packages" -> {
+                val apps = installedApplications(packageManager).map { it.packageName }.sorted()
+                "Native PackageManager result (${apps.size} package(s)):\n" +
+                    apps.take(500).joinToString("\n").ifBlank { "No packages found." }
+            }
+            "open_app", "launch_app" -> {
+                val target = call.packageName ?: call.appName
+                require(!target.isNullOrBlank()) { "Specify an app name or package name." }
+                openInstalledApp(context, target)
+            }
+            "open_url", "open_uri" -> {
+                val url = call.url ?: call.appName
+                require(!url.isNullOrBlank()) { "Specify an HTTP or HTTPS URL." }
+                openUrl(context, url)
+            }
+            else -> error("Unsupported tool action '${call.action}'. No action was executed.")
+        }
+    }
+
+    private fun installedApplications(packageManager: PackageManager): List<ApplicationInfo> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getInstalledApplications(0)
+        }
+
+    private suspend fun openInstalledApp(context: Context, target: String): String {
+        val packageManager = context.packageManager
+        val installed = installedApplications(packageManager)
+        val application = installed.firstOrNull { it.packageName.equals(target, ignoreCase = true) }
+            ?: installed.filter { packageManager.getApplicationLabel(it).toString().equals(target, ignoreCase = true) }
+                .singleOrNull()
+            ?: error("No installed app matched '$target' uniquely. Use its exact package name if multiple apps share that label.")
+        val intent = packageManager.getLaunchIntentForPackage(application.packageName)
+            ?: error("${application.packageName} has no launchable activity.")
+        withContext(Dispatchers.Main) { context.startActivity(intent) }
+        return "Opened ${packageManager.getApplicationLabel(application)} (${application.packageName}) using an Android launch intent."
+    }
+
+    private suspend fun openUrl(context: Context, rawUrl: String): String {
+        val uri = Uri.parse(rawUrl.trim())
+        require(uri.scheme.equals("https", true) || uri.scheme.equals("http", true)) {
+            "Only HTTP and HTTPS URLs can be opened."
+        }
+        require(!uri.host.isNullOrBlank() && uri.userInfo == null) { "The URL is invalid or contains embedded credentials." }
+        val intent = Intent(Intent.ACTION_VIEW, uri)
+        require(intent.resolveActivity(context.packageManager) != null) { "No installed app can open this URL." }
+        withContext(Dispatchers.Main) { context.startActivity(intent) }
+        return "Opened URL: $uri"
+    }
+
+    private suspend fun executeExplicitLinuxTask(command: String): String {
+        check(termuxIntegration.isInstalled()) {
+            "This explicitly requested Linux task needs Termux. Install Termux, then approve the action again."
+        }
+        val id = termuxIntegration.runCode("bash", command).getOrElse { throw it }
+        val result = withTimeoutOrNull(120_000) {
+            termuxIntegration.results.first { rows -> rows.any { it.executionId == id } }
+                .first { it.executionId == id }
+        } ?: error("Termux did not return a result before timeout.")
+        return buildString {
+            append("Termux result · exitCode=").append(result.exitCode ?: "unknown")
+            if (result.stdout.isNotBlank()) append("\nstdout:\n").append(result.stdout)
+            if (result.stderr.isNotBlank()) append("\nstderr:\n").append(result.stderr)
+            result.error?.let { append("\nerror:\n").append(it) }
+        }
     }
 
     /**
