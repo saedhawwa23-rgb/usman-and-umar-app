@@ -639,7 +639,7 @@ class AgentLoop @Inject constructor(
                                 systemPrompt = sysPrompt,
                                 messages = listOf(userMsg),
                                 temperature = 0.2f,
-                                maxTokens = 1500,
+                                maxTokens = 4096,
                                 responseFormat = ResponseFormat.JSON
                             )
                         )
@@ -680,7 +680,7 @@ class AgentLoop @Inject constructor(
                                 )
                             ),
                             temperature = 0.1f,
-                            maxTokens = 1500,
+                            maxTokens = 4096,
                             responseFormat = ResponseFormat.JSON
                         )
                     )
@@ -693,7 +693,7 @@ class AgentLoop @Inject constructor(
                         systemPrompt = sysPrompt,
                         messages = listOf(userMsg),
                         temperature = 0.1f,
-                        maxTokens = 1500,
+                        maxTokens = 4096,
                         responseFormat = ResponseFormat.JSON
                     )
                 )
@@ -1561,46 +1561,18 @@ class AgentLoop @Inject constructor(
     }
 
     private fun parsePlanFromLlmResponse(raw: String, userGoal: String): Plan {
-        val stripped = stripMarkdownFences(raw)
-
-        // Prefer wrapper action before unwrapping plan — handles {"action":"...","plan":null}.
-        try {
-            val root = json.parseToJsonElement(stripped)
-            if (root is JsonObject) {
-                val action = root["action"]?.jsonPrimitive?.contentOrNull
-                    ?.takeIf { it.isNotBlank() && it != "null" }
-                val planElement = root["plan"]
-                val hasPlanObject = planElement is JsonObject
-
-                if (action != null && !hasPlanObject) {
-                    val params = jsonObjectToStringMap(root["params"]?.jsonObject)
-                    return buildSingleStepPlan(userGoal, action, params)
-                }
-
-                if (hasPlanObject) {
-                    return normalizePlan(json.decodeFromString<Plan>(planElement.toString()))
-                }
-            }
-        } catch (_: Exception) {
-            // Fall through to direct Plan parsing
-        }
-
-        val cleaned = cleanPlanJson(raw)
-        try {
-            return normalizePlan(json.decodeFromString<Plan>(cleaned))
-        } catch (_: Exception) {
-            // Continue with wrapper/single-action parsing below
-        }
-
-        val root = json.parseToJsonElement(cleaned)
+        val root = PlanJsonRepair.parse(raw)
         if (root is JsonObject) {
-            root["plan"]?.let { planElement ->
-                if (planElement is JsonObject) {
-                    try {
-                        return normalizePlan(json.decodeFromString<Plan>(planElement.toString()))
-                    } catch (_: Exception) {
-                        // fall through
-                    }
+            val planElement = root["plan"]
+            val normalizedPlanElement = when {
+                planElement is JsonObject -> planElement
+                planElement is kotlinx.serialization.json.JsonPrimitive && planElement.isString ->
+                    runCatching { PlanJsonRepair.parse(planElement.content) as? JsonObject }.getOrNull()
+                else -> null
+            }
+            if (normalizedPlanElement != null) {
+                runCatching {
+                    return normalizePlan(json.decodeFromString<Plan>(normalizedPlanElement.toString()))
                 }
             }
 
@@ -1611,20 +1583,8 @@ class AgentLoop @Inject constructor(
             }
         }
 
+        runCatching { return normalizePlan(json.decodeFromString<Plan>(root.toString())) }
         throw IllegalArgumentException("Could not parse a valid plan from LLM response")
-    }
-
-    private fun stripMarkdownFences(raw: String): String {
-        var content = raw.trim()
-        if (content.startsWith("```json")) {
-            content = content.removePrefix("```json")
-        } else if (content.startsWith("```")) {
-            content = content.removePrefix("```")
-        }
-        if (content.endsWith("```")) {
-            content = content.removeSuffix("```")
-        }
-        return content.trim()
     }
 
     private fun normalizePlan(plan: Plan): Plan {
@@ -1665,23 +1625,6 @@ class AgentLoop @Inject constructor(
         return obj.mapValues { (_, value) ->
             value.jsonPrimitive.contentOrNull ?: value.toString().trim('"')
         }
-    }
-
-    private fun cleanPlanJson(raw: String): String {
-        var content = stripMarkdownFences(raw)
-        try {
-            val jsonElement = json.parseToJsonElement(content)
-            if (jsonElement is JsonObject) {
-                val planElement = jsonElement["plan"]
-                // Only unwrap when plan is an object — preserve wrappers with "plan": null.
-                if (planElement is JsonObject) {
-                    return planElement.toString()
-                }
-            }
-        } catch (e: Exception) {
-            // Silently ignore parsing errors here and let downstream deserialization report them if needed
-        }
-        return content
     }
 
     /**

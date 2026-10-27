@@ -51,6 +51,7 @@ class OpenRouterProvider @Inject constructor(
         )
         if (request.responseFormat == ResponseFormat.JSON) {
             requestBodyMap["response_format"] = mapOf("type" to "json_object")
+            requestBodyMap["plugins"] = listOf(mapOf("id" to "response-healing"))
         }
         if (!request.tools.isNullOrEmpty()) {
             requestBodyMap["tools"] = request.tools.map { tool ->
