@@ -51,4 +51,11 @@ class PlanJsonRepairTest {
         assertEquals("p4", result.jsonObject["planId"]?.jsonPrimitive?.content)
         assertTrue("unfinished" !in result.jsonObject)
     }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun refusesToGuessBetweenMultipleJsonDocuments() {
+        PlanJsonRepair.parse(
+            "Example: {\"planId\":\"sample\",\"steps\":[]} Actual plan: {\"planId\":\"real\",\"steps\":[]}",
+        )
+    }
 }

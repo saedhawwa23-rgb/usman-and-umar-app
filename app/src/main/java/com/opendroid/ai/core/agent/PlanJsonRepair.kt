@@ -9,7 +9,7 @@ import kotlinx.serialization.json.JsonPrimitive
 
 /** Best-effort syntax recovery for model-generated plan JSON; it does not invent field values. */
 internal object PlanJsonRepair {
-    private val kotlinxJson = Json { isLenient = true }
+    private val kotlinxJson = Json { isLenient = false }
     private val openingFence = Regex("(?is)^\\s*```(?:json)?\\s*")
     private val closingFence = Regex("(?is)\\s*```\\s*$")
     private const val MAX_UNWRAP_DEPTH = 4
@@ -28,39 +28,33 @@ internal object PlanJsonRepair {
         }
 
         val fragments = extractJsonFragments(cleaned)
+        val parsedFragments = mutableListOf<JsonElement>()
         for (fragment in fragments) {
-            parseStrict(fragment)?.let { element ->
-                if (element is JsonPrimitive && element.isString) return parse(element.content, depth + 1)
-                return element
-            }
-
-            val repaired = closeOpenContainers(fragment)
-            if (repaired != fragment) {
-                parseStrict(repaired)?.let { element ->
-                    if (element is JsonPrimitive && element.isString) return parse(element.content, depth + 1)
-                    return element
-                }
-                parseWithGsonLenient(repaired)?.let { element ->
-                    if (element is JsonPrimitive && element.isString) return parse(element.content, depth + 1)
-                    return element
-                }
-            }
-
-            parseWithGsonLenient(fragment)?.let { element ->
-                if (element is JsonPrimitive && element.isString) return parse(element.content, depth + 1)
-                return element
-            }
-
-            // If generation stopped in the middle of a property, retry with the last fully
-            // emitted property removed. This only discards an incomplete suffix; no values are made up.
-            val safePrefix = removeIncompleteSuffix(fragment)
-            if (safePrefix != null) {
-                val prefixRepaired = closeOpenContainers(safePrefix)
-                parseStrict(prefixRepaired)?.let { return it }
-                parseWithGsonLenient(prefixRepaired)?.let { return it }
-            }
+            parseFragment(fragment)?.let { parsedFragments += it }
         }
-        throw IllegalArgumentException("Could not parse or repair a complete JSON document from LLM response.")
+        val distinct = parsedFragments.distinctBy { it.toString() }
+        require(distinct.size <= 1) { "LLM response contained multiple JSON documents; refusing to guess which plan to use." }
+        val result = distinct.singleOrNull()
+            ?: throw IllegalArgumentException("Could not parse or repair a complete JSON document from LLM response.")
+        if (result is JsonPrimitive && result.isString) return parse(result.content, depth + 1)
+        return result
+    }
+
+    private fun parseFragment(fragment: String): JsonElement? {
+        parseStrict(fragment)?.let { return it }
+
+        val repaired = closeOpenContainers(fragment)
+        if (repaired != fragment) {
+            parseStrict(repaired)?.let { return it }
+            parseWithGsonLenient(repaired)?.let { return it }
+        }
+        parseWithGsonLenient(fragment)?.let { return it }
+
+        // If generation stopped in the middle of a property, retry with the last fully
+        // emitted property removed. This only discards an incomplete suffix; no values are made up.
+        val safePrefix = removeIncompleteSuffix(fragment) ?: return null
+        val prefixRepaired = closeOpenContainers(safePrefix)
+        return parseStrict(prefixRepaired) ?: parseWithGsonLenient(prefixRepaired)
     }
 
     private fun stripMarkdownFences(raw: String): String = raw.trim()
@@ -82,10 +76,14 @@ internal object PlanJsonRepair {
     /** Returns candidate top-level JSON fragments, preserving incomplete suffixes for repair. */
     private fun extractJsonFragments(source: String): List<String> {
         val fragments = mutableListOf<String>()
-        source.forEachIndexed { index, char ->
-            if (char == '{' || char == '[') {
+        var index = 0
+        while (index < source.length) {
+            if (source[index] == '{' || source[index] == '[') {
                 val fragment = readRootFragment(source, index)
-                if (fragment.isNotBlank() && fragment !in fragments) fragments += fragment
+                if (fragment.isNotBlank()) fragments += fragment
+                index += fragment.length.coerceAtLeast(1)
+            } else {
+                index++
             }
         }
         return fragments

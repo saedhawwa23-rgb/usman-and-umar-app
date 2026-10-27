@@ -1562,29 +1562,38 @@ class AgentLoop @Inject constructor(
 
     private fun parsePlanFromLlmResponse(raw: String, userGoal: String): Plan {
         val root = PlanJsonRepair.parse(raw)
-        if (root is JsonObject) {
-            val planElement = root["plan"]
-            val normalizedPlanElement = when {
-                planElement is JsonObject -> planElement
-                planElement is kotlinx.serialization.json.JsonPrimitive && planElement.isString ->
-                    runCatching { PlanJsonRepair.parse(planElement.content) as? JsonObject }.getOrNull()
-                else -> null
-            }
-            if (normalizedPlanElement != null) {
-                runCatching {
-                    return normalizePlan(json.decodeFromString<Plan>(normalizedPlanElement.toString()))
-                }
-            }
-
-            val action = root["action"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() && it != "null" }
-            if (action != null) {
-                val params = jsonObjectToStringMap(root["params"]?.jsonObject)
-                return buildSingleStepPlan(userGoal, action, params)
-            }
+        val planObject = findPlanJsonObject(root) ?: throw IllegalArgumentException("No plan object found in LLM response")
+        val action = (planObject["action"] as? kotlinx.serialization.json.JsonPrimitive)
+            ?.contentOrNull?.takeIf { it.isNotBlank() && it != "null" }
+        if (action != null && "steps" !in planObject && "planId" !in planObject) {
+            val params = jsonObjectToStringMap(planObject["params"]?.jsonObject)
+            return buildSingleStepPlan(userGoal, action, params)
         }
 
-        runCatching { return normalizePlan(json.decodeFromString<Plan>(root.toString())) }
+        runCatching { return normalizePlan(json.decodeFromString<Plan>(planObject.toString())) }
         throw IllegalArgumentException("Could not parse a valid plan from LLM response")
+    }
+
+    private fun findPlanJsonObject(element: kotlinx.serialization.json.JsonElement, depth: Int = 0): JsonObject? {
+        if (depth > 4) return null
+        val objectValue = element as? JsonObject ?: return null
+        if ("steps" in objectValue || "planId" in objectValue) return objectValue
+        if ((objectValue["action"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.isNotBlank() == true
+        ) return objectValue
+
+        for (key in listOf("plan", "result", "data", "output", "response")) {
+            val nested = objectValue[key] ?: continue
+            val nestedObject = when (nested) {
+                is JsonObject -> nested
+                is kotlinx.serialization.json.JsonPrimitive -> if (nested.isString) {
+                    runCatching { PlanJsonRepair.parse(nested.content) as? JsonObject }.getOrNull()
+                } else null
+                else -> null
+            } ?: continue
+            findPlanJsonObject(nestedObject, depth + 1)?.let { return it }
+        }
+        return objectValue
     }
 
     private fun normalizePlan(plan: Plan): Plan {
