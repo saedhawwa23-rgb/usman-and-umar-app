@@ -1,5 +1,9 @@
 package com.opendroid.ai.ui.screens
 
+import android.content.Intent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -73,6 +77,29 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
     var page by remember { mutableStateOf(TaskuaryPage.INBOX) }
     var settingsExpanded by remember { mutableStateOf(false) }
     var urlDraft by remember(serverUrl) { mutableStateOf(serverUrl) }
+    var taskPendingExport by remember { mutableStateOf<WorkspaceTaskEntity?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        val task = taskPendingExport
+        taskPendingExport = null
+        if (uri != null && task != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { it.write(task.notes.ifBlank { task.description }.toByteArray()) }
+                    ?: error("Unable to open destination")
+            }.onSuccess { Toast.makeText(context, "Task output saved", Toast.LENGTH_SHORT).show() }
+                .onFailure { Toast.makeText(context, "Could not save task output", Toast.LENGTH_SHORT).show() }
+        }
+    }
+    val driveFolderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }
+            Toast.makeText(context, "Google Drive folder selected", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     Scaffold(
         modifier = modifier,
@@ -184,6 +211,20 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
             }
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                        Text("GOOGLE DRIVE", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
+                        Text(
+                            "Choose a Drive folder or use Save output on a task. Android opens the installed Google Drive provider.",
+                            color = AppTheme.colors.textSecondary,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Button(onClick = { driveFolderLauncher.launch(null) }) { Text("Choose Drive folder") }
+                    }
+                }
+            }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
                     Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) {
                             Text("AUTO-RUN AI-GENERATED CODE", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
@@ -201,7 +242,7 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
                     item { SectionTitle("INBOX") }
                     val inbox = tasks.filter { it.state in setOf(TaskState.DRAFT.name, TaskState.WAITING_FOR_NETWORK.name, TaskState.FAILED.name, TaskState.WAITING_USER.name) }
                     if (inbox.isEmpty()) item { Text("Inbox is clear.", color = AppTheme.colors.textSecondary) }
-                    items(inbox, key = { "inbox-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) }
+                    items(inbox, key = { "inbox-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") } }
                 }
                 TaskuaryPage.DASHBOARD -> {
                     val today = startOfToday()
@@ -210,23 +251,23 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
                     val overdue = tasks.filter { it.deadlineAt != null && it.deadlineAt < today && it.state != TaskState.SUCCEEDED.name }
                     item { SectionTitle("TODAY") }
                     if (todayTasks.isEmpty()) item { Text("Nothing due today.", color = AppTheme.colors.textSecondary) }
-                    items(todayTasks, key = { "today-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) }
+                    items(todayTasks, key = { "today-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") } }
                     item { SectionTitle("OVERDUE") }
                     if (overdue.isEmpty()) item { Text("No overdue tasks.", color = AppTheme.colors.textSecondary) }
-                    items(overdue, key = { "overdue-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) }
+                    items(overdue, key = { "overdue-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") } }
                 }
                 TaskuaryPage.BOARD -> {
                     item {
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                            KanbanColumn("DRAFT", tasks.filter { it.state == TaskState.DRAFT.name }, viewModel::runTask)
-                            KanbanColumn("RUNNING", tasks.filter { it.state == TaskState.RUNNING.name }, viewModel::runTask)
-                            KanbanColumn("SUCCEEDED", tasks.filter { it.state == TaskState.SUCCEEDED.name }, viewModel::runTask)
+                            KanbanColumn("DRAFT", tasks.filter { it.state == TaskState.DRAFT.name }, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") }
+                            KanbanColumn("RUNNING", tasks.filter { it.state == TaskState.RUNNING.name }, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") }
+                            KanbanColumn("SUCCEEDED", tasks.filter { it.state == TaskState.SUCCEEDED.name }, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") }
                         }
                     }
                     val waiting = tasks.filter { it.state == TaskState.WAITING_FOR_NETWORK.name }
                     if (waiting.isNotEmpty()) {
                         item { SectionTitle("WAITING FOR NETWORK") }
-                        items(waiting, key = { "waiting-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) }
+                        items(waiting, key = { "waiting-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") } }
                     }
                 }
             }
@@ -287,7 +328,11 @@ private fun ScriptLanguageMenu(language: String, onSelect: (String) -> Unit, mod
 }
 
 @Composable
-private fun TaskCard(task: WorkspaceTaskEntity, onRun: (WorkspaceTaskEntity) -> Unit) {
+private fun TaskCard(
+    task: WorkspaceTaskEntity,
+    onRun: (WorkspaceTaskEntity) -> Unit,
+    onSaveOutput: (WorkspaceTaskEntity) -> Unit,
+) {
     Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
         Column(Modifier.fillMaxWidth().padding(14.dp)) {
             Text(task.title, color = AppTheme.colors.textPrimary, fontSize = 16.sp)
@@ -316,16 +361,22 @@ private fun TaskCard(task: WorkspaceTaskEntity, onRun: (WorkspaceTaskEntity) -> 
                     Text(if (task.state == TaskState.WAITING_FOR_NETWORK.name) " Retry when online" else " Run")
                 }
             }
+            Button(onClick = { onSaveOutput(task) }) { Text("Save output to Drive") }
         }
     }
 }
 
 @Composable
-private fun KanbanColumn(title: String, tasks: List<WorkspaceTaskEntity>, onRun: (WorkspaceTaskEntity) -> Unit) {
+private fun KanbanColumn(
+    title: String,
+    tasks: List<WorkspaceTaskEntity>,
+    onRun: (WorkspaceTaskEntity) -> Unit,
+    onSaveOutput: (WorkspaceTaskEntity) -> Unit,
+) {
     Column(Modifier.width(280.dp).padding(end = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle("$title · ${tasks.size}")
         if (tasks.isEmpty()) Text("No tasks", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
-        tasks.forEach { task -> TaskCard(task, onRun) }
+        tasks.forEach { task -> TaskCard(task, onRun, onSaveOutput) }
     }
 }
 

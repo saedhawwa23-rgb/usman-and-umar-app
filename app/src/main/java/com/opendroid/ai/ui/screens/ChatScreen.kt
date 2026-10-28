@@ -1,15 +1,22 @@
 package com.opendroid.ai.ui.screens
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,12 +29,18 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -70,7 +83,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
@@ -104,6 +117,25 @@ fun ChatScreen(
     var renameText by remember { mutableStateOf("") }
     var editingMessageId by remember { mutableStateOf<String?>(null) }
     var textBeforeEdit by remember { mutableStateOf("") }
+    var thinkEnabled by remember { mutableStateOf(false) }
+    var searchEnabled by remember { mutableStateOf(false) }
+    var showAttachmentSheet by remember { mutableStateOf(false) }
+    var selectedAttachment by remember { mutableStateOf<Uri?>(null) }
+    var messageForActions by remember { mutableStateOf<ChatMessage?>(null) }
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> uri?.let { selectedAttachment = it } }
+    val documentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { selectedAttachment = it } }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        if (bitmap != null) {
+            selectedAttachment = Uri.parse("camera://captured-photo")
+        }
+    }
 
     // Merges a piece of dictated text into whatever the user already typed, so review/edit
     // never clobbers text entered before dictation started.
@@ -137,7 +169,12 @@ fun ChatScreen(
     // Single submit path for both a normal send and an edit-resend, wired to both the
     // keyboard "Send" action and the send button below.
     fun submitInput() {
-        val text = inputQuery
+        val attachmentText = selectedAttachment?.let { "\n[Attachment: $it]" }.orEmpty()
+        val modeInstructions = buildString {
+            if (thinkEnabled) append("\n[Use deeper internal reasoning before answering; do not reveal private chain-of-thought.]\n")
+            if (searchEnabled) append("\n[Use the web-search capability when current or externally verifiable information is needed.]\n")
+        }
+        val text = inputQuery + attachmentText + modeInstructions
         if (text.isBlank()) return
         val editing = editingMessageId
         if (editing != null) {
@@ -148,6 +185,7 @@ fun ChatScreen(
             viewModel.sendMessage(text, context)
         }
         inputQuery = ""
+        selectedAttachment = null
     }
 
     // Scroll to bottom on history change. Keyed on currentSessionId too: keying on
@@ -377,6 +415,7 @@ fun ChatScreen(
                             viewModel = viewModel,
                             context = context,
                             onEditRequested = { startEditingMessage(it) },
+                            onMessageLongPressed = { messageForActions = it },
                             onToolApproved = { call -> viewModel.approveChatToolCall(call, context) },
                         )
                     }
@@ -495,9 +534,37 @@ fun ChatScreen(
                         )
                     }
                     Row(
+                        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilterChip(
+                            selected = thinkEnabled,
+                            onClick = { thinkEnabled = !thinkEnabled },
+                            label = { Text("Think", fontSize = 11.sp) }
+                        )
+                        FilterChip(
+                            selected = searchEnabled,
+                            onClick = { searchEnabled = !searchEnabled },
+                            label = { Text("Search", fontSize = 11.sp) }
+                        )
+                        selectedAttachment?.let {
+                            Text("Attachment ready", color = AccentCyan, fontSize = 11.sp)
+                        }
+                    }
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        IconButton(
+                            onClick = { showAttachmentSheet = true },
+                            modifier = Modifier.size(42.dp)
+                        ) {
+                            Icon(Icons.Default.AttachFile, contentDescription = "Add attachment", tint = TextSecondary)
+                        }
+
+                        Spacer(modifier = Modifier.width(2.dp))
+
                         // Floating Orb for Speech
                         FloatingOrb(
                             isListening = isListening,
@@ -598,12 +665,12 @@ fun ChatScreen(
                                     modifier = Modifier
                                         .size(48.dp)
                                         .clip(CircleShape)
-                                        .background(TextPrimary)
+                                        .background(Color(0xFF2F80ED))
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Send,
                                         contentDescription = "Send",
-                                        tint = DarkBackground
+                                        tint = Color.White
                                     )
                                 }
                             }
@@ -677,6 +744,76 @@ fun ChatScreen(
             }
         )
     }
+
+    if (showAttachmentSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showAttachmentSheet = false },
+            containerColor = DarkSurface,
+        ) {
+            Text("ADD ATTACHMENT", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(20.dp, 4.dp))
+            AttachmentOption("Camera", Icons.Default.CameraAlt) {
+                showAttachmentSheet = false
+                cameraLauncher.launch(null)
+            }
+            AttachmentOption("Photo from gallery", Icons.Default.PhotoLibrary) {
+                showAttachmentSheet = false
+                galleryLauncher.launch("image/*")
+            }
+            AttachmentOption("Document", Icons.Default.Description) {
+                showAttachmentSheet = false
+                documentLauncher.launch(arrayOf("*/*"))
+            }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+
+    messageForActions?.let { message ->
+        AlertDialog(
+            onDismissRequest = { messageForActions = null },
+            containerColor = DarkSurface,
+            title = { Text("Message actions", color = TextPrimary) },
+            text = { Text(message.text.take(180), color = TextSecondary, maxLines = 4) },
+            confirmButton = {
+                TextButton(onClick = {
+                    val clipboard = context.getSystemService(ClipboardManager::class.java)
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Chat message", message.text))
+                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                    messageForActions = null
+                }) { Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(6.dp)); Text("Copy") }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (message.sender == ChatMessage.Sender.USER) {
+                        TextButton(onClick = { startEditingMessage(message); messageForActions = null }) {
+                            Icon(Icons.Default.Edit, null); Spacer(Modifier.width(4.dp)); Text("Edit")
+                        }
+                    }
+                    TextButton(onClick = {
+                        viewModel.deleteMessage(message.id)
+                        messageForActions = null
+                    }) { Icon(Icons.Default.Delete, null, tint = AccentRed); Spacer(Modifier.width(4.dp)); Text("Delete", color = AccentRed) }
+                    TextButton(onClick = {
+                        val share = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, message.text)
+                        }
+                        context.startActivity(Intent.createChooser(share, "Share message"))
+                        messageForActions = null
+                    }) { Icon(Icons.Default.Share, null); Spacer(Modifier.width(4.dp)); Text("Share") }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun AttachmentOption(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(label, color = TextPrimary) },
+        leadingContent = { Icon(icon, contentDescription = null, tint = AccentCyan) },
+        modifier = Modifier.clickable(onClick = onClick),
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+    )
 }
 
 @Composable
@@ -730,6 +867,7 @@ fun ChatBubble(
     viewModel: ChatViewModel? = null,
     context: android.content.Context? = null,
     onEditRequested: ((ChatMessage) -> Unit)? = null,
+    onMessageLongPressed: ((ChatMessage) -> Unit)? = null,
     onToolApproved: ((ChatToolCall) -> Unit)? = null,
 ) {
     val isAgent = message.sender == ChatMessage.Sender.AGENT
@@ -807,6 +945,10 @@ fun ChatBubble(
                             bottomStart = if (isAgent) 4.dp else 18.dp,
                             bottomEnd = if (isAgent) 18.dp else 4.dp
                         )
+                    )
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { onMessageLongPressed?.invoke(message) }
                     )
                     .padding(14.dp)
             ) {

@@ -305,6 +305,13 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /** Deletes one visible message without affecting the rest of the conversation. */
+    fun deleteMessage(messageId: String) {
+        viewModelScope.launch {
+            conversationRepository.deleteMessage(messageId)
+        }
+    }
+
     fun approvePlan(context: Context, grants: Set<String> = emptySet()) {
         pinTaskSessionSnapshot()
         agentLoop.approveProposedPlan(context, grants)
