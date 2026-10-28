@@ -37,10 +37,9 @@ object GoogleDriveUploader {
         val body = MultipartBody.Builder()
             .setType("multipart/related".toMediaType())
             .addPart(
-                "application/json; charset=utf-8".toMediaType()
-                    .toRequestBody(metadata.toString().toByteArray())
+                metadata.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
             )
-            .addPart("text/plain; charset=utf-8".toMediaType().toRequestBody(content.toByteArray()))
+            .addPart(content.toRequestBody("text/plain; charset=utf-8".toMediaType()))
             .build()
         val request = Request.Builder()
             .url("$UPLOAD_API?uploadType=multipart&fields=id,name,webViewLink")
