@@ -1,16 +1,19 @@
 name: Publish verified Android artifact
 
 on:
+  push:
+    branches:
+      - feature/hybrid-task-orchestrator
   workflow_dispatch:
     inputs:
       ref:
         description: Commit, branch, or tag to build
         required: true
-        default: feature/integrated-linux-terminal
+        default: feature/hybrid-task-orchestrator
       tag:
         description: GitHub Release tag to create
         required: true
-        default: v3.0.0-cloud-ai-pr4
+        default: v3.6.0-hybrid-orchestrator
 
 permissions:
   contents: write
@@ -23,7 +26,7 @@ jobs:
       - name: Checkout requested ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref_name }}
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -91,15 +94,15 @@ jobs:
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
           grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' "$out/PROOT_ELF.txt"
           sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
-          cp "$apk" "$out/usman-and-umar-v3.0.0-cloud-ai-pr4.apk"
-          sha256sum "$out/usman-and-umar-v3.0.0-cloud-ai-pr4.apk" | tee "$out/SHA256SUMS.txt"
+          cp "$apk" "$out/USMAN-AND-UMAR-v3.6.0-hybrid-orchestrator.apk"
+          sha256sum "$out/USMAN-AND-UMAR-v3.6.0-hybrid-orchestrator.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nref=%s\ntag=%s\n' "$(git rev-parse HEAD)" "${{ inputs.ref }}" "${{ inputs.tag }}" > "$out/BUILD_METADATA.txt"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
         with:
-          tag_name: ${{ inputs.tag }}
-          name: USMAN AND UMAR ${{ inputs.tag }}
+          tag_name: ${{ inputs.tag || format('v3.6.0-hybrid-orchestrator-{0}', github.run_number) }}
+          name: USMAN AND UMAR ${{ inputs.tag || format('v3.6.0-hybrid-orchestrator-{0}', github.run_number) }}
           body: |
             Verified Android ARM32 debug artifact from PR #4.
 

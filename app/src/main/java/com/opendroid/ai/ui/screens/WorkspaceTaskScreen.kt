@@ -1,6 +1,6 @@
 package com.opendroid.ai.ui.screens
 
-import android.content.Intent
+import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -38,18 +38,25 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.usmanandumar.workspace.core.task.LocalAiProvider
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.Scope
+import com.google.api.services.drive.DriveScopes
+import com.opendroid.ai.core.drive.GoogleDriveUploader
 import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.usmanandumar.workspace.core.task.TaskExecutionMode
 import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.ui.theme.AppTheme
 import com.opendroid.ai.ui.viewmodel.WorkspaceTaskViewModel
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -78,27 +85,40 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
     var settingsExpanded by remember { mutableStateOf(false) }
     var urlDraft by remember(serverUrl) { mutableStateOf(serverUrl) }
     var taskPendingExport by remember { mutableStateOf<WorkspaceTaskEntity?>(null) }
-    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+    val scope = rememberCoroutineScope()
+    val driveSignInLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val task = taskPendingExport
         taskPendingExport = null
-        if (uri != null && task != null) {
-            runCatching {
-                context.contentResolver.openOutputStream(uri)?.use { it.write(task.notes.ifBlank { task.description }.toByteArray()) }
-                    ?: error("Unable to open destination")
-            }.onSuccess { Toast.makeText(context, "Task output saved", Toast.LENGTH_SHORT).show() }
-                .onFailure { Toast.makeText(context, "Could not save task output", Toast.LENGTH_SHORT).show() }
+        if (result.resultCode == Activity.RESULT_OK && task != null) {
+            GoogleSignIn.getSignedInAccountFromIntent(result.data)
+                .addOnSuccessListener { account ->
+                    scope.launch {
+                        runCatching {
+                            GoogleDriveUploader.uploadTaskOutput(
+                                context,
+                                account,
+                                "${task.title}.txt",
+                                task.notes.ifBlank { task.description },
+                            )
+                        }.onSuccess { link ->
+                            Toast.makeText(context, if (link.startsWith("http")) "Saved to Google Drive" else link, Toast.LENGTH_LONG).show()
+                        }.onFailure {
+                            Toast.makeText(context, it.message ?: "Could not upload to Google Drive", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+                .addOnFailureListener {
+                    Toast.makeText(context, "Google Drive authorization failed", Toast.LENGTH_LONG).show()
+                }
         }
     }
-    val driveFolderLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-            }
-            Toast.makeText(context, "Google Drive folder selected", Toast.LENGTH_SHORT).show()
-        }
+    fun beginDriveUpload(task: WorkspaceTaskEntity) {
+        taskPendingExport = task
+        val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestScopes(Scope(DriveScopes.DRIVE_FILE))
+            .build()
+        driveSignInLauncher.launch(GoogleSignIn.getClient(context, options).signInIntent)
     }
 
     Scaffold(
@@ -214,12 +234,12 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
                     Column(Modifier.fillMaxWidth().padding(12.dp)) {
                         Text("GOOGLE DRIVE", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
                         Text(
-                            "Choose a Drive folder or use Save output on a task. Android opens the installed Google Drive provider.",
+                            "Connect Google Drive once. Task output is uploaded automatically into USMAN_AND_UMAR_Tasks using the narrow drive.file scope.",
                             color = AppTheme.colors.textSecondary,
                             fontSize = 12.sp,
                         )
                         Spacer(Modifier.height(6.dp))
-                        Button(onClick = { driveFolderLauncher.launch(null) }) { Text("Choose Drive folder") }
+                        Button(onClick = { tasks.firstOrNull()?.let(::beginDriveUpload) }, enabled = tasks.isNotEmpty()) { Text("Connect Google Drive") }
                     }
                 }
             }
@@ -242,7 +262,7 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
                     item { SectionTitle("INBOX") }
                     val inbox = tasks.filter { it.state in setOf(TaskState.DRAFT.name, TaskState.WAITING_FOR_NETWORK.name, TaskState.FAILED.name, TaskState.WAITING_USER.name) }
                     if (inbox.isEmpty()) item { Text("Inbox is clear.", color = AppTheme.colors.textSecondary) }
-                    items(inbox, key = { "inbox-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") } }
+                    items(inbox, key = { "inbox-${it.id}" }) { task -> TaskCard(task, viewModel::runTask, ::beginDriveUpload) }
                 }
                 TaskuaryPage.DASHBOARD -> {
                     val today = startOfToday()
@@ -251,23 +271,23 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
                     val overdue = tasks.filter { it.deadlineAt != null && it.deadlineAt < today && it.state != TaskState.SUCCEEDED.name }
                     item { SectionTitle("TODAY") }
                     if (todayTasks.isEmpty()) item { Text("Nothing due today.", color = AppTheme.colors.textSecondary) }
-                    items(todayTasks, key = { "today-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") } }
+                    items(todayTasks, key = { "today-${it.id}" }) { task -> TaskCard(task, viewModel::runTask, ::beginDriveUpload) }
                     item { SectionTitle("OVERDUE") }
                     if (overdue.isEmpty()) item { Text("No overdue tasks.", color = AppTheme.colors.textSecondary) }
-                    items(overdue, key = { "overdue-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") } }
+                    items(overdue, key = { "overdue-${it.id}" }) { task -> TaskCard(task, viewModel::runTask, ::beginDriveUpload) }
                 }
                 TaskuaryPage.BOARD -> {
                     item {
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                            KanbanColumn("DRAFT", tasks.filter { it.state == TaskState.DRAFT.name }, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") }
-                            KanbanColumn("RUNNING", tasks.filter { it.state == TaskState.RUNNING.name }, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") }
-                            KanbanColumn("SUCCEEDED", tasks.filter { it.state == TaskState.SUCCEEDED.name }, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") }
+                            KanbanColumn("DRAFT", tasks.filter { it.state == TaskState.DRAFT.name }, viewModel::runTask, ::beginDriveUpload)
+                            KanbanColumn("RUNNING", tasks.filter { it.state == TaskState.RUNNING.name }, viewModel::runTask, ::beginDriveUpload)
+                            KanbanColumn("SUCCEEDED", tasks.filter { it.state == TaskState.SUCCEEDED.name }, viewModel::runTask, ::beginDriveUpload)
                         }
                     }
                     val waiting = tasks.filter { it.state == TaskState.WAITING_FOR_NETWORK.name }
                     if (waiting.isNotEmpty()) {
                         item { SectionTitle("WAITING FOR NETWORK") }
-                        items(waiting, key = { "waiting-${it.id}" }) { task -> TaskCard(task, viewModel::runTask) { taskPendingExport = it; exportLauncher.launch("${it.title}.txt") } }
+                        items(waiting, key = { "waiting-${it.id}" }) { task -> TaskCard(task, viewModel::runTask, ::beginDriveUpload) }
                     }
                 }
             }

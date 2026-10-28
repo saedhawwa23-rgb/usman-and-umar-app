@@ -233,6 +233,10 @@ dependencies {
     implementation 'com.google.dagger:hilt-android:2.60.1'
     ksp 'com.google.dagger:hilt-compiler:2.60.1'
     implementation 'androidx.hilt:hilt-navigation-compose:1.1.0'
+    // Google Identity sign-in and the narrow Drive file-scope upload flow.
+    implementation 'com.google.android.gms:play-services-auth:21.3.0'
+    implementation 'com.google.api-client:google-api-client-android:2.7.2'
+    implementation 'com.google.apis:google-api-services-drive:v3-rev20250826-2.0.0'
 
     // Networking
     // The OkHttp BOM is the single source of truth for every com.squareup.okhttp3

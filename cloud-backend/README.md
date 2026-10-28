@@ -1,8 +1,27 @@
+---
+title: USMAN AND UMAR OpenSwarm Bridge
+emoji: ⚡
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_port: 7860
+---
+
 # Cloud OpenSwarm bridge
+
+This Space is the Hugging Face deployment target for the bridge. It uses Python 3.11, the repository `Dockerfile`, and binds to port `7860` (or the `PORT` value supplied by Spaces).
 
 This FastAPI service is a thin HTTP bridge for the Android task manager. In live mode it forwards requests only to the real OpenSwarm execution endpoint configured by `OPEN_SWARM_EXECUTE_URL`; it does not use a paid model API or synthesize agent output. An explicit `ENABLE_MOCK_EXECUTION=true` switch is provided only for connection/UI testing. Mock replies are labeled as mock data, are never OpenSwarm results, and the switch is off by default.
 
-## Configure Render
+## Configure Hugging Face Spaces
+
+1. Create a new Hugging Face Space and select **Docker**, or connect this repository with `cloud-backend` as the Space root.
+2. Add `APP_CLIENT_TOKEN`, `OPEN_SWARM_EXECUTE_URL`, and optional `OPEN_SWARM_BEARER_TOKEN` as Space secrets.
+3. Keep `ENABLE_MOCK_EXECUTION=false` in production; it is only for clearly labeled connectivity tests.
+4. Verify `https://<space-subdomain>.hf.space/health` returns `{"status":"ok"}`.
+5. Enter the Space's HTTPS URL in the app's Task Manager → Cloud OpenSwarm settings.
+
+## Configure Render (legacy deployment)
 
 1. Create a Render Web Service using this repository and `cloud-backend/render.yaml` (or set the service root to `cloud-backend`). Select the free instance plan if available for your account/region.
 2. For a temporary connection test, set `ENABLE_MOCK_EXECUTION=true` in the Render service environment and redeploy. Submit a cloud task from the app. The task output will say `[MOCK RESPONSE — NOT A REAL OPENSWARM RESULT]`; this confirms Android-to-Render request/response delivery only, not an OpenSwarm run. Set this variable back to `false` or remove it after testing.

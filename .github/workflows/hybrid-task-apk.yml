@@ -1,9 +1,7 @@
 name: Build hybrid task orchestrator APK
 
 on:
-  push:
-    branches:
-      - feature/hybrid-task-orchestrator
+  workflow_dispatch:
 
 permissions:
   contents: write
