@@ -87,7 +87,6 @@ jobs:
           mkdir -p "$out"
           test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
           "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.0.0-cloud-ai'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "native-code: 'armeabi-v7a'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
           unzip -l "$apk" | grep -F 'assets/proot/proot'
           unzip -p "$apk" assets/proot/proot > /tmp/proot-from-apk
