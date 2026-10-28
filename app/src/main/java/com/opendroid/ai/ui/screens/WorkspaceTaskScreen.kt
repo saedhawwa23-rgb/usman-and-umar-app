@@ -48,7 +48,6 @@ import com.usmanandumar.workspace.core.task.LocalAiProvider
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.Scope
-import com.google.api.services.drive.DriveScopes
 import com.opendroid.ai.core.drive.GoogleDriveUploader
 import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.usmanandumar.workspace.core.task.TaskExecutionMode
@@ -116,7 +115,7 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
         taskPendingExport = task
         val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
-            .requestScopes(Scope(DriveScopes.DRIVE_FILE))
+            .requestScopes(Scope("https://www.googleapis.com/auth/drive.file"))
             .build()
         driveSignInLauncher.launch(GoogleSignIn.getClient(context, options).signInIntent)
     }
