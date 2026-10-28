@@ -44,12 +44,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.usmanandumar.workspace.core.task.LocalAiProvider
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.Scope
 import com.opendroid.ai.core.drive.GoogleDriveUploader
 import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
+import com.opendroid.ai.core.agent.InstalledAiAppPreferences
 import com.usmanandumar.workspace.core.task.TaskExecutionMode
 import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
@@ -64,7 +64,11 @@ private enum class TaskuaryPage(val label: String) { INBOX("Inbox"), DASHBOARD("
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = Modifier) {
+fun WorkspaceTaskScreen(
+    viewModel: WorkspaceTaskViewModel,
+    modifier: Modifier = Modifier,
+    onOpenDriveSettings: () -> Unit = {},
+) {
     val context = LocalContext.current
     val installedAiApps = remember(context.packageManager) {
         InstalledAiAppDiscovery.scan(context.packageManager)
@@ -76,8 +80,10 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
     val message by viewModel.message.collectAsState()
     var rawText by remember { mutableStateOf("") }
     var mode by remember { mutableStateOf(TaskExecutionMode.LOCAL_AI_APP) }
-    var provider by remember(installedAiApps) {
-        mutableStateOf(installedAiApps.firstOrNull()?.provider ?: LocalAiProvider.GROK)
+    var providerPackage by remember(installedAiApps) {
+        val saved = InstalledAiAppPreferences.selectedPackage(context)
+        mutableStateOf(installedAiApps.firstOrNull { it.packageName == saved }?.packageName
+            ?: installedAiApps.firstOrNull()?.packageName.orEmpty())
     }
     var scriptLanguage by remember { mutableStateOf("bash") }
     var page by remember { mutableStateOf(TaskuaryPage.INBOX) }
@@ -85,26 +91,29 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
     var urlDraft by remember(serverUrl) { mutableStateOf(serverUrl) }
     var taskPendingExport by remember { mutableStateOf<WorkspaceTaskEntity?>(null) }
     val scope = rememberCoroutineScope()
+    fun uploadTaskOutput(task: WorkspaceTaskEntity, account: com.google.android.gms.auth.api.signin.GoogleSignInAccount) {
+        scope.launch {
+            runCatching {
+                GoogleDriveUploader.uploadTaskOutput(
+                    context,
+                    account,
+                    taskOutputFilename(task),
+                    taskOutput(task),
+                )
+            }.onSuccess { link ->
+                Toast.makeText(context, if (link.startsWith("http")) "Saved to Google Drive" else link, Toast.LENGTH_LONG).show()
+            }.onFailure {
+                Toast.makeText(context, it.message ?: "Could not upload to Google Drive", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
     val driveSignInLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val task = taskPendingExport
         taskPendingExport = null
         if (result.resultCode == Activity.RESULT_OK && task != null) {
             GoogleSignIn.getSignedInAccountFromIntent(result.data)
                 .addOnSuccessListener { account ->
-                    scope.launch {
-                        runCatching {
-                            GoogleDriveUploader.uploadTaskOutput(
-                                context,
-                                account,
-                                "${task.title}.txt",
-                                task.notes.ifBlank { task.description },
-                            )
-                        }.onSuccess { link ->
-                            Toast.makeText(context, if (link.startsWith("http")) "Saved to Google Drive" else link, Toast.LENGTH_LONG).show()
-                        }.onFailure {
-                            Toast.makeText(context, it.message ?: "Could not upload to Google Drive", Toast.LENGTH_LONG).show()
-                        }
-                    }
+                    uploadTaskOutput(task, account)
                 }
                 .addOnFailureListener {
                     Toast.makeText(context, "Google Drive authorization failed", Toast.LENGTH_LONG).show()
@@ -112,6 +121,15 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
         }
     }
     fun beginDriveUpload(task: WorkspaceTaskEntity) {
+        if (taskOutput(task).isBlank()) {
+            Toast.makeText(context, "There is no completed task output to save yet.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val existingAccount = GoogleSignIn.getLastSignedInAccount(context)
+        if (existingAccount != null && GoogleSignIn.hasPermissions(existingAccount, Scope("https://www.googleapis.com/auth/drive.file"))) {
+            uploadTaskOutput(task, existingAccount)
+            return
+        }
         taskPendingExport = task
         val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
@@ -153,9 +171,12 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
                     ModeMenu(mode = mode, onSelect = { mode = it }, modifier = Modifier.weight(1f))
                     if (mode == TaskExecutionMode.LOCAL_AI_APP) {
                         ProviderMenu(
-                            provider = provider,
+                            providerPackage = providerPackage,
                             installedApps = installedAiApps,
-                            onSelect = { provider = it },
+                            onSelect = {
+                                providerPackage = it
+                                InstalledAiAppPreferences.setSelectedPackage(context, it)
+                            },
                             modifier = Modifier.weight(1f),
                         )
                     } else if (mode == TaskExecutionMode.TERMUX_SCRIPT) {
@@ -165,9 +186,9 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
             }
             item {
                 Button(
-                    onClick = { viewModel.createTask(rawText, mode, provider, scriptLanguage) { rawText = "" } },
+                    onClick = { viewModel.createTask(rawText, mode, providerPackage, scriptLanguage) { rawText = "" } },
                     enabled = rawText.isNotBlank() &&
-                        (mode != TaskExecutionMode.LOCAL_AI_APP || installedAiApps.any { it.provider == provider }),
+                        (mode != TaskExecutionMode.LOCAL_AI_APP || installedAiApps.any { it.packageName == providerPackage }),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     androidx.compose.material3.Icon(Icons.Default.AddTask, contentDescription = null)
@@ -178,9 +199,9 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
                 Text(
                     text = when (mode) {
                         TaskExecutionMode.LOCAL_AI_APP -> if (installedAiApps.isEmpty()) {
-                            "No supported AI chat app was found. Install Grok, ChatGPT, Gemini, or DeepSeek and reopen this screen."
+                            "No launchable apps were found. Install an AI chat app, then refresh the screen."
                         } else {
-                            "Detected ${installedAiApps.size} installed AI app(s) with PackageManager. Local AI App uses Accessibility; no model API is called."
+                            "PackageManager found ${installedAiApps.size} launchable AI-app candidate(s) from installed app names. Select Manus, Genspark, or another recognized AI client."
                         }
                         TaskExecutionMode.CLOUD_OPENSWARM -> "Cloud mode sends the full prompt to your Render server. Do not include secrets or private data."
                         TaskExecutionMode.TERMUX_SCRIPT -> "Only the explicit script text you enter is sent to Termux; ordinary task prose is never interpreted as shell."
@@ -233,12 +254,12 @@ fun WorkspaceTaskScreen(viewModel: WorkspaceTaskViewModel, modifier: Modifier = 
                     Column(Modifier.fillMaxWidth().padding(12.dp)) {
                         Text("GOOGLE DRIVE", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
                         Text(
-                            "Connect Google Drive once. Task output is uploaded automatically into USMAN_AND_UMAR_Tasks using the narrow drive.file scope.",
+                            "Connect an account in Drive settings, then save completed task output into USMAN_AND_UMAR_Tasks using drive.file access.",
                             color = AppTheme.colors.textSecondary,
                             fontSize = 12.sp,
                         )
                         Spacer(Modifier.height(6.dp))
-                        Button(onClick = { tasks.firstOrNull()?.let(::beginDriveUpload) }, enabled = tasks.isNotEmpty()) { Text("Connect Google Drive") }
+                        Button(onClick = onOpenDriveSettings) { Text("Google Drive settings") }
                     }
                 }
             }
@@ -315,19 +336,22 @@ private fun ModeMenu(mode: TaskExecutionMode, onSelect: (TaskExecutionMode) -> U
 
 @Composable
 private fun ProviderMenu(
-    provider: LocalAiProvider,
+    providerPackage: String,
     installedApps: List<InstalledAiAppDiscovery.InstalledAiApp>,
-    onSelect: (LocalAiProvider) -> Unit,
+    onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Column(modifier) {
         Button(onClick = { expanded = true }, enabled = installedApps.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
-            Text(installedApps.firstOrNull { it.provider == provider }?.displayName ?: "No AI app installed", fontSize = 12.sp)
+            Text(installedApps.firstOrNull { it.packageName == providerPackage }?.displayName ?: "No installed app", fontSize = 12.sp)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             installedApps.forEach { app ->
-                DropdownMenuItem(text = { Text(app.displayName) }, onClick = { onSelect(app.provider); expanded = false })
+                DropdownMenuItem(
+                    text = { Text(if (app.isAiCandidate) "${app.displayName} · AI candidate" else app.displayName) },
+                    onClick = { onSelect(app.packageName); expanded = false },
+                )
             }
         }
     }
@@ -380,7 +404,10 @@ private fun TaskCard(
                     Text(if (task.state == TaskState.WAITING_FOR_NETWORK.name) " Retry when online" else " Run")
                 }
             }
-            Button(onClick = { onSaveOutput(task) }) { Text("Save output to Drive") }
+            Button(
+                onClick = { onSaveOutput(task) },
+                enabled = taskOutput(task).isNotBlank(),
+            ) { Text("Save to Drive") }
         }
     }
 }
@@ -413,3 +440,12 @@ private fun modeLabel(toolId: String?): String = when {
 
 private fun startOfToday(): Long = java.time.LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
 private fun startOfTomorrow(): Long = java.time.LocalDate.now().plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+private fun taskOutput(task: WorkspaceTaskEntity): String =
+    task.notes.takeIf { task.state == TaskState.SUCCEEDED.name && it.startsWith("Execution output:") }
+        ?.removePrefix("Execution output:")
+        ?.trim()
+        .orEmpty()
+
+private fun taskOutputFilename(task: WorkspaceTaskEntity): String =
+    task.title.replace(Regex("[^A-Za-z0-9._ -]"), "_").trim().ifBlank { "task-output" } + ".txt"

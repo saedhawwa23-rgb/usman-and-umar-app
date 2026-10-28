@@ -81,7 +81,7 @@ class WorkspaceTaskViewModel @Inject constructor(
     fun createTask(
         rawText: String,
         mode: TaskExecutionMode,
-        provider: LocalAiProvider,
+        providerPackage: String,
         scriptLanguage: String = "bash",
         onSaved: () -> Unit = {},
     ) {
@@ -90,7 +90,7 @@ class WorkspaceTaskViewModel @Inject constructor(
             val parsed = TaskQuickAddParser.parse(rawText)
             val title = parsed.title.ifBlank { rawText.trim() }
             val tool = when (mode) {
-                TaskExecutionMode.LOCAL_AI_APP -> "hybrid:LOCAL_AI_APP:${provider.name}"
+                TaskExecutionMode.LOCAL_AI_APP -> "hybrid:LOCAL_AI_APP:$providerPackage"
                 TaskExecutionMode.CLOUD_OPENSWARM -> "hybrid:CLOUD_OPENSWARM"
                 TaskExecutionMode.TERMUX_SCRIPT -> "hybrid:TERMUX_SCRIPT:${scriptLanguage.lowercase()}"
             }
@@ -226,18 +226,24 @@ class WorkspaceTaskViewModel @Inject constructor(
     }
 
     private fun executeLocalAi(task: WorkspaceTaskEntity) {
-        val providerName = task.toolId.orEmpty().substringAfterLast(':')
-        val provider = LocalAiProvider.entries.firstOrNull { it.name == providerName }
-            ?: error("Select Grok, ChatGPT, Gemini, or DeepSeek before running this task.")
+        val storedTarget = task.toolId.orEmpty().substringAfterLast(':')
+        val packageName = LocalAiProvider.entries.firstOrNull { it.name == storedTarget }?.packageName ?: storedTarget
+        require(packageName.isNotBlank()) { "Select an installed AI app before running this task." }
+        @Suppress("DEPRECATION")
+        val appInfo = runCatching { context.packageManager.getApplicationInfo(packageName, 0) }
+            .getOrElse { error("The selected app is no longer installed. Select another installed AI app.") }
+        val appLabel = runCatching { context.packageManager.getApplicationLabel(appInfo).toString() }
+            .getOrDefault(packageName)
         val started = OpenDroidAccessibilityService.startLocalAiTask(
             taskId = task.id,
-            provider = provider,
+            packageName = packageName,
+            appLabel = appLabel,
             prompt = promptOf(task),
         )
         check(started) {
-            "Accessibility automation is not connected. Enable USMAN AND UMAR's Accessibility service, install ${provider.label}, and retry."
+            "Accessibility automation is not connected, or $appLabel has no launchable activity. Enable the service and retry."
         }
-        _message.value = "${provider.label} opened. Waiting for its real response and Termux result."
+        _message.value = "$appLabel opened. Waiting for its real response."
     }
 
     private fun modeOf(task: WorkspaceTaskEntity): TaskExecutionMode? = when {

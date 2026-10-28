@@ -30,7 +30,6 @@ import com.opendroid.ai.core.service.OpenDroidService
 import com.opendroid.ai.data.repository.SettingsRepository
 import com.opendroid.ai.data.repository.WorkspaceTaskRepository
 import com.opendroid.ai.core.termux.TermuxIntegration
-import com.usmanandumar.workspace.core.task.LocalAiProvider
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -354,7 +353,8 @@ class OpenDroidAccessibilityService : AccessibilityService() {
 
     private data class LocalAiRequest(
         val taskId: String,
-        val provider: LocalAiProvider,
+        val packageName: String,
+        val appLabel: String,
         val prompt: String,
         val startedAt: Long = android.os.SystemClock.elapsedRealtime(),
         var sent: Boolean = false,
@@ -365,10 +365,10 @@ class OpenDroidAccessibilityService : AccessibilityService() {
         var finished: Boolean = false,
     )
 
-    private fun beginLocalAiTask(taskId: String, provider: LocalAiProvider, prompt: String): Boolean {
+    private fun beginLocalAiTask(taskId: String, packageName: String, appLabel: String, prompt: String): Boolean {
         if (activeLocalAiRequest != null || prompt.isBlank()) return false
-        val launchIntent = packageManager.getLaunchIntentForPackage(provider.packageName) ?: return false
-        val request = LocalAiRequest(taskId, provider, prompt)
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: return false
+        val request = LocalAiRequest(taskId, packageName, appLabel, prompt)
         activeLocalAiRequest = request
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         return try {
@@ -383,7 +383,7 @@ class OpenDroidAccessibilityService : AccessibilityService() {
 
     private fun handleLocalAiAccessibilityEvent(event: AccessibilityEvent) {
         val request = activeLocalAiRequest ?: return
-        if (request.finished || event.packageName?.toString() != request.provider.packageName) return
+        if (request.finished || event.packageName?.toString() != request.packageName) return
         if (!request.sent && !request.sending) {
             localAiHandler.removeCallbacks(promptEntryRunnable)
             localAiHandler.postDelayed({ enterPromptAndSend(request) }, 350)
@@ -399,7 +399,7 @@ class OpenDroidAccessibilityService : AccessibilityService() {
     private fun enterPromptAndSend(request: LocalAiRequest) {
         if (activeLocalAiRequest !== request || request.finished || request.sent || request.sending) return
         if (android.os.SystemClock.elapsedRealtime() - request.startedAt > 75_000) {
-            finishLocalAi(request, null, "Timed out waiting for an editable field in ${request.provider.label}.")
+            finishLocalAi(request, null, "Timed out waiting for an editable field in ${request.appLabel}.")
             return
         }
         val root = rootInActiveWindow ?: run {
@@ -486,7 +486,7 @@ class OpenDroidAccessibilityService : AccessibilityService() {
 
     private suspend fun executeReturnedCode(request: LocalAiRequest, response: String) {
         val blocks = Regex("(?is)```(bash|sh|python|py)\\s*\\n(.*?)```").findAll(response).toList()
-        val output = StringBuilder("Captured response from ${request.provider.label}:\n").append(response.take(16_000))
+        val output = StringBuilder("Captured response from ${request.appLabel}:\n").append(response.take(16_000))
         if (blocks.isNotEmpty() && !settingsRepository.autoRunGeneratedCode.first()) {
             output.append("\n\nAI code blocks were NOT executed. Review the code, then enable the explicit high-risk auto-run setting to allow future AI tasks to send code to Termux.")
             finishLocalAi(request, output.toString().take(20_000), null, awaitingReview = true)
@@ -519,7 +519,7 @@ class OpenDroidAccessibilityService : AccessibilityService() {
     }
 
     private fun isSelectedAiApp(root: AccessibilityNodeInfo, request: LocalAiRequest): Boolean =
-        root.packageName?.toString() == request.provider.packageName
+        root.packageName?.toString() == request.packageName
 
     private fun finishLocalAi(request: LocalAiRequest, output: String?, error: String?, awaitingReview: Boolean = false) {
         if (request.finished) return
@@ -905,7 +905,7 @@ class OpenDroidAccessibilityService : AccessibilityService() {
 
         fun getInstance(): OpenDroidAccessibilityService? = instance
 
-        fun startLocalAiTask(taskId: String, provider: LocalAiProvider, prompt: String): Boolean =
-            instance?.beginLocalAiTask(taskId, provider, prompt) ?: false
+        fun startLocalAiTask(taskId: String, packageName: String, appLabel: String, prompt: String): Boolean =
+            instance?.beginLocalAiTask(taskId, packageName, appLabel, prompt) ?: false
     }
 }

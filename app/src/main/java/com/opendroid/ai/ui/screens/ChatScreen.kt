@@ -77,7 +77,9 @@ import com.opendroid.ai.ui.components.ContactPickerCard
 import com.opendroid.ai.ui.theme.*
 import com.opendroid.ai.ui.viewmodel.ChatViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -120,21 +122,34 @@ fun ChatScreen(
     var thinkEnabled by remember { mutableStateOf(false) }
     var searchEnabled by remember { mutableStateOf(false) }
     var showAttachmentSheet by remember { mutableStateOf(false) }
-    var selectedAttachment by remember { mutableStateOf<Uri?>(null) }
+    var selectedAttachment by remember { mutableStateOf<PendingChatAttachment?>(null) }
+    var attachmentToRead by remember { mutableStateOf<Pair<Uri, Boolean>?>(null) }
     var messageForActions by remember { mutableStateOf<ChatMessage?>(null) }
 
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
-    ) { uri -> uri?.let { selectedAttachment = it } }
+    ) { uri -> uri?.let { attachmentToRead = it to false } }
     val documentLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
-    ) { uri -> uri?.let { selectedAttachment = it } }
+    ) { uri -> uri?.let { attachmentToRead = it to true } }
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicturePreview()
     ) { bitmap ->
         if (bitmap != null) {
-            selectedAttachment = Uri.parse("camera://captured-photo")
+            runCatching { bitmapToBase64(bitmap) }
+                .onSuccess { selectedAttachment = PendingChatAttachment("camera-photo.jpg", imageBase64 = it) }
+                .onFailure { Toast.makeText(context, "The camera photo could not be attached.", Toast.LENGTH_LONG).show() }
         }
+    }
+
+    LaunchedEffect(attachmentToRead) {
+        val pending = attachmentToRead ?: return@LaunchedEffect
+        val result = runCatching {
+            withContext(Dispatchers.IO) { readChatAttachment(context, pending.first, pending.second) }
+        }
+        result.onSuccess { selectedAttachment = it }
+            .onFailure { Toast.makeText(context, it.message ?: "The attachment could not be read.", Toast.LENGTH_LONG).show() }
+        attachmentToRead = null
     }
 
     // Merges a piece of dictated text into whatever the user already typed, so review/edit
@@ -169,23 +184,34 @@ fun ChatScreen(
     // Single submit path for both a normal send and an edit-resend, wired to both the
     // keyboard "Send" action and the send button below.
     fun submitInput() {
-        val attachmentText = selectedAttachment?.let { "\n[Attachment: $it]" }.orEmpty()
+        val attachment = selectedAttachment
+        val attachmentText = when {
+            attachment == null -> ""
+            attachment.imageBase64 != null -> if (inputQuery.isBlank()) {
+                "Please analyze the attached image (${attachment.displayName})."
+            } else {
+                "\n[Attached image: ${attachment.displayName}]"
+            }
+            else -> "\n\n[Attached document: ${attachment.displayName}]\n${attachment.textContent.orEmpty()}"
+        }
         val modeInstructions = buildString {
             if (thinkEnabled) append("\n[Use deeper internal reasoning before answering; do not reveal private chain-of-thought.]\n")
             if (searchEnabled) append("\n[Use the web-search capability when current or externally verifiable information is needed.]\n")
         }
         val text = inputQuery + attachmentText + modeInstructions
-        if (text.isBlank()) return
+        if (inputQuery.isBlank() && attachment == null) return
         val editing = editingMessageId
         if (editing != null) {
-            viewModel.editAndResend(editing, text, context)
+            viewModel.editAndResend(editing, text, context, attachment?.imageBase64)
             editingMessageId = null
             textBeforeEdit = ""
         } else {
-            viewModel.sendMessage(text, context)
+            viewModel.sendMessage(text, context, attachment?.imageBase64)
         }
         inputQuery = ""
         selectedAttachment = null
+        thinkEnabled = false
+        searchEnabled = false
     }
 
     // Scroll to bottom on history change. Keyed on currentSessionId too: keying on
@@ -548,8 +574,17 @@ fun ChatScreen(
                             onClick = { searchEnabled = !searchEnabled },
                             label = { Text("Search", fontSize = 11.sp) }
                         )
-                        selectedAttachment?.let {
-                            Text("Attachment ready", color = AccentCyan, fontSize = 11.sp)
+                        selectedAttachment?.let { attachment ->
+                            Text(
+                                "Attached: ${attachment.displayName}",
+                                color = AccentCyan,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(onClick = { selectedAttachment = null }, modifier = Modifier.size(28.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "Remove attachment", tint = TextSecondary)
+                            }
                         }
                     }
                     Row(
@@ -654,7 +689,7 @@ fun ChatScreen(
                         }
 
                         AnimatedVisibility(
-                            visible = !isListening && inputQuery.isNotBlank(),
+                            visible = !isListening && (inputQuery.isNotBlank() || selectedAttachment != null),
                             enter = fadeIn(animationSpec = tween(150)) + scaleIn(initialScale = 0.8f),
                             exit = fadeOut(animationSpec = tween(150)) + scaleOut(targetScale = 0.8f)
                         ) {
@@ -759,9 +794,9 @@ fun ChatScreen(
                 showAttachmentSheet = false
                 galleryLauncher.launch("image/*")
             }
-            AttachmentOption("Document", Icons.Default.Description) {
+            AttachmentOption("Document (text, CSV, JSON, XML)", Icons.Default.Description) {
                 showAttachmentSheet = false
-                documentLauncher.launch(arrayOf("*/*"))
+                documentLauncher.launch(arrayOf("text/*", "application/json", "application/xml", "application/csv"))
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -982,8 +1017,8 @@ fun ChatBubble(
                             )
                             Text(
                                 text = when (toolCall.action) {
-                                    "shell" -> "Only supported Android actions run natively. Python/Git/npm/Node explicitly route through Termux."
-                                    "open_app", "launch_app", "open_url", "open_uri", "pm_list_packages", "list_packages" -> "Uses Android PackageManager or an Android Intent after your approval."
+                                    "shell" -> "Only allow-listed read-only Android queries and app/URL intents run natively. No arbitrary shell is started; Python/Git/npm/Node explicitly route through Termux."
+                                    "open_app", "launch_app", "open_url", "open_uri", "pm_list_packages", "list_packages", "device_info", "android_device_info", "battery_status", "get_battery_status", "network_status", "get_network_status", "screen_brightness" -> "Uses Android PackageManager or read-only Android APIs after your approval."
                                     else -> "This action is unsupported and will return an error without executing."
                                 },
                                 color = TextSecondary,

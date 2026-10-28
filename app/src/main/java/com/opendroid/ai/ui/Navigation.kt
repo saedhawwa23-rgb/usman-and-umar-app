@@ -59,6 +59,7 @@ object OpenDroidRoutes {
     const val DISCOVERY = "discovery"
     const val GITHUB_DISCOVERY = "github_discovery"
     const val TERMUX = "termux"
+    const val GOOGLE_DRIVE = "google_drive"
     const val UNIVERSAL_AGENT = "universal_agent"
 }
 
@@ -186,6 +187,9 @@ fun OpenDroidNavigation(
                 },
                 onNavigateToUniversalAgent = {
                     navController.navigate(OpenDroidRoutes.UNIVERSAL_AGENT)
+                },
+                onNavigateToGoogleDrive = {
+                    navController.navigate(OpenDroidRoutes.GOOGLE_DRIVE)
                 }
             )
         }
@@ -318,6 +322,10 @@ fun OpenDroidNavigation(
         composable(OpenDroidRoutes.UNIVERSAL_AGENT) {
             UniversalAgentScreen()
         }
+
+        composable(OpenDroidRoutes.GOOGLE_DRIVE) {
+            GoogleDriveSettingsScreen(onBack = { navController.popBackStack() })
+        }
     }
 }
 
@@ -350,6 +358,7 @@ fun MainDashboard(
     onNavigateToGitHubDiscovery: () -> Unit = {},
     onNavigateToTermux: () -> Unit = {},
     onNavigateToUniversalAgent: () -> Unit = {},
+    onNavigateToGoogleDrive: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -466,7 +475,10 @@ fun MainDashboard(
             ) { tab ->
                 when (tab) {
                     Screen.Chat -> ChatScreen(viewModel = chatViewModel)
-                    Screen.TaskManager -> WorkspaceTaskScreen(viewModel = workspaceTaskViewModel)
+                    Screen.TaskManager -> WorkspaceTaskScreen(
+                        viewModel = workspaceTaskViewModel,
+                        onOpenDriveSettings = onNavigateToGoogleDrive,
+                    )
                     Screen.Plan -> PlanScreen(viewModel = planViewModel)
                     Screen.Memory -> MemoryScreen(viewModel = memoryViewModel)
                     Screen.Social -> SocialScreen(viewModel = socialViewModel)
@@ -496,7 +508,8 @@ fun MainDashboard(
                         onNavigateToRoutines = onNavigateToRoutines,
                         onNavigateToDiscovery = onNavigateToDiscovery,
                         onNavigateToGitHubDiscovery = onNavigateToGitHubDiscovery,
-                        onNavigateToTermux = onNavigateToTermux
+                        onNavigateToTermux = onNavigateToTermux,
+                        onNavigateToGoogleDrive = onNavigateToGoogleDrive,
                     )
                 }
             }

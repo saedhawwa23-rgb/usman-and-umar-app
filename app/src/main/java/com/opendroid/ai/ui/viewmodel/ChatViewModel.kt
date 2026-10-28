@@ -5,7 +5,11 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
 import android.os.Build
+import android.provider.Settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.opendroid.ai.core.agent.AgentLoop
@@ -170,10 +174,10 @@ class ChatViewModel @Inject constructor(
         return sessionId
     }
 
-    fun sendMessage(query: String, context: Context) {
+    fun sendMessage(query: String, context: Context, imageBase64: String? = null) {
         if (query.isBlank()) return
         val sessionId = pinTaskSessionSnapshot()
-        agentLoop.processQuery(query, context, sessionId)
+        agentLoop.processQuery(query, context, sessionId, imageBase64)
     }
 
     /** Runs only after the user presses the per-message approval button. */
@@ -205,6 +209,17 @@ class ChatViewModel @Inject constructor(
                         "Native PackageManager result (${apps.size} package(s)):\n" +
                             apps.take(500).joinToString("\n").ifBlank { "No packages found." }
                     }
+                    command in setOf("getprop ro.build.version.release", "getprop ro.build.version.sdk", "getprop ro.product.model") ->
+                        nativeDeviceProperty(command)
+                    command == "dumpsys battery" -> nativeBatteryStatus(context)
+                    command == "settings get system screen_brightness" -> {
+                        val value = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
+                        "Screen brightness setting: ${if (value >= 0) value else "unavailable"} (0–255 scale)."
+                    }
+                    command == "wm size" -> {
+                        val metrics = context.resources.displayMetrics
+                        "Current app display metrics: ${metrics.widthPixels} x ${metrics.heightPixels} pixels."
+                    }
                     Regex("^(python3?|python[0-9.]*|git|npm|node)(?:\\s|$)", RegexOption.IGNORE_CASE).containsMatchIn(command) -> {
                         require(!Regex("[;&|<>`\\n\\r$]").containsMatchIn(command)) {
                             "Only one simple Linux command may be approved at a time; shell chaining and redirection are blocked."
@@ -215,7 +230,7 @@ class ChatViewModel @Inject constructor(
                         openInstalledApp(context, command.substringAfter("open app ").trim())
                     command.startsWith("open url ", ignoreCase = true) ->
                         openUrl(context, command.substringAfter("open url ").trim())
-                    else -> error("Unsupported shell action. Native mode supports only 'pm list packages', 'open app …', and 'open url …'. Python/Git/npm/Node tasks require Termux.")
+                    else -> error("Unsupported shell action. Native mode supports read-only Android queries, 'pm list packages', 'open app …', and 'open url …'. Python/Git/npm/Node tasks require Termux.")
                 }
             }
             "pm_list_packages", "list_packages" -> {
@@ -233,8 +248,53 @@ class ChatViewModel @Inject constructor(
                 require(!url.isNullOrBlank()) { "Specify an HTTP or HTTPS URL." }
                 openUrl(context, url)
             }
+            "device_info", "android_device_info" -> nativeDeviceProperty("getprop ro.build.version.release")
+            "battery_status", "get_battery_status" -> nativeBatteryStatus(context)
+            "network_status", "get_network_status" -> nativeNetworkStatus(context)
+            "screen_brightness" -> {
+                val value = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
+                "Screen brightness setting: ${if (value >= 0) value else "unavailable"} (0–255 scale)."
+            }
             else -> error("Unsupported tool action '${call.action}'. No action was executed.")
         }
+    }
+
+    private fun nativeDeviceProperty(command: String): String = when (command) {
+        "getprop ro.build.version.release" -> "Android release: ${Build.VERSION.RELEASE}."
+        "getprop ro.build.version.sdk" -> "Android API level: ${Build.VERSION.SDK_INT}."
+        "getprop ro.product.model" -> "Device model: ${Build.MANUFACTURER} ${Build.MODEL}."
+        else -> error("Unsupported Android property query.")
+    }
+
+    private fun nativeBatteryStatus(context: Context): String {
+        val manager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            ?: error("Battery status is unavailable on this device.")
+        val percent = manager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val status = manager.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS)
+        val statusLabel = when (status) {
+            BatteryManager.BATTERY_STATUS_CHARGING -> "charging"
+            BatteryManager.BATTERY_STATUS_DISCHARGING -> "discharging"
+            BatteryManager.BATTERY_STATUS_FULL -> "full"
+            BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "not charging"
+            else -> "unknown status"
+        }
+        return "Battery: ${if (percent in 0..100) "$percent%" else "unavailable"}, $statusLabel."
+    }
+
+    private fun nativeNetworkStatus(context: Context): String {
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: error("Network status is unavailable on this device.")
+        val network = connectivity.activeNetwork ?: return "No active network connection."
+        val capabilities = connectivity.getNetworkCapabilities(network)
+            ?: return "An active network is present, but its capabilities could not be read."
+        val transport = when {
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+            else -> "other"
+        }
+        val validated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        return "Active network: $transport; internet validated: ${if (validated) "yes" else "no"}."
     }
 
     private fun installedApplications(packageManager: PackageManager): List<ApplicationInfo> =
@@ -294,14 +354,14 @@ class ChatViewModel @Inject constructor(
      * current session so the conversation visibly rewinds, then sends the edited text
      * as a fresh query.
      */
-    fun editAndResend(messageId: String, newText: String, context: Context) {
+    fun editAndResend(messageId: String, newText: String, context: Context, imageBase64: String? = null) {
         if (newText.isBlank()) return
         agentLoop.cancelCurrentTask()
         viewModelScope.launch {
             val sessionId = conversationRepository.ensureCurrentSessionId()
             conversationRepository.deleteMessageAndAfter(sessionId, messageId)
             _taskSessionId.value = sessionId
-            agentLoop.processQuery(newText, context, sessionId)
+            agentLoop.processQuery(newText, context, sessionId, imageBase64)
         }
     }
 

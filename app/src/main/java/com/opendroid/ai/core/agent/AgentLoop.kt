@@ -218,7 +218,12 @@ class AgentLoop @Inject constructor(
      * pre-multi-session behavior: a null session is always assumed to answer whatever
      * prompt is currently pending, and otherwise falls back to resolving "current".
      */
-    fun processQuery(query: String, context: Context, explicitSessionId: String? = null) {
+    fun processQuery(
+        query: String,
+        context: Context,
+        explicitSessionId: String? = null,
+        attachmentImageBase64: String? = null,
+    ) {
         // processQuery is also the delivery path for a reply to a pending
         // awaitUserResponse() prompt (see below). That's ONLY true when this message comes
         // from the SAME session the waiting task is pinned to (waitingSessionId) - a
@@ -273,7 +278,7 @@ class AgentLoop @Inject constructor(
                 // Only capture the screen when the query actually asks about it.
                 // Attaching a screenshot to every request would silently send
                 // whatever is on screen (messages, banking apps, ...) to the LLM.
-                val screenshotBase64 = if (needsScreenContext(query)) {
+                val screenshotBase64 = if (attachmentImageBase64 == null && needsScreenContext(query)) {
                     com.opendroid.ai.accessibility.OpenDroidAccessibilityService.getInstance()?.takeScreenshotAndEncode()
                 } else {
                     null
@@ -285,7 +290,7 @@ class AgentLoop @Inject constructor(
                     text = query,
                     sender = ChatMessage.Sender.USER,
                     modelBadge = null,
-                    imageBase64 = screenshotBase64
+                    imageBase64 = attachmentImageBase64 ?: screenshotBase64
                 )
                 memoryManager.storeMessage(userMsg, sessionId)
                 conversationRepository.insertMessage(sessionId, userMsg)

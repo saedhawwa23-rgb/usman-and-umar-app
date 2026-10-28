@@ -39,6 +39,8 @@ import com.opendroid.ai.data.models.effectiveGrantedActions
 import com.opendroid.ai.data.models.resolvedAutoMode
 import com.opendroid.ai.core.llm.ConnectionTestState
 import com.opendroid.ai.core.llm.error.LLMError
+import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
+import com.opendroid.ai.core.agent.InstalledAiAppPreferences
 import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
 import com.opendroid.ai.data.repository.ProviderCredentialPersistenceState
 import com.opendroid.ai.ui.theme.*
@@ -74,12 +76,23 @@ fun SettingsScreen(
     onNavigateToDiscovery: () -> Unit = {},
     onNavigateToGitHubDiscovery: () -> Unit = {},
     onNavigateToTermux: () -> Unit = {},
+    onNavigateToGoogleDrive: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val config by viewModel.llmConfig.collectAsState()
     val connectionResults by viewModel.connectionResults.collectAsState()
     val providerCredentialRecoveryState by viewModel.providerCredentialRecoveryState.collectAsState()
     val providerCredentialPersistenceState by viewModel.providerCredentialPersistenceState.collectAsState()
+    val installedAiApps = remember(context.packageManager) {
+        InstalledAiAppDiscovery.scan(context.packageManager)
+    }
+    var installedAppsExpanded by remember { mutableStateOf(false) }
+    var selectedLocalAppPackage by remember(installedAiApps) {
+        val saved = InstalledAiAppPreferences.selectedPackage(context)
+        mutableStateOf(installedAiApps.firstOrNull { it.packageName == saved }?.packageName
+            ?: installedAiApps.firstOrNull()?.packageName.orEmpty())
+    }
 
     val providers = listOf(
         "Google Gemini",
@@ -192,6 +205,69 @@ fun SettingsScreen(
                                 fontSize = 12.sp,
                                 color = TextSecondary
                             )
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().clickable { onNavigateToGoogleDrive() },
+                    colors = CardDefaults.cardColors(containerColor = CardBackground)
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        Text("GOOGLE DRIVE", fontWeight = FontWeight.Bold, color = AccentCyan)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Connect or switch the Google account used to save completed task outputs.",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = onNavigateToGoogleDrive) { Text("Open Drive settings") }
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground)
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        Text("INSTALLED AI APP", fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace, color = AccentCyan)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "PackageManager scans installed launchable apps and discovers likely AI clients from their labels/package names, rather than a fixed package list. Manus, Genspark, and other matching clients can be selected.",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Box {
+                            OutlinedButton(
+                                onClick = { installedAppsExpanded = true },
+                                enabled = installedAiApps.isNotEmpty(),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(installedAiApps.firstOrNull { it.packageName == selectedLocalAppPackage }?.displayName
+                                    ?: "No launchable apps found")
+                            }
+                            DropdownMenu(
+                                expanded = installedAppsExpanded,
+                                onDismissRequest = { installedAppsExpanded = false },
+                            ) {
+                                installedAiApps.forEach { app ->
+                                    DropdownMenuItem(
+                                        text = { Text(if (app.isAiCandidate) "${app.displayName} · AI candidate" else app.displayName) },
+                                        onClick = {
+                                            selectedLocalAppPackage = app.packageName
+                                            InstalledAiAppPreferences.setSelectedPackage(context, app.packageName)
+                                            installedAppsExpanded = false
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
