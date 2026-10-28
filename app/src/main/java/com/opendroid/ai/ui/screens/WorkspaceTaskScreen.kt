@@ -203,7 +203,7 @@ fun WorkspaceTaskScreen(
                         } else {
                             "PackageManager found ${installedAiApps.size} launchable AI-app candidate(s) from installed app names. Select Manus, Genspark, or another recognized AI client."
                         }
-                        TaskExecutionMode.CLOUD_OPENSWARM -> "Cloud mode sends the full prompt to your Render server. Do not include secrets or private data."
+                        TaskExecutionMode.CLOUD_OPENSWARM -> "Cloud mode sends the full prompt to your configured backend. Do not include secrets or private data."
                         TaskExecutionMode.TERMUX_SCRIPT -> "Only the explicit script text you enter is sent to Termux; ordinary task prose is never interpreted as shell."
                     },
                     color = AppTheme.colors.textSecondary,
@@ -216,7 +216,7 @@ fun WorkspaceTaskScreen(
                         Text("CLOUD OPENSWARM SETTINGS", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
                         Spacer(Modifier.height(4.dp))
                         Button(onClick = { settingsExpanded = !settingsExpanded }) {
-                            Text(if (settingsExpanded) "Hide server settings" else "Configure Render server")
+                            Text(if (settingsExpanded) "Hide server settings" else "Configure cloud backend")
                         }
                         if (settingsExpanded) {
                             OutlinedTextField(
@@ -224,8 +224,8 @@ fun WorkspaceTaskScreen(
                                 onValueChange = { urlDraft = it },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true,
-                                label = { Text("Render HTTPS base URL") },
-                                placeholder = { Text("https://your-service.onrender.com") },
+                                label = { Text("Cloud Backend URL") },
+                                placeholder = { Text("https://your-cloud-backend.example") },
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(onClick = { viewModel.saveOpenSwarmServerUrl(urlDraft) }) { Text("Save URL") }
@@ -239,7 +239,7 @@ fun WorkspaceTaskScreen(
                                 singleLine = true,
                                 visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                                 label = { Text("APP_CLIENT_TOKEN") },
-                                supportingText = { Text("Match the Render secret. Stored with Android Keystore encryption.") },
+                                supportingText = { Text("Match APP_CLIENT_TOKEN configured as a backend secret. Stored with Android Keystore encryption.") },
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(onClick = { viewModel.saveOpenSwarmClientToken(tokenDraft) }) { Text("Save token") }

@@ -17,6 +17,12 @@ class BearerAuthenticationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await self.client.aclose()
 
+    async def test_root_and_health_are_available_without_backend_secrets(self) -> None:
+        for path in ("/", "/health"):
+            response = await self.client.get(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["status"], "ok")
+
     async def post_execute(self, authorization: str | None = None) -> httpx.Response:
         headers = {"Authorization": authorization} if authorization else {}
         return await self.client.post(

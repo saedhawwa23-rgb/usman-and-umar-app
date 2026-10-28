@@ -1,13 +1,19 @@
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PORT=7860
+ENV HOME=/home/user \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
+RUN useradd --create-home --uid 1000 user
 WORKDIR /app
-COPY requirements.txt ./
-RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
-COPY main.py ./
+
+COPY --chown=user:user requirements.txt ./
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir -r requirements.txt
+
+COPY --chown=user:user main.py ./
 
 EXPOSE 7860
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-7860}"]
+USER user
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]

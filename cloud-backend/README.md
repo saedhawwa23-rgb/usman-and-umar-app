@@ -7,42 +7,58 @@ sdk: docker
 app_port: 7860
 ---
 
-# Cloud OpenSwarm bridge
+# USMAN AND UMAR OpenSwarm Bridge
 
-This Space is the Hugging Face deployment target for the bridge. It uses Python 3.11, the repository `Dockerfile`, and binds to port `7860` (or the `PORT` value supplied by Spaces).
+This is a Dockerized FastAPI bridge for the Android task manager. Hugging Face Spaces reads the Docker SDK metadata from the YAML block above and expects the Space's `README.md` and `Dockerfile` at the root of the Space repository. In this project, those deployment files live under `cloud-backend/`.
 
-This FastAPI service is a thin HTTP bridge for the Android task manager. In live mode it forwards requests only to the real OpenSwarm execution endpoint configured by `OPEN_SWARM_EXECUTE_URL`; it does not use a paid model API or synthesize agent output. An explicit `ENABLE_MOCK_EXECUTION=true` switch is provided only for connection/UI testing. Mock replies are labeled as mock data, are never OpenSwarm results, and the switch is off by default.
+**This bridge does not install or run the OpenSwarm agent.** In live mode it forwards `{"task_id":"...","prompt":"..."}` to an existing OpenSwarm execution API configured by `OPEN_SWARM_EXECUTE_URL`. That upstream service must already be running and reachable over HTTPS. Hosting this bridge on a Space does not move the agent runtime or model onto that Space. The optional mock mode is for connection testing only and never represents real OpenSwarm output.
 
-## Configure Hugging Face Spaces
+## Deploy to Hugging Face Spaces
 
-1. Create a new Hugging Face Space and select **Docker**, or connect this repository with `cloud-backend` as the Space root.
-2. Add `APP_CLIENT_TOKEN`, `OPEN_SWARM_EXECUTE_URL`, and optional `OPEN_SWARM_BEARER_TOKEN` as Space secrets.
-3. Keep `ENABLE_MOCK_EXECUTION=false` in production; it is only for clearly labeled connectivity tests.
-4. Verify `https://<space-subdomain>.hf.space/health` returns `{"status":"ok"}`.
-5. Enter the Space's HTTPS URL in the app's Task Manager → Cloud OpenSwarm settings.
+1. Create a Space and choose **Docker** as its SDK. The Space's Docker build context is its repository root, so do not point the Docker build at this Android repository's top-level directory.
+2. Clone the new Space repository and copy the contents of this project's `cloud-backend/` directory into the Space repository root. Include `Dockerfile`, `README.md`, `main.py`, and `requirements.txt`; do not copy a local `.env` file.
 
-## Configure Render (legacy deployment)
+   ```sh
+   git clone https://huggingface.co/spaces/<owner>/<space-name>.git hf-space
+   cp cloud-backend/Dockerfile cloud-backend/README.md cloud-backend/main.py cloud-backend/requirements.txt hf-space/
+   cd hf-space
+   git add Dockerfile README.md main.py requirements.txt
+   git commit -m "Deploy OpenSwarm bridge"
+   git push
+   ```
 
-1. Create a Render Web Service using this repository and `cloud-backend/render.yaml` (or set the service root to `cloud-backend`). Select the free instance plan if available for your account/region.
-2. For a temporary connection test, set `ENABLE_MOCK_EXECUTION=true` in the Render service environment and redeploy. Submit a cloud task from the app. The task output will say `[MOCK RESPONSE — NOT A REAL OPENSWARM RESULT]`; this confirms Android-to-Render request/response delivery only, not an OpenSwarm run. Set this variable back to `false` or remove it after testing.
-3. For live execution, set `OPEN_SWARM_EXECUTE_URL` to the HTTPS URL of the actual OpenSwarm execution API, including its required path. This integration forwards JSON shaped as `{"task_id":"...","prompt":"..."}`. The OpenSwarm endpoint must accept that request shape; adapt this single forwarding point if your installation uses a different contract.
-4. Set `APP_CLIENT_TOKEN` in Render and enter the same value in the app's Cloud OpenSwarm settings. The app stores its copy using Android Keystore-backed encrypted credentials. Never commit or publish this token.
-5. Set `OPEN_SWARM_BEARER_TOKEN` only if your OpenSwarm server requires bearer authentication. Render stores it as an environment secret; do not put it in the app, Git, or the Render URL.
-6. Deploy. Verify `GET https://<your-render-host>/health` returns `{"status":"ok"}`.
-7. In USMAN AND UMAR → Task Orchestrator → Configure Render server, save the base HTTPS URL (without `/execute`) and the client token. The Android app posts to `/execute` and waits up to 65 seconds.
+   The Space's root `README.md` must retain the `sdk: docker` and `app_port: 7860` metadata shown at the top of this file. See the [Docker Spaces guide](https://huggingface.co/docs/hub/en/spaces-sdks-docker) and [Spaces configuration reference](https://huggingface.co/docs/hub/en/spaces-config-reference).
+3. In the Space's **Settings → Variables and secrets**, add `APP_CLIENT_TOKEN` as a secret. Set it to a strong random value and enter the same value in the Android app. Add `OPEN_SWARM_EXECUTE_URL` as a secret or variable containing the full HTTPS URL of the real OpenSwarm execution endpoint, including its path. Add `OPEN_SWARM_BEARER_TOKEN` as a secret only if the upstream API requires bearer authentication.
+4. Leave `ENABLE_MOCK_EXECUTION` unset or set it to `false` for real use. Setting it to `true` returns an explicitly marked mock response and bypasses the upstream API; it must not be used to claim that an agent ran.
+5. Wait for the Space build and container to start. Visit `https://<owner>-<space-name>.hf.space/health`; a healthy bridge returns `{"status":"ok"}`. `GET /` also returns basic service status. These checks confirm that the bridge process is running, not that the separate OpenSwarm API is reachable.
+6. In USMAN AND UMAR → Task Orchestrator → Cloud OpenSwarm settings, enter the Space's HTTPS base URL in **Cloud Backend URL** and save the matching `APP_CLIENT_TOKEN`. Enter the base URL only; the Android app appends `/execute`.
 
-`/execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and limits each source IP to 20 requests per minute per instance. A missing `APP_CLIENT_TOKEN` or, in live mode, a missing `OPEN_SWARM_EXECUTE_URL` produces an intentional JSON HTTP 503 configuration error. Unexpected endpoint errors are logged in Render and returned as a generic JSON HTTP 500; the server does not return internal exception details to the app. The Render free tier may sleep between requests, so the first live request can take longer or time out. `GET /health` is a process health check, not proof that OpenSwarm is reachable.
+The old `render.yaml` in this directory is not used by Hugging Face Spaces. Spaces uses the root-level Dockerfile and README metadata instead.
+
+## Configuration and behavior
+
+`POST /execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>`. The bridge permits up to 20 requests per source IP per minute in one process. The counter is in memory and resets when that process restarts. In live mode, missing `APP_CLIENT_TOKEN` or `OPEN_SWARM_EXECUTE_URL` produces a JSON HTTP 503 configuration error. The bridge rejects upstream URLs that are not HTTPS or that contain embedded credentials. Upstream calls time out after 55 seconds; the Android client waits up to 65 seconds. Errors are logged to the Space container logs and returned without exposing exception details.
+
+The bridge is stateless and does not persist task data to its container filesystem. Hugging Face documents that free Spaces can sleep when idle and that available hardware, RAM, pricing, and account requirements depend on the selected Space configuration. Check the current [Spaces overview and hardware details](https://huggingface.co/docs/hub/en/spaces-overview) in your account; do not assume that a particular RAM amount or free runtime is available for every account.
 
 ## Local development
 
+From the project root:
+
 ```sh
-cd cloud-backend
-python -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-export APP_CLIENT_TOKEN='test-only-local-token'
-export ENABLE_MOCK_EXECUTION=true
-uvicorn main:app --reload --port 8000
+docker build -t usman-umar-openswarm-bridge cloud-backend
+docker run --rm -p 7860:7860 \
+  -e APP_CLIENT_TOKEN=local-test-token \
+  -e ENABLE_MOCK_EXECUTION=true \
+  usman-umar-openswarm-bridge
 ```
 
-To use the real upstream instead, unset or set `ENABLE_MOCK_EXECUTION=false` and configure `OPEN_SWARM_EXECUTE_URL`. The mock mode is deliberately visible in the returned body and must not be used to represent a real agent result.
+Then check `http://localhost:7860/health`. For Python tests without Docker:
+
+```sh
+cd cloud-backend
+python -m pip install -r requirements.txt
+python -m unittest -v test_auth.py
+```
+
+The mock response is labeled `[MOCK RESPONSE — NOT A REAL OPENSWARM RESULT]`. Disable mock mode and configure the real upstream before using the bridge for actual tasks.

@@ -1,4 +1,4 @@
-"""Render-hosted bridge to a user-configured OpenSwarm execution endpoint.
+"""Cloud-hosted bridge to a user-configured OpenSwarm execution endpoint.
 
 This service contains no LLM API integration and never generates placeholder output.
 The explicitly opt-in mock mode is only for connection testing and marks every response
@@ -59,6 +59,11 @@ def _error_response(status_code: int, message: str) -> JSONResponse:
     )
 
 
+@app.get("/")
+def root() -> dict[str, str]:
+    return {"service": "USMAN AND UMAR OpenSwarm Bridge", "status": "ok", "health": "/health"}
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -71,7 +76,7 @@ async def _execute_impl(
 ) -> dict[str, Any]:
     expected_token = os.getenv("APP_CLIENT_TOKEN", "").strip()
     if not expected_token:
-        raise HTTPException(status_code=503, detail="Render APP_CLIENT_TOKEN is not configured.")
+        raise HTTPException(status_code=503, detail="APP_CLIENT_TOKEN is not configured on this cloud backend.")
     scheme, separator, supplied_token = (authorization or "").partition(" ")
     if (
         not separator
@@ -90,7 +95,7 @@ async def _execute_impl(
         recent.append(now)
         _request_times[client_ip] = recent
 
-    # Opt in explicitly in Render settings for connection testing. The marker is returned
+    # Opt in explicitly in backend settings for connection testing. The marker is returned
     # in both fields consumed by app versions and cannot be confused with a real agent result.
     if _mock_execution_enabled():
         return {"status": "mock", "mock": True, "result": _MOCK_OUTPUT, "output": _MOCK_OUTPUT}
@@ -148,4 +153,4 @@ async def execute(
         return _error_response(exc.status_code, str(exc.detail))
     except Exception:
         logger.exception("Unhandled error in POST /execute")
-        return _error_response(500, "Unexpected server error. Check Render logs for details.")
+        return _error_response(500, "Unexpected server error. Check backend logs for details.")

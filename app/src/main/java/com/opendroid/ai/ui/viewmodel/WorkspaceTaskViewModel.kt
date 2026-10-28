@@ -186,9 +186,9 @@ class WorkspaceTaskViewModel @Inject constructor(
 
     private suspend fun executeCloud(task: WorkspaceTaskEntity) = withContext(Dispatchers.IO) {
         val baseUrl = settingsRepository.openSwarmServerUrl.first().trimEnd('/')
-        check(baseUrl.isNotBlank()) { "Set the Render HTTPS URL in Task Manager → Cloud settings." }
+        check(baseUrl.isNotBlank()) { "Set the Cloud Backend URL in Task Manager → Cloud settings." }
         val clientToken = settingsRepository.openSwarmClientToken.value
-        check(clientToken.isNotBlank()) { "Save the Render APP_CLIENT_TOKEN in Task Manager → Cloud settings before running cloud tasks." }
+        check(clientToken.isNotBlank()) { "Save the backend APP_CLIENT_TOKEN in Task Manager → Cloud settings before running cloud tasks." }
         val prompt = promptOf(task)
         val payload = JSONObject().put("task_id", task.id).put("prompt", prompt)
             .toString().toRequestBody("application/json; charset=utf-8".toMediaType())

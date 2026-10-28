@@ -57,7 +57,8 @@ class SettingsRepository internal constructor(
 
     private val json = Json { ignoreUnknownKeys = true }
     private val llmConfigKey = stringPreferencesKey("llm_config")
-    private val openSwarmServerUrlKey = stringPreferencesKey("openswarm_render_url")
+    private val openSwarmServerUrlKey = stringPreferencesKey("openswarm_backend_url")
+    private val legacyOpenSwarmServerUrlKey = stringPreferencesKey("openswarm_render_url")
     private val autoRunGeneratedCodeKey = booleanPreferencesKey("auto_run_generated_code")
     private val mutableOpenSwarmClientToken = MutableStateFlow("")
     val openSwarmClientToken: StateFlow<String> = mutableOpenSwarmClientToken.asStateFlow()
@@ -287,9 +288,13 @@ class SettingsRepository internal constructor(
         )
     }
 
-    /** Render URL for the user's own OpenSwarm bridge; blank means not configured. */
+    /** Base URL for the user's own cloud-hosted OpenSwarm bridge; blank means not configured. */
     val openSwarmServerUrl: Flow<String> = dataStore.data
-        .map { preferences -> preferences[openSwarmServerUrlKey].orEmpty() }
+        .map { preferences ->
+            preferences[openSwarmServerUrlKey]
+                ?: preferences[legacyOpenSwarmServerUrlKey]
+                ?: ""
+        }
         .flowOn(Dispatchers.IO)
 
     suspend fun saveOpenSwarmServerUrl(value: String) {
@@ -297,15 +302,20 @@ class SettingsRepository internal constructor(
         if (normalized.isNotEmpty()) {
             val uri = java.net.URI(normalized)
             require(uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()) {
-                "Enter the HTTPS URL of your Render server."
+                "Enter the HTTPS URL of your cloud backend."
             }
             require(uri.userInfo == null && uri.query == null && uri.fragment == null) {
                 "The server URL must not contain credentials, a query, or a fragment."
             }
         }
         dataStore.edit { preferences ->
-            if (normalized.isBlank()) preferences.remove(openSwarmServerUrlKey)
-            else preferences[openSwarmServerUrlKey] = normalized
+            if (normalized.isBlank()) {
+                preferences.remove(openSwarmServerUrlKey)
+                preferences.remove(legacyOpenSwarmServerUrlKey)
+            } else {
+                preferences[openSwarmServerUrlKey] = normalized
+                preferences.remove(legacyOpenSwarmServerUrlKey)
+            }
         }
     }
 
