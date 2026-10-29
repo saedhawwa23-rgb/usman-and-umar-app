@@ -73,29 +73,30 @@ jobs:
           out=dist
           mkdir -p "$out"
           test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.0.0-cloud-ai'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.6.0'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='24'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
           unzip -l "$apk" | grep -F 'assets/proot/proot'
           unzip -p "$apk" assets/proot/proot > /tmp/proot-from-apk
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
           grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' "$out/PROOT_ELF.txt"
           sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
-          cp "$apk" "$out/USMAN-AND-UMAR-hybrid-task-orchestrator.apk"
-          sha256sum "$out/USMAN-AND-UMAR-hybrid-task-orchestrator.apk" | tee "$out/SHA256SUMS.txt"
+          cp "$apk" "$out/USMAN-AND-UMAR-v3.6.0-hybrid-orchestrator.apk"
+          sha256sum "$out/USMAN-AND-UMAR-v3.6.0-hybrid-orchestrator.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nref=%s\n' "$(git rev-parse HEAD)" "${GITHUB_REF_NAME}" > "$out/BUILD_METADATA.txt"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Publish prerelease APK
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
         with:
-          tag_name: v3.5.0-hybrid-orchestrator-${{ github.run_number }}
+          tag_name: v3.6.0-hybrid-orchestrator-${{ github.run_number }}
           name: USMAN AND UMAR Hybrid Task Orchestrator build ${{ github.run_number }}
           body: |
             Hybrid task orchestrator feature-branch Android debug APK.
 
             Commit: `${{ steps.build-meta.outputs.commit }}`
             Package: `com.usmanandumar.app`
-            Version: `3.0.0-cloud-ai`
+            Version: `3.6.0` (versionCode `24`)
             The APK contains a verified ARM32 PRoot binary under assets; the app does not require an ARM32 native library.
 
             This debug-signed APK is intended for evaluation. Physical device runtime testing is not claimed.

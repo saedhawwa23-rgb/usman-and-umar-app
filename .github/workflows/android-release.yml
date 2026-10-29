@@ -86,7 +86,8 @@ jobs:
           out=dist
           mkdir -p "$out"
           test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.0.0-cloud-ai'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.6.0'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='24'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
           unzip -l "$apk" | grep -F 'assets/proot/proot'
           unzip -p "$apk" assets/proot/proot > /tmp/proot-from-apk
@@ -103,11 +104,11 @@ jobs:
           tag_name: ${{ inputs.tag || format('v3.6.0-hybrid-orchestrator-{0}', github.run_number) }}
           name: USMAN AND UMAR ${{ inputs.tag || format('v3.6.0-hybrid-orchestrator-{0}', github.run_number) }}
           body: |
-            Verified Android ARM32 debug artifact from PR #4.
+            Verified Android ARM32 debug APK for the Hybrid Task Orchestrator release.
 
             Commit: `${{ steps.build-meta.outputs.commit }}`
             Package: `com.usmanandumar.app`
-            Version: `3.0.0-cloud-ai`
+            Version: `3.6.0` (versionCode `24`)
             ABI: `armeabi-v7a`
 
             Physical Samsung Galaxy M10 runtime verification remains separate and is not claimed by this release.
