@@ -226,6 +226,7 @@ fun WorkspaceTaskScreen(
                                 singleLine = true,
                                 label = { Text("Cloud Backend URL") },
                                 placeholder = { Text("https://your-cloud-backend.example") },
+                                supportingText = { Text("Enter the server base URL; the app appends /execute. A URL ending in /execute is also accepted.") },
                             )
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(onClick = { viewModel.saveOpenSwarmServerUrl(urlDraft) }) { Text("Save URL") }

@@ -185,7 +185,8 @@ class WorkspaceTaskViewModel @Inject constructor(
     }
 
     private suspend fun executeCloud(task: WorkspaceTaskEntity) = withContext(Dispatchers.IO) {
-        val baseUrl = settingsRepository.openSwarmServerUrl.first().trimEnd('/')
+        val configuredUrl = settingsRepository.openSwarmServerUrl.first().trim().trimEnd('/')
+        val baseUrl = configuredUrl.removeSuffix("/execute").trimEnd('/')
         check(baseUrl.isNotBlank()) { "Set the Cloud Backend URL in Task Manager → Cloud settings." }
         val clientToken = settingsRepository.openSwarmClientToken.value
         check(clientToken.isNotBlank()) { "Save the backend APP_CLIENT_TOKEN in Task Manager → Cloud settings before running cloud tasks." }
@@ -195,7 +196,19 @@ class WorkspaceTaskViewModel @Inject constructor(
         val request = Request.Builder().url("$baseUrl/execute").header("Authorization", "Bearer $clientToken").post(payload).build()
         cloudClient.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
-            check(response.isSuccessful) { "OpenSwarm bridge returned HTTP ${response.code}; response body is not displayed." }
+            if (!response.isSuccessful) {
+                val detail = runCatching {
+                    val json = JSONObject(body)
+                    listOf("error", "detail", "message")
+                        .asSequence()
+                        .map { json.optString(it).trim() }
+                        .firstOrNull { it.isNotBlank() }
+                }.getOrNull()
+                val diagnostic = detail?.replace(Regex("\\s+"), " ")?.take(300)
+                    ?: if (body.isBlank()) null else "Non-JSON response body; check the configured URL and tunnel response."
+                val suffix = diagnostic?.let { ": $it" }.orEmpty()
+                error("OpenSwarm bridge returned HTTP ${response.code}$suffix")
+            }
             check(body.isNotBlank()) { "OpenSwarm returned an empty response; the task was not marked successful." }
             val result = runCatching {
                 val json = JSONObject(body)
