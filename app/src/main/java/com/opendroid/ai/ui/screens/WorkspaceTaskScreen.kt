@@ -203,7 +203,7 @@ fun WorkspaceTaskScreen(
                         } else {
                             "PackageManager found ${installedAiApps.size} launchable AI-app candidate(s) from installed app names. Select Manus, Genspark, or another recognized AI client."
                         }
-                        TaskExecutionMode.CLOUD_OPENSWARM -> "Cloud mode sends the full prompt to your configured backend. Do not include secrets or private data."
+                        TaskExecutionMode.CLOUD_OPENSWARM -> "Cloud Browser Use sends the full prompt to the Colab executor. Include a public URL to browse; do not include secrets or private data."
                         TaskExecutionMode.TERMUX_SCRIPT -> "Only the explicit script text you enter is sent to Termux; ordinary task prose is never interpreted as shell."
                     },
                     color = AppTheme.colors.textSecondary,
@@ -213,7 +213,7 @@ fun WorkspaceTaskScreen(
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
                     Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                        Text("CLOUD OPENSWARM SETTINGS", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
+                        Text("CLOUD BROWSER USE SETTINGS", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
                         Spacer(Modifier.height(4.dp))
                         Button(onClick = { settingsExpanded = !settingsExpanded }) {
                             Text(if (settingsExpanded) "Hide server settings" else "Configure cloud backend")
@@ -434,7 +434,7 @@ private fun SectionTitle(text: String) {
 
 private fun modeLabel(toolId: String?): String = when {
     toolId?.startsWith("hybrid:LOCAL_AI_APP:") == true -> "Local AI · ${toolId.substringAfterLast(':')}"
-    toolId == "hybrid:CLOUD_OPENSWARM" -> "Cloud OpenSwarm"
+    toolId == "hybrid:CLOUD_OPENSWARM" -> "Cloud Browser Use"
     toolId?.startsWith("hybrid:TERMUX_SCRIPT") == true -> "Local Termux · ${toolId.substringAfterLast(':')}"
     else -> "No execution mode"
 }

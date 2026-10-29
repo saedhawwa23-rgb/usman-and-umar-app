@@ -207,9 +207,9 @@ class WorkspaceTaskViewModel @Inject constructor(
                 val diagnostic = detail?.replace(Regex("\\s+"), " ")?.take(300)
                     ?: if (body.isBlank()) null else "Non-JSON response body; check the configured URL and tunnel response."
                 val suffix = diagnostic?.let { ": $it" }.orEmpty()
-                error("OpenSwarm bridge returned HTTP ${response.code}$suffix")
+                error("Cloud Browser Use returned HTTP ${response.code}$suffix")
             }
-            check(body.isNotBlank()) { "OpenSwarm returned an empty response; the task was not marked successful." }
+            check(body.isNotBlank()) { "Browser Use returned an empty response; the task was not marked successful." }
             val result = runCatching {
                 val json = JSONObject(body)
                 json.optString("result").takeIf { it.isNotBlank() }
@@ -218,7 +218,7 @@ class WorkspaceTaskViewModel @Inject constructor(
                     ?: body
             }.getOrDefault(body)
             repository.recordOutcome(task.id, true, outputRedacted = result.take(20_000), event = "openswarm_cloud")
-            _message.value = "OpenSwarm completed with a server response."
+            _message.value = "Browser Use completed with an actual result."
         }
     }
 

@@ -1,18 +1,16 @@
 services:
   - type: web
-    name: usman-umar-openswarm-bridge
+    name: usman-umar-browser-use-executor
     runtime: python
     plan: free
     rootDir: cloud-backend
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python -m playwright install --with-deps chromium
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
-      - key: OPEN_SWARM_EXECUTE_URL
-        sync: false
       - key: APP_CLIENT_TOKEN
         sync: false
-      - key: ENABLE_MOCK_EXECUTION
+      - key: OPENROUTER_API_KEY
         sync: false
-      - key: OPEN_SWARM_BEARER_TOKEN
+      - key: OPENROUTER_MODEL
         sync: false

@@ -1,55 +1,46 @@
-"""Cloud-hosted bridge to a user-configured OpenSwarm execution endpoint.
+"""Authenticated, direct Browser Use execution for the Colab-hosted task backend.
 
-This service contains no LLM API integration and never generates placeholder output.
-The explicitly opt-in mock mode is only for connection testing and marks every response
-as mock data; disable it before using the real OpenSwarm upstream.
+The endpoint runs the repository's bounded, read-only Browser Use helper in this
+Python process. It does not forward tasks to an external OpenSwarm endpoint and
+never fabricates a success result. Full exceptions are logged server-side; client
+responses contain the actual agent result or a concise, credential-redacted error.
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
+import ipaddress
 import logging
 import os
+import re
 import threading
 import time
 from collections import defaultdict
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlsplit
 
-import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="USMAN AND UMAR OpenSwarm Bridge", version="1.0.0")
+from browser_use_interactive import run_browser_task
+
+app = FastAPI(title="USMAN AND UMAR Direct Browser Use Executor", version="2.0.0")
 logger = logging.getLogger(__name__)
 _rate_lock = threading.Lock()
 _request_times: dict[str, list[float]] = defaultdict(list)
 _RATE_WINDOW_SECONDS = 60.0
 _RATE_LIMIT = 20
-_MOCK_OUTPUT = "[MOCK RESPONSE — NOT A REAL OPENSWARM RESULT] Hello from the Cloud Server!"
+_EXECUTION_TIMEOUT_SECONDS = 55.0
+_execution_semaphore = asyncio.Semaphore(1)
+_URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+_BLOCKED_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".test", ".invalid")
+_BLOCKED_HOSTS = {"localhost", "metadata.google.internal", "metadata"}
 
 
 class ExecuteRequest(BaseModel):
     task_id: str = Field(min_length=1, max_length=128)
     prompt: str = Field(min_length=1, max_length=64_000)
-
-
-def _upstream_config() -> tuple[str, str | None]:
-    endpoint = os.getenv("OPEN_SWARM_EXECUTE_URL", "").strip()
-    if not endpoint:
-        raise HTTPException(
-            status_code=503,
-            detail="OpenSwarm is not configured. Set OPEN_SWARM_EXECUTE_URL to the real OpenSwarm execution endpoint.",
-        )
-    parsed = urlparse(endpoint)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
-        raise HTTPException(status_code=500, detail="OPEN_SWARM_EXECUTE_URL must be an HTTPS URL without embedded credentials.")
-    token = os.getenv("OPEN_SWARM_BEARER_TOKEN", "").strip() or None
-    return endpoint, token
-
-
-def _mock_execution_enabled() -> bool:
-    return os.getenv("ENABLE_MOCK_EXECUTION", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _error_response(status_code: int, message: str) -> JSONResponse:
@@ -59,24 +50,60 @@ def _error_response(status_code: int, message: str) -> JSONResponse:
     )
 
 
-@app.get("/")
-def root() -> dict[str, str]:
-    return {"service": "USMAN AND UMAR OpenSwarm Bridge", "status": "ok", "health": "/health"}
+def _allowed_domains_from_prompt(prompt: str) -> list[str]:
+    """Require explicit public URLs and use their hosts as Browser Use's allowlist."""
+    domains: list[str] = []
+    for match in _URL_PATTERN.findall(prompt):
+        candidate = match.rstrip(".,;:!?)]}")
+        try:
+            parsed = urlsplit(candidate)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="The browser task contains a malformed URL.") from exc
+        host = (parsed.hostname or "").rstrip(".").lower()
+        if parsed.scheme.lower() not in {"http", "https"} or not host:
+            continue
+        if parsed.username or parsed.password:
+            raise HTTPException(status_code=400, detail="URLs containing embedded credentials are not allowed.")
+        if host in _BLOCKED_HOSTS or host.endswith(_BLOCKED_HOST_SUFFIXES) or "." not in host:
+            raise HTTPException(status_code=400, detail="Only public internet hostnames are allowed for browser tasks.")
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        else:
+            raise HTTPException(status_code=400, detail="Use a public hostname rather than an IP address in browser tasks.")
+        try:
+            host.encode("idna")
+        except UnicodeError as exc:
+            raise HTTPException(status_code=400, detail="The browser task contains an invalid hostname.") from exc
+        if host not in domains:
+            domains.append(host)
+    if not domains:
+        raise HTTPException(
+            status_code=400,
+            detail="Include at least one public http(s) URL in the prompt; browser navigation is restricted to hosts in the prompt.",
+        )
+    return domains
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def _safe_exception_detail(exc: Exception) -> str:
+    """Return a compact exception summary without common API credential formats."""
+    detail = " ".join(str(exc).split())
+    detail = re.sub(r"(?i)bearer\s+\S+", "Bearer [REDACTED]", detail)
+    detail = re.sub(r"(?i)(api[_-]?key|token)\s*([:=])\s*\S+", r"\1\2[REDACTED]", detail)
+    detail = re.sub(r"\bsk-[A-Za-z0-9_-]{12,}\b", "[REDACTED]", detail)
+    detail = re.sub(r"(https?://)[^/@\s:]+:[^/@\s]+@", r"\1[REDACTED]@", detail)
+    return detail[:300] or "No exception detail was provided."
 
 
 async def _execute_impl(
     request: ExecuteRequest,
     http_request: Request,
     authorization: str | None,
-) -> dict[str, Any]:
+) -> dict[str, Any] | JSONResponse:
     expected_token = os.getenv("APP_CLIENT_TOKEN", "").strip()
     if not expected_token:
-        raise HTTPException(status_code=503, detail="APP_CLIENT_TOKEN is not configured on this cloud backend.")
+        return _error_response(503, "APP_CLIENT_TOKEN is not configured on this Colab backend.")
     scheme, separator, supplied_token = (authorization or "").partition(" ")
     if (
         not separator
@@ -84,61 +111,56 @@ async def _execute_impl(
         or not supplied_token.strip()
         or not hmac.compare_digest(supplied_token.strip(), expected_token)
     ):
-        raise HTTPException(status_code=401, detail="Invalid application token.")
+        return _error_response(401, "Invalid application token.")
 
     client_ip = http_request.client.host if http_request.client else "unknown"
     now = time.monotonic()
     with _rate_lock:
         recent = [stamp for stamp in _request_times[client_ip] if now - stamp < _RATE_WINDOW_SECONDS]
         if len(recent) >= _RATE_LIMIT:
-            raise HTTPException(status_code=429, detail="Request rate limit exceeded.")
+            return _error_response(429, "Request rate limit exceeded.")
         recent.append(now)
         _request_times[client_ip] = recent
 
-    # Opt in explicitly in backend settings for connection testing. The marker is returned
-    # in both fields consumed by app versions and cannot be confused with a real agent result.
-    if _mock_execution_enabled():
-        return {"status": "mock", "mock": True, "result": _MOCK_OUTPUT, "output": _MOCK_OUTPUT}
-
-    endpoint, token = _upstream_config()
-    headers = {"Accept": "application/json, text/plain"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    # Keep headroom beneath Android's 65-second end-to-end call timeout.
-    timeout = httpx.Timeout(55.0, connect=10.0)
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            upstream = await client.post(
-                endpoint,
-                json={"task_id": request.task_id, "prompt": request.prompt},
-                headers=headers,
+        allowed_domains = _allowed_domains_from_prompt(request.prompt)
+    except HTTPException as exc:
+        return _error_response(exc.status_code, str(exc.detail))
+
+    try:
+        async with _execution_semaphore:
+            result = await asyncio.wait_for(
+                run_browser_task(
+                    request.prompt,
+                    allowed_domains=allowed_domains,
+                    max_steps=8,
+                ),
+                timeout=_EXECUTION_TIMEOUT_SECONDS,
             )
-    except httpx.TimeoutException as exc:
-        raise HTTPException(status_code=504, detail="OpenSwarm execution timed out; no result was returned.") from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"Could not reach OpenSwarm: {type(exc).__name__}.") from exc
+    except asyncio.TimeoutError as exc:
+        logger.exception("Browser Use timed out for task_id=%s", request.task_id)
+        return _error_response(504, "Browser Use timed out; inspect the Colab backend log for the traceback.")
+    except Exception as exc:
+        logger.exception("Browser Use failed for task_id=%s", request.task_id)
+        summary = _safe_exception_detail(exc)
+        return _error_response(
+            500,
+            f"Browser Use failed ({type(exc).__name__}): {summary} Full traceback is in the Colab backend log.",
+        )
 
-    if not upstream.is_success:
-        raise HTTPException(status_code=502, detail=f"OpenSwarm returned HTTP {upstream.status_code}.")
+    if not isinstance(result, str) or not result.strip():
+        return _error_response(502, "Browser Use returned no result; no success was recorded.")
+    return {"result": result}
 
-    raw = upstream.text
-    if not raw.strip():
-        raise HTTPException(status_code=502, detail="OpenSwarm returned an empty body; no result was returned.")
-    try:
-        payload = upstream.json()
-    except ValueError:
-        return {"result": raw}
 
-    if isinstance(payload, dict):
-        for key in ("result", "response", "output", "text"):
-            value = payload.get(key)
-            if isinstance(value, str) and value.strip():
-                return {"result": value}
-        # Preserve structured upstream output exactly as JSON, without inventing a summary.
-        return {"result": payload}
-    if isinstance(payload, (str, int, float, bool, list)):
-        return {"result": payload}
-    raise HTTPException(status_code=502, detail="OpenSwarm returned an unsupported JSON value.")
+@app.get("/")
+def root() -> dict[str, str]:
+    return {"service": "USMAN AND UMAR Direct Browser Use Executor", "status": "ok", "health": "/health"}
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.post("/execute", response_model=None)
@@ -147,10 +169,4 @@ async def execute(
     http_request: Request,
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> dict[str, Any] | JSONResponse:
-    try:
-        return await _execute_impl(request, http_request, authorization)
-    except HTTPException as exc:
-        return _error_response(exc.status_code, str(exc.detail))
-    except Exception:
-        logger.exception("Unhandled error in POST /execute")
-        return _error_response(500, "Unexpected server error. Check backend logs for details.")
+    return await _execute_impl(request, http_request, authorization)

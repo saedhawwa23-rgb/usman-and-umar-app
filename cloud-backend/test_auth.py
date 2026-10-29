@@ -1,13 +1,13 @@
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 
 from main import app
 
 
-class BearerAuthenticationTests(unittest.IsolatedAsyncioTestCase):
+class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
@@ -23,18 +23,23 @@ class BearerAuthenticationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["status"], "ok")
 
-    async def post_execute(self, authorization: str | None = None) -> httpx.Response:
+    async def post_execute(
+        self,
+        authorization: str | None = None,
+        prompt: str = "Read https://example.com and summarize the page.",
+    ) -> httpx.Response:
         headers = {"Authorization": authorization} if authorization else {}
         return await self.client.post(
             "/execute",
             headers=headers,
-            json={"task_id": "task-1", "prompt": "test"},
+            json={"task_id": "task-1", "prompt": prompt},
         )
 
     async def test_missing_authorization_header_is_rejected(self) -> None:
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
             response = await self.post_execute()
         self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["status"], "error")
 
     async def test_wrong_bearer_token_is_rejected(self) -> None:
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
@@ -46,37 +51,52 @@ class BearerAuthenticationTests(unittest.IsolatedAsyncioTestCase):
             response = await self.post_execute("Basic test-secret")
         self.assertEqual(response.status_code, 401)
 
-    async def test_mock_mode_returns_clearly_marked_test_output_without_upstream(self) -> None:
-        environment = {"APP_CLIENT_TOKEN": "test-secret", "ENABLE_MOCK_EXECUTION": "true"}
+    async def test_missing_upstream_url_runs_browser_use_directly(self) -> None:
+        environment = {"APP_CLIENT_TOKEN": "test-secret"}
         with patch.dict(os.environ, environment, clear=False):
             os.environ.pop("OPEN_SWARM_EXECUTE_URL", None)
-            response = await self.post_execute("Bearer test-secret")
+            with patch("main.run_browser_task", new_callable=AsyncMock) as browser_task:
+                browser_task.return_value = "Extracted actual page content."
+                response = await self.post_execute("Bearer test-secret")
         self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertEqual(payload["status"], "mock")
-        self.assertIs(payload["mock"], True)
-        self.assertIn("[MOCK RESPONSE", payload["result"])
-        self.assertEqual(payload["result"], payload["output"])
+        self.assertEqual(response.json(), {"result": "Extracted actual page content."})
+        browser_task.assert_awaited_once_with(
+            "Read https://example.com and summarize the page.",
+            allowed_domains=["example.com"],
+            max_steps=8,
+        )
 
-    async def test_live_mode_without_upstream_returns_json_503(self) -> None:
-        environment = {"APP_CLIENT_TOKEN": "test-secret", "ENABLE_MOCK_EXECUTION": "false"}
-        with patch.dict(os.environ, environment, clear=False):
-            os.environ.pop("OPEN_SWARM_EXECUTE_URL", None)
-            response = await self.post_execute("Bearer test-secret")
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.headers["content-type"].split(";")[0], "application/json")
-        self.assertEqual(response.json()["status"], "error")
-        self.assertIn("OpenSwarm is not configured", response.json()["error"])
+    async def test_missing_public_url_is_rejected_before_browser_starts(self) -> None:
+        with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            with patch("main.run_browser_task", new_callable=AsyncMock) as browser_task:
+                response = await self.post_execute("Bearer test-secret", "Summarize this page.")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Include at least one public http(s) URL", response.json()["error"])
+        browser_task.assert_not_awaited()
 
-    async def test_unexpected_endpoint_error_returns_json_500(self) -> None:
-        environment = {"APP_CLIENT_TOKEN": "test-secret", "ENABLE_MOCK_EXECUTION": "false"}
-        with patch.dict(os.environ, environment, clear=False):
-            with patch("main._mock_execution_enabled", side_effect=RuntimeError("test-only internal error")):
+    async def test_private_hostname_is_rejected(self) -> None:
+        with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            with patch("main.run_browser_task", new_callable=AsyncMock) as browser_task:
+                response = await self.post_execute(
+                    "Bearer test-secret", "Read http://localhost:7860/health"
+                )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("public internet hostnames", response.json()["error"])
+        browser_task.assert_not_awaited()
+
+    async def test_browser_exception_is_logged_and_returned_as_json_500(self) -> None:
+        with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            with patch(
+                "main.run_browser_task",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("provider unavailable"),
+            ):
                 response = await self.post_execute("Bearer test-secret")
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.headers["content-type"].split(";")[0], "application/json")
-        self.assertEqual(response.json()["status"], "error")
-        self.assertNotIn("test-only internal error", response.text)
+        self.assertIn("Browser Use failed (RuntimeError)", response.json()["error"])
+        self.assertIn("full traceback is in the colab backend log", response.json()["error"].lower())
+        self.assertNotIn("Traceback", response.text)
 
 
 if __name__ == "__main__":
