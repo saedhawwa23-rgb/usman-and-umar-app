@@ -5,9 +5,14 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.text.Html
 import android.util.Base64
 import java.io.ByteArrayOutputStream
 import java.util.Locale
+import java.util.zip.ZipInputStream
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
 
 data class PendingChatAttachment(
     val displayName: String,
@@ -34,12 +39,38 @@ fun readChatAttachment(context: Context, uri: Uri, isDocument: Boolean): Pending
         return PendingChatAttachment(displayName, imageBase64 = bitmapToBase64(bitmap))
     }
 
+    val lowerName = displayName.lowercase(Locale.ROOT)
+    if (mimeType == "application/pdf" || lowerName.endsWith(".pdf")) {
+        val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("The PDF could not be opened.")
+        require(bytes.size <= 20 * 1024 * 1024) { "PDFs must be 20 MB or smaller." }
+        PDFBoxResourceLoader.init(context.applicationContext)
+        val extracted = PDDocument.load(bytes).use { PDFTextStripper().getText(it) }.trim()
+        require(extracted.isNotBlank()) { "This PDF has no selectable text. Scanned PDFs are not supported yet." }
+        return PendingChatAttachment(displayName, textContent = extracted.take(2_000_000))
+    }
+    if (mimeType == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || lowerName.endsWith(".docx")) {
+        val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("The Word document could not be opened.")
+        require(bytes.size <= 20 * 1024 * 1024) { "Word documents must be 20 MB or smaller." }
+        val xml = ZipInputStream(bytes.inputStream()).use { zip ->
+            var body: ByteArray? = null
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                if (entry.name == "word/document.xml") { body = zip.readBytes(); break }
+            }
+            body
+        } ?: error("The Word document did not contain a readable document body.")
+        val text = Html.fromHtml(String(xml, Charsets.UTF_8), Html.FROM_HTML_MODE_LEGACY).toString()
+            .replace(Regex("\\s+"), " ").trim()
+        require(text.isNotBlank()) { "The Word document did not contain readable text." }
+        return PendingChatAttachment(displayName, textContent = text.take(2_000_000))
+    }
+
     val textExtensions = listOf(".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".log", ".yaml", ".yml")
     val isText = mimeType.startsWith("text/") ||
         mimeType in setOf("application/json", "application/xml", "application/csv") ||
         textExtensions.any { displayName.lowercase(Locale.ROOT).endsWith(it) }
     require(isDocument && isText) {
-        "Chat supports images and text documents (TXT, MD, CSV, JSON, XML, and logs). This file type is not supported yet."
+        "Chat supports images, PDFs, DOCX files, and text documents (TXT, MD, CSV, JSON, XML, and logs)."
     }
     val bytes = resolver.openInputStream(uri)?.use { input ->
         val output = ByteArrayOutputStream()

@@ -83,6 +83,7 @@ import com.opendroid.ai.data.repository.ChatSession
 import com.opendroid.ai.ui.components.ContactPickerCard
 import com.opendroid.ai.ui.theme.*
 import com.opendroid.ai.ui.viewmodel.ChatViewModel
+import com.opendroid.ai.ui.viewmodel.ChatTarget
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -131,6 +132,8 @@ fun ChatScreen(
     var editingMessageId by remember { mutableStateOf<String?>(null) }
     var textBeforeEdit by remember { mutableStateOf("") }
     var thinkEnabled by remember { mutableStateOf(false) }
+    var chatTarget by remember { mutableStateOf(ChatTarget.API_MODEL) }
+    var targetMenuExpanded by remember { mutableStateOf(false) }
     var searchEnabled by remember { mutableStateOf(false) }
     var showAttachmentSheet by remember { mutableStateOf(false) }
     var showPluginSelector by remember { mutableStateOf(false) }
@@ -221,13 +224,14 @@ fun ChatScreen(
             editingMessageId = null
             textBeforeEdit = ""
         } else {
-            viewModel.sendMessage(text, context, attachment?.imageBase64)
+            viewModel.sendMessage(text, context, attachment?.imageBase64, chatTarget, selectedPluginId, thinkEnabled)
         }
         inputQuery = ""
         selectedAttachment = null
         thinkEnabled = false
         searchEnabled = false
         selectedPluginId = null
+        chatTarget = ChatTarget.API_MODEL
     }
 
     // Scroll to bottom on history change. Keyed on currentSessionId too: keying on
@@ -647,6 +651,17 @@ fun ChatScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Box {
+                            FilterChip(
+                                selected = chatTarget == ChatTarget.CLOUD_OPENSWARM,
+                                onClick = { targetMenuExpanded = true },
+                                label = { Text(if (chatTarget == ChatTarget.CLOUD_OPENSWARM) "Cloud OpenSwarm" else "API Model", fontSize = 11.sp) },
+                            )
+                            DropdownMenu(expanded = targetMenuExpanded, onDismissRequest = { targetMenuExpanded = false }) {
+                                DropdownMenuItem(text = { Text("API Model") }, onClick = { chatTarget = ChatTarget.API_MODEL; targetMenuExpanded = false })
+                                DropdownMenuItem(text = { Text("Cloud OpenSwarm") }, onClick = { chatTarget = ChatTarget.CLOUD_OPENSWARM; targetMenuExpanded = false })
+                            }
+                        }
                         FilterChip(
                             selected = thinkEnabled,
                             onClick = { thinkEnabled = !thinkEnabled },
@@ -894,7 +909,7 @@ fun ChatScreen(
                 }
                 AttachmentOption("Files", Icons.Default.Description) {
                     showAttachmentSheet = false
-                    documentLauncher.launch(arrayOf("text/*", "application/json", "application/xml", "application/csv"))
+                    documentLauncher.launch(arrayOf("text/*", "application/json", "application/xml", "application/csv", "application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
                 }
                 AttachmentOption("Plugins", Icons.Default.Extension) { showPluginSelector = true }
                 ListItem(

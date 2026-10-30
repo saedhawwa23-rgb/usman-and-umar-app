@@ -17,6 +17,7 @@ import com.opendroid.ai.data.models.AutoReplyConfig
 import com.opendroid.ai.data.models.LLMConfig
 import com.opendroid.ai.core.llm.ProviderCatalog
 import java.io.IOException
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -43,6 +45,15 @@ sealed interface ProviderCredentialPersistenceState {
     data object CredentialsMustBeReentered : ProviderCredentialPersistenceState
 }
 
+@kotlinx.serialization.Serializable
+data class CloudServerConfig(
+    val id: String,
+    val name: String,
+    val url: String,
+    val enabled: Boolean = true,
+    @kotlinx.serialization.Transient val token: String = "",
+)
+
 @Singleton
 class SettingsRepository internal constructor(
     private val dataStore: DataStore<Preferences>,
@@ -61,11 +72,86 @@ class SettingsRepository internal constructor(
     private val legacyOpenSwarmServerUrlKey = stringPreferencesKey("openswarm_render_url")
     private val cloudServerUrlKeys = (1..3).map { stringPreferencesKey("openswarm_server_${it}_url") }
     private val cloudServerEnabledKeys = (1..3).map { booleanPreferencesKey("openswarm_server_${it}_enabled") }
+    private val cloudServersKey = stringPreferencesKey("openswarm_cloud_servers_v2")
     private val autoRunGeneratedCodeKey = booleanPreferencesKey("auto_run_generated_code")
     private val mutableOpenSwarmClientToken = MutableStateFlow("")
     val openSwarmClientToken: StateFlow<String> = mutableOpenSwarmClientToken.asStateFlow()
     private val mutableCloudServerTokens = MutableStateFlow(listOf("", "", ""))
     val cloudServerTokens: StateFlow<List<String>> = mutableCloudServerTokens.asStateFlow()
+
+    /** Unlimited named backends. Token values are read only from encrypted storage at runtime. */
+    val cloudServers: Flow<List<CloudServerConfig>> = dataStore.data.map { preferences ->
+        val stored = preferences[cloudServersKey].orEmpty().let { raw ->
+            runCatching { json.decodeFromString<List<CloudServerConfig>>(raw) }.getOrNull()
+        } ?: legacyCloudServers(preferences)
+        stored.map { server -> server.copy(token = readDynamicCloudToken(server.id)) }
+    }.flowOn(Dispatchers.IO)
+
+    private fun legacyCloudServers(preferences: Preferences): List<CloudServerConfig> =
+        (0..2).mapNotNull { index ->
+            val url = preferences[cloudServerUrlKeys[index]].orEmpty().ifBlank {
+                if (index == 0) preferences[openSwarmServerUrlKey] ?: preferences[legacyOpenSwarmServerUrlKey] ?: "" else ""
+            }
+            url.takeIf(String::isNotBlank)?.let {
+                CloudServerConfig("legacy-${index + 1}", "Server ${index + 1}", it, preferences[cloudServerEnabledKeys[index]] ?: (index == 0))
+            }
+        }
+
+    private fun dynamicCloudCredential(id: String): ProviderCredentialId.ApiKey =
+        ProviderCredentialId.ApiKey("openswarm-cloud-server-$id")
+
+    private fun readDynamicCloudToken(id: String): String {
+        val legacyIndex = id.removePrefix("legacy-").toIntOrNull()?.minus(1)
+        val credential = when (legacyIndex) {
+            0 -> ProviderCredentialId.OpenSwarmServer1Token
+            1 -> ProviderCredentialId.OpenSwarmServer2Token
+            2 -> ProviderCredentialId.OpenSwarmServer3Token
+            else -> dynamicCloudCredential(id)
+        }
+        return (providerCredentialStore.read(credential) as? CredentialStoreResult.Success)?.value.orEmpty()
+    }
+
+    suspend fun addCloudServer(name: String, url: String, token: String = ""): CloudServerConfig {
+        val server = CloudServerConfig(UUID.randomUUID().toString(), name.trim().ifBlank { "Cloud Server" }.take(80), normalizeCloudServerUrl(url))
+        saveCloudServer(server, token)
+        return server
+    }
+
+    suspend fun saveCloudServer(server: CloudServerConfig, token: String = server.token) {
+        val normalized = server.copy(name = server.name.trim().ifBlank { "Cloud Server" }.take(80), url = normalizeCloudServerUrl(server.url), token = "")
+        val current = cloudServers.first().map { it.copy(token = "") }.filterNot { it.id == normalized.id }
+        dataStore.edit { it[cloudServersKey] = json.encodeToString(current + normalized) }
+        saveDynamicCloudToken(normalized.id, token)
+    }
+
+    suspend fun removeCloudServer(id: String) {
+        val remaining = cloudServers.first().filterNot { it.id == id }.map { it.copy(token = "") }
+        dataStore.edit { it[cloudServersKey] = json.encodeToString(remaining) }
+        providerCredentialStore.remove(dynamicCloudCredential(id))
+    }
+
+    suspend fun setCloudServerEnabled(id: String, enabled: Boolean) {
+        val updated = cloudServers.first().map { if (it.id == id) it.copy(enabled = enabled, token = "") else it.copy(token = "") }
+        dataStore.edit { it[cloudServersKey] = json.encodeToString(updated) }
+    }
+
+    private suspend fun saveDynamicCloudToken(id: String, value: String) = withContext(Dispatchers.IO) {
+        val result = if (value.trim().isBlank()) providerCredentialStore.remove(dynamicCloudCredential(id)) else providerCredentialStore.write(dynamicCloudCredential(id), value.trim())
+        when (result) {
+            is CredentialStoreResult.Success -> Unit
+            CredentialStoreResult.CredentialsMustBeReentered -> error("Credential storage needs recovery before saving a cloud token.")
+            CredentialStoreResult.StorageUnavailable -> error("Android secure storage is unavailable; the cloud token was not saved.")
+        }
+    }
+
+    private fun normalizeCloudServerUrl(value: String): String {
+        val normalized = value.trim().trimEnd('/')
+        require(normalized.isNotBlank()) { "Enter the HTTPS URL of your cloud backend." }
+        val uri = java.net.URI(normalized)
+        require(uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()) { "Enter the HTTPS URL of your cloud backend." }
+        require(uri.userInfo == null && uri.query == null && uri.fragment == null) { "The server URL must not contain credentials, a query, or a fragment." }
+        return normalized
+    }
 
     /** A UI-safe recovery signal; it never contains credential or ciphertext data. */
     val providerCredentialRecoveryState = providerCredentialStore.recoveryState

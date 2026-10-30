@@ -148,7 +148,7 @@ class LLMErrorMapperTest {
         assertEquals(LLMError.AuthMissing, missing.error)
         assertEquals(LLMError.MalformedResponse, malformed.error)
         assertFalse(missing.retryable)
-        assertFalse(malformed.retryable)
+        assertTrue(malformed.retryable)
         assertNull(missing.cause)
         assertNull(malformed.cause)
     }

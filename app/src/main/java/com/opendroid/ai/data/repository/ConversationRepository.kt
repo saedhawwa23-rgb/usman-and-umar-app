@@ -78,6 +78,10 @@ class ConversationRepository @Inject constructor(
         chatSessionDao.touch(sessionId, message.timestamp)
     }
 
+    suspend fun updateMessageText(messageId: String, text: String) {
+        conversationDao.updateMessageText(messageId, text)
+    }
+
     /** Last [limit] messages of the current session, chronological order. */
     suspend fun getLastMessages(limit: Int): List<ChatMessage> =
         getLastMessages(ensureCurrentSessionId(), limit)

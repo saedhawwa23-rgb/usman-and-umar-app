@@ -36,6 +36,7 @@ _BLOCKED_HOSTS = {"localhost", "metadata.google.internal", "metadata"}
 class ExecuteRequest(BaseModel):
     task_id: str = Field(min_length=1, max_length=128)
     prompt: str = Field(min_length=1, max_length=64_000)
+    image_base64: str | None = Field(default=None, max_length=8_000_000)
     plugin_id: str | None = Field(default=None, max_length=64)
     plugins: list[str] = Field(default_factory=list, max_length=8)
     browser_max_steps: int = Field(default=15, ge=1, le=30)

@@ -34,6 +34,7 @@ import com.opendroid.ai.core.security.CredentialStoreResult
 import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
 import com.opendroid.ai.core.security.ProviderCredentialStore
 import com.opendroid.ai.data.repository.ProviderCredentialPersistenceState
+import com.opendroid.ai.data.repository.CloudServerConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -54,6 +55,18 @@ class SettingsViewModel @Inject constructor(
     private val okHttpClient: OkHttpClient,
     private val providerCredentialStore: ProviderCredentialStore
 ) : ViewModel() {
+
+    val cloudServers: StateFlow<List<CloudServerConfig>> = settingsRepository.cloudServers
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun addCloudServer(name: String, url: String, token: String) = viewModelScope.launch {
+        runCatching { settingsRepository.addCloudServer(name, url, token) }
+    }
+    fun saveCloudServer(server: CloudServerConfig, token: String) = viewModelScope.launch {
+        runCatching { settingsRepository.saveCloudServer(server, token) }
+    }
+    fun removeCloudServer(id: String) = viewModelScope.launch { settingsRepository.removeCloudServer(id) }
+    fun setCloudServerEnabled(id: String, enabled: Boolean) = viewModelScope.launch { settingsRepository.setCloudServerEnabled(id, enabled) }
 
     private val _llmConfig = MutableStateFlow(LLMConfig())
     val llmConfig: StateFlow<LLMConfig> = _llmConfig

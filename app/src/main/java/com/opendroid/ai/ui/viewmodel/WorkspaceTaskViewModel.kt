@@ -11,6 +11,7 @@ import com.usmanandumar.workspace.core.task.TaskQuickAddParser
 import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.accessibility.OpenDroidAccessibilityService
 import com.opendroid.ai.core.browser.BrowserUseRemoteProtocol
+import com.opendroid.ai.core.browser.CloudServerClient
 import com.opendroid.ai.core.termux.TermuxIntegration
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.data.repository.SettingsRepository
@@ -49,6 +50,7 @@ class WorkspaceTaskViewModel @Inject constructor(
     private val repository: WorkspaceTaskRepository,
     private val settingsRepository: SettingsRepository,
     private val termux: TermuxIntegration,
+    private val cloudServerClient: CloudServerClient,
     @ApplicationContext private val context: Context,
 ) : ViewModel() {
     val tasks: StateFlow<List<WorkspaceTaskEntity>> = repository.observeTasks()
@@ -276,45 +278,21 @@ class WorkspaceTaskViewModel @Inject constructor(
     }
 
     private suspend fun postToCloudServers(taskId: String, prompt: String, pluginId: String, target: String, maxSteps: Int, thinkHarder: Boolean = false): String {
-        val urls = settingsRepository.cloudServerUrls.first()
-        val enabled = settingsRepository.cloudServerEnabled.first()
-        val tokens = settingsRepository.cloudServerTokens.value
-        val candidates = (0..2).filter { enabled.getOrElse(it) { false } && urls.getOrElse(it) { "" }.isNotBlank() }
-        check(candidates.isNotEmpty()) { "Enable and configure at least one cloud server in Settings." }
-        val ordered = when (target.lowercase()) {
-            "server1", "server 1" -> listOf(0)
-            "server2", "server 2" -> listOf(1)
-            "server3", "server 3" -> listOf(2)
-            else -> candidates.drop((System.currentTimeMillis() / 60_000L % candidates.size).toInt()) + candidates.take((System.currentTimeMillis() / 60_000L % candidates.size).toInt())
-        }.filter { it in candidates }
-        check(ordered.isNotEmpty()) { "The selected cloud server is disabled or not configured." }
-        var lastError: Throwable? = null
-        for ((position, index) in ordered.withIndex()) {
-            val label = "Server ${index + 1}"
-            try {
-                val baseUrl = urls[index].trim().trimEnd('/').removeSuffix("/execute").trimEnd('/')
-                val token = tokens.getOrElse(index) { "" }.trim()
-                check(token.isNotBlank()) { "$label token is not configured." }
-                val body = JSONObject().put("task_id", taskId).put("prompt", prompt).put("plugin_id", pluginId).put("browser_max_steps", if (thinkHarder) 30 else maxSteps.coerceIn(1, 30)).put("think_harder", thinkHarder)
-                    .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-                val request = Request.Builder().url("$baseUrl/execute").header("Authorization", "Bearer $token").post(body).build()
-                val call = cloudClient.newCall(request)
-                browserCall = call
-                call.execute().use { response ->
-                    val responseBody = response.body?.string().orEmpty()
-                    if (response.isSuccessful) return responseBody
-                    val retryable = response.code == 500 || response.code == 503
-                    if (!retryable || position == ordered.lastIndex) error(BrowserUseRemoteProtocol.httpError(response.code, responseBody))
-                    lastError = IOException("HTTP ${response.code}")
-                }
-            } catch (failure: IOException) {
-                lastError = failure
-            }
-            if (position < ordered.lastIndex) _message.value = "$label timed out or returned an unavailable error. Failing over to Server ${ordered[position + 1] + 1}..."
+        val targetId = when (target.lowercase()) {
+            "server1", "server 1" -> "legacy-1"
+            "server2", "server 2" -> "legacy-2"
+            "server3", "server 3" -> "legacy-3"
+            else -> null
         }
-        throw lastError ?: IOException("All configured cloud servers failed.")
+        return cloudServerClient.execute(
+            taskId = taskId,
+            prompt = prompt,
+            pluginId = pluginId,
+            targetId = targetId,
+            thinkHarder = thinkHarder,
+            onLog = { log -> _message.value = log },
+        )
     }
-
     private suspend fun executeTermux(task: WorkspaceTaskEntity) = withContext(Dispatchers.IO) {
         val source = promptOf(task)
         val language = task.toolId.orEmpty().substringAfterLast(':', "bash").let { if (it == "TERMUX_SCRIPT") "bash" else it }

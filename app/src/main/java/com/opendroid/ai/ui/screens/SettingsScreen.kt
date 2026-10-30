@@ -89,6 +89,7 @@ fun SettingsScreen(
     val cloudServerUrls by viewModel.settingsRepository.cloudServerUrls.collectAsState(initial = listOf("", "", ""))
     val cloudServerEnabled by viewModel.settingsRepository.cloudServerEnabled.collectAsState(initial = listOf(true, false, false))
     val cloudServerTokens by viewModel.settingsRepository.cloudServerTokens.collectAsState()
+    val cloudServers by viewModel.cloudServers.collectAsState()
     val installedAiApps = remember(context.packageManager) {
         InstalledAiAppDiscovery.scan(context.packageManager)
     }
@@ -283,18 +284,31 @@ fun SettingsScreen(
                 Card(modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = CardBackground)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
                         Text("OPENSWARM CLOUD SERVERS", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
-                        Text("Configure three Colab/FastAPI backends. Auto mode load-balances and retries Server 2/3 after timeout, HTTP 500, or HTTP 503.", color = TextSecondary, fontSize = 12.sp)
-                        (0..2).forEach { index ->
-                            var url by remember(cloudServerUrls.getOrElse(index) { "" }) { mutableStateOf(cloudServerUrls.getOrElse(index) { "" }) }
-                            var token by remember(cloudServerTokens.getOrElse(index) { "" }) { mutableStateOf(cloudServerTokens.getOrElse(index) { "" }) }
+                        Text("Add as many named Colab/FastAPI backends as needed. Auto mode load-balances and fails over after timeout, HTTP 500, or HTTP 503.", color = TextSecondary, fontSize = 12.sp)
+                        cloudServers.forEach { server ->
+                            var name by remember(server.id, server.name) { mutableStateOf(server.name) }
+                            var url by remember(server.id, server.url) { mutableStateOf(server.url) }
+                            var token by remember(server.id, server.token) { mutableStateOf(server.token) }
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text("Server ${index + 1}", color = TextPrimary, fontWeight = FontWeight.Bold)
-                                Switch(checked = cloudServerEnabled.getOrElse(index) { index == 0 }, onCheckedChange = { coroutineScope.launch { viewModel.settingsRepository.setCloudServerEnabled(index, it) } })
+                                Text(name.ifBlank { "Cloud Server" }, color = TextPrimary, fontWeight = FontWeight.Bold)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Switch(checked = server.enabled, onCheckedChange = { viewModel.setCloudServerEnabled(server.id, it) })
+                                    IconButton(onClick = { viewModel.removeCloudServer(server.id) }) { Icon(Icons.Default.Delete, contentDescription = "Delete server", tint = AccentRed) }
+                                }
                             }
-                            OutlinedTextField(value = url, onValueChange = { url = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Server ${index + 1} URL") })
-                            OutlinedTextField(value = token, onValueChange = { token = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("Server ${index + 1} Token") })
-                            Button(onClick = { coroutineScope.launch { viewModel.settingsRepository.saveCloudServerUrl(index, url); viewModel.settingsRepository.saveCloudServerToken(index, token) } }) { Text("Save Server ${index + 1}") }
+                            OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Server name") })
+                            OutlinedTextField(value = url, onValueChange = { url = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("HTTPS backend URL") })
+                            OutlinedTextField(value = token, onValueChange = { token = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("Bearer token") })
+                            Button(onClick = { viewModel.saveCloudServer(server.copy(name = name, url = url), token) }) { Text("Save ${name.ifBlank { "server" }}") }
+                            Spacer(Modifier.height(8.dp))
                         }
+                        var newName by remember { mutableStateOf("") }
+                        var newUrl by remember { mutableStateOf("") }
+                        var newToken by remember { mutableStateOf("") }
+                        OutlinedTextField(value = newName, onValueChange = { newName = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server name") })
+                        OutlinedTextField(value = newUrl, onValueChange = { newUrl = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server HTTPS URL") })
+                        OutlinedTextField(value = newToken, onValueChange = { newToken = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("New server token") })
+                        Button(onClick = { viewModel.addCloudServer(newName, newUrl, newToken); newName = ""; newUrl = ""; newToken = "" }, enabled = newUrl.isNotBlank()) { Text("+ Add Cloud Server") }
                     }
                 }
             }

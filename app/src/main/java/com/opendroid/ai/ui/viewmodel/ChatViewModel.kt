@@ -18,6 +18,8 @@ import com.opendroid.ai.core.agent.ChatToolCall
 import com.opendroid.ai.core.agent.ChatErrorPrimaryAction
 import com.opendroid.ai.core.agent.ChatErrorUiState
 import com.opendroid.ai.core.agent.primaryAction
+import com.opendroid.ai.core.browser.BrowserUseRemoteProtocol
+import com.opendroid.ai.core.browser.CloudServerClient
 import com.opendroid.ai.data.models.AutoMode
 import com.opendroid.ai.data.models.ChatMessage
 import com.opendroid.ai.data.models.LLMConfig
@@ -37,8 +39,11 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import javax.inject.Inject
 import java.util.UUID
+
+enum class ChatTarget { API_MODEL, CLOUD_OPENSWARM }
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
@@ -46,6 +51,7 @@ class ChatViewModel @Inject constructor(
     private val conversationRepository: ConversationRepository,
     private val settingsRepository: SettingsRepository,
     private val termuxIntegration: TermuxIntegration,
+    private val cloudServerClient: CloudServerClient,
 ) : ViewModel() {
 
     val llmConfig: StateFlow<LLMConfig> = settingsRepository.llmConfig
@@ -174,10 +180,41 @@ class ChatViewModel @Inject constructor(
         return sessionId
     }
 
-    fun sendMessage(query: String, context: Context, imageBase64: String? = null) {
+    fun sendMessage(query: String, context: Context, imageBase64: String? = null, target: ChatTarget = ChatTarget.API_MODEL, pluginId: String? = null, thinkHarder: Boolean = false) {
         if (query.isBlank()) return
         val sessionId = pinTaskSessionSnapshot()
-        agentLoop.processQuery(query, context, sessionId, imageBase64)
+        if (target == ChatTarget.CLOUD_OPENSWARM) {
+            viewModelScope.launch { runCloudOpenSwarm(query, sessionId ?: conversationRepository.ensureCurrentSessionId(), pluginId, thinkHarder, imageBase64) }
+        } else {
+            agentLoop.processQuery(query, context, sessionId, imageBase64)
+        }
+    }
+
+    private suspend fun runCloudOpenSwarm(query: String, sessionId: String, pluginId: String?, thinkHarder: Boolean, imageBase64: String?) {
+        val userMessage = ChatMessage(UUID.randomUUID().toString(), query, ChatMessage.Sender.USER)
+        conversationRepository.insertMessage(sessionId, userMessage)
+        val assistantId = UUID.randomUUID().toString()
+        conversationRepository.insertMessage(sessionId, ChatMessage(assistantId, "", ChatMessage.Sender.AGENT, modelBadge = "Cloud OpenSwarm"))
+        try {
+            val body = cloudServerClient.execute(
+                taskId = "chat-${System.currentTimeMillis()}",
+                prompt = query,
+                pluginId = pluginId ?: "openswarm_agent",
+                thinkHarder = thinkHarder,
+                imageBase64 = imageBase64,
+                onLog = { log -> android.util.Log.i("CloudOpenSwarm", log) },
+            )
+            val result = BrowserUseRemoteProtocol.parseSuccess(body).result
+            val streamed = StringBuilder()
+            result.chunked(48).forEach { chunk ->
+                streamed.append(chunk)
+                conversationRepository.updateMessageText(assistantId, streamed.toString())
+                delay(18)
+            }
+            if (result.isBlank()) conversationRepository.updateMessageText(assistantId, "Cloud OpenSwarm returned an empty result. Tap retry to run it again.")
+        } catch (failure: Exception) {
+            conversationRepository.updateMessageText(assistantId, "Cloud OpenSwarm failed: ${failure.message ?: "Try again."}")
+        }
     }
 
     /** Runs only after the user presses the per-message approval button. */
