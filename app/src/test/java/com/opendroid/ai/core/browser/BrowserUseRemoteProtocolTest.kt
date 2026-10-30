@@ -1,6 +1,5 @@
 package com.opendroid.ai.core.browser
 
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -15,10 +14,10 @@ class BrowserUseRemoteProtocolTest {
             useFmhy = true,
         )
 
-        assertEquals("browser-123", request.getString("task_id"))
-        assertEquals("Find an image generator on FMHY.", request.getString("prompt"))
-        assertEquals(BrowserUseRemoteProtocol.FMHY_PLUGIN_ID, request.getString("plugin_id"))
-        assertEquals(15, request.getInt("browser_max_steps"))
+        assertEquals("browser-123", request.get("task_id").asString)
+        assertEquals("Find an image generator on FMHY.", request.get("prompt").asString)
+        assertEquals(BrowserUseRemoteProtocol.FMHY_PLUGIN_ID, request.get("plugin_id").asString)
+        assertEquals(15, request.get("browser_max_steps").asInt)
     }
 
     @Test
@@ -30,8 +29,8 @@ class BrowserUseRemoteProtocolTest {
             maxSteps = 4,
         )
 
-        assertEquals(BrowserUseRemoteProtocol.GENERIC_PLUGIN_ID, request.getString("plugin_id"))
-        assertEquals(4, request.getInt("browser_max_steps"))
+        assertEquals(BrowserUseRemoteProtocol.GENERIC_PLUGIN_ID, request.get("plugin_id").asString)
+        assertEquals(4, request.get("browser_max_steps").asInt)
     }
 
     @Test
@@ -39,17 +38,14 @@ class BrowserUseRemoteProtocolTest {
         val tooLarge = BrowserUseRemoteProtocol.buildRequestJson("task-a", "task", false, 99)
         val tooSmall = BrowserUseRemoteProtocol.buildRequestJson("task-b", "task", false, 0)
 
-        assertEquals(15, tooLarge.getInt("browser_max_steps"))
-        assertEquals(1, tooSmall.getInt("browser_max_steps"))
+        assertEquals(15, tooLarge.get("browser_max_steps").asInt)
+        assertEquals(1, tooSmall.get("browser_max_steps").asInt)
     }
 
     @Test
     fun successResponsePrefersResultAndReadsStepCount() {
         val parsed = BrowserUseRemoteProtocol.parseSuccess(
-            JSONObject()
-                .put("result", "Generated output")
-                .put("steps", 7)
-                .toString(),
+            "{\"result\":\"Generated output\",\"steps\":7}",
         )
 
         assertEquals("Generated output", parsed.result)

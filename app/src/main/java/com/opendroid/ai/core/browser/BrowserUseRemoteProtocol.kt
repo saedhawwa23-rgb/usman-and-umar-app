@@ -1,6 +1,7 @@
 package com.opendroid.ai.core.browser
 
-import org.json.JSONObject
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 
 data class BrowserUseRemoteResult(
     val result: String,
@@ -17,35 +18,41 @@ object BrowserUseRemoteProtocol {
         prompt: String,
         useFmhy: Boolean,
         maxSteps: Int = MAX_STEPS,
-    ): JSONObject {
+    ): JsonObject {
         require(taskId.isNotBlank()) { "Browser task ID must not be blank." }
         require(prompt.isNotBlank()) { "Browser prompt must not be blank." }
-        return JSONObject()
-            .put("task_id", taskId)
-            .put("prompt", prompt.trim())
-            .put("plugin_id", if (useFmhy) FMHY_PLUGIN_ID else GENERIC_PLUGIN_ID)
-            .put("browser_max_steps", maxSteps.coerceIn(1, MAX_STEPS))
+        return JsonObject().apply {
+            addProperty("task_id", taskId)
+            addProperty("prompt", prompt.trim())
+            addProperty("plugin_id", if (useFmhy) FMHY_PLUGIN_ID else GENERIC_PLUGIN_ID)
+            addProperty("browser_max_steps", maxSteps.coerceIn(1, MAX_STEPS))
+        }
     }
 
     fun parseSuccess(body: String): BrowserUseRemoteResult {
         require(body.isNotBlank()) { "Browser Use returned an empty response." }
-        val json = runCatching { JSONObject(body) }.getOrNull()
-        val serverError = json?.optString("error")?.trim().orEmpty()
+        val json = runCatching { JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject }.getOrNull()
+        val serverError = json?.get("error")?.takeIf { !it.isJsonNull }?.asString?.trim().orEmpty()
         check(serverError.isBlank()) { "Browser Use returned an error: $serverError" }
-        val result = json?.optString("result")?.ifBlank { json.optString("output") }
-            ?.ifBlank { body }
-            ?: body
+        val resultElement = json?.get("result")
+        val outputElement = json?.get("output")
+        val result = when {
+            resultElement?.isJsonPrimitive == true -> resultElement.asString
+            outputElement?.isJsonPrimitive == true -> outputElement.asString
+            else -> body
+        }.ifBlank { body }
         return BrowserUseRemoteResult(
             result = result,
-            steps = json?.optInt("steps")?.takeIf { it > 0 },
+            steps = json?.get("steps")?.takeIf { !it.isJsonNull && it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+                ?.asInt?.takeIf { it > 0 },
         )
     }
 
     fun httpError(code: Int, body: String): String {
-        val detail = runCatching { JSONObject(body).optString("error") }
-            .getOrNull()
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
+        val detail = runCatching {
+            JsonParser.parseString(body).takeIf { it.isJsonObject }?.asJsonObject
+                ?.get("error")?.takeIf { !it.isJsonNull }?.asString?.trim()
+        }.getOrNull()?.takeIf { it.isNotBlank() }
         return "Browser Use returned HTTP $code${detail?.let { ": $it" }.orEmpty()}"
     }
 }
