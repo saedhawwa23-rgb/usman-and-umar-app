@@ -54,6 +54,7 @@ import com.usmanandumar.workspace.core.task.TaskExecutionMode
 import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.ui.theme.AppTheme
+import com.opendroid.ai.ui.viewmodel.BrowserUseRunState
 import com.opendroid.ai.ui.viewmodel.WorkspaceTaskViewModel
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -78,6 +79,7 @@ fun WorkspaceTaskScreen(
     val clientToken by viewModel.openSwarmClientToken.collectAsState()
     val autoRunCode by viewModel.autoRunGeneratedCode.collectAsState()
     val message by viewModel.message.collectAsState()
+    val browserState by viewModel.browserUseState.collectAsState()
     var rawText by remember { mutableStateOf("") }
     var mode by remember { mutableStateOf(TaskExecutionMode.LOCAL_AI_APP) }
     var providerPackage by remember(installedAiApps) {
@@ -89,6 +91,8 @@ fun WorkspaceTaskScreen(
     var page by remember { mutableStateOf(TaskuaryPage.INBOX) }
     var settingsExpanded by remember { mutableStateOf(false) }
     var urlDraft by remember(serverUrl) { mutableStateOf(serverUrl) }
+    var browserPrompt by remember { mutableStateOf("") }
+    var useFmhy by remember { mutableStateOf(true) }
     var taskPendingExport by remember { mutableStateOf<WorkspaceTaskEntity?>(null) }
     val scope = rememberCoroutineScope()
     fun uploadTaskOutput(task: WorkspaceTaskEntity, account: com.google.android.gms.auth.api.signin.GoogleSignInAccount) {
@@ -203,7 +207,7 @@ fun WorkspaceTaskScreen(
                         } else {
                             "PackageManager found ${installedAiApps.size} launchable AI-app candidate(s) from installed app names. Select Manus, Genspark, or another recognized AI client."
                         }
-                        TaskExecutionMode.CLOUD_OPENSWARM -> "Cloud Browser Use sends the full prompt to the Colab executor. Include a public URL to browse; do not include secrets or private data."
+                        TaskExecutionMode.CLOUD_OPENSWARM -> "Cloud Browser Use sends the task to the remote executor. Use FMHY-first discovery or include a public URL; never include secrets or private data."
                         TaskExecutionMode.TERMUX_SCRIPT -> "Only the explicit script text you enter is sent to Termux; ordinary task prose is never interpreted as shell."
                     },
                     color = AppTheme.colors.textSecondary,
@@ -245,6 +249,49 @@ fun WorkspaceTaskScreen(
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(onClick = { viewModel.saveOpenSwarmClientToken(tokenDraft) }) { Text("Save token") }
                                 Button(onClick = { tokenDraft = ""; viewModel.saveOpenSwarmClientToken("") }) { Text("Clear token") }
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            Text("REMOTE BROWSER USE", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
+                            Text(
+                                "Run a remote Browser Use task without first adding it to the task inbox. The backend returns the actual result here.",
+                                color = AppTheme.colors.textSecondary,
+                                fontSize = 12.sp,
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            OutlinedTextField(
+                                value = browserPrompt,
+                                onValueChange = { browserPrompt = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 3,
+                                label = { Text("Browser task") },
+                                placeholder = { Text("Find an image generator on FMHY and generate…") },
+                            )
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("FMHY-first discovery", fontSize = 13.sp)
+                                    Text("Find one matching public tool, then use only that host.", fontSize = 11.sp, color = AppTheme.colors.textSecondary)
+                                }
+                                Switch(checked = useFmhy, onCheckedChange = { useFmhy = it })
+                            }
+                            Text("Maximum execution budget: 15 browser steps", fontSize = 11.sp, color = AppTheme.colors.textSecondary)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { viewModel.runBrowserUse(browserPrompt, useFmhy, 15) },
+                                    enabled = browserPrompt.isNotBlank() && browserState.phase != BrowserUseRunState.Phase.RUNNING,
+                                ) { Text("Run remotely") }
+                                if (browserState.phase == BrowserUseRunState.Phase.RUNNING) {
+                                    Button(onClick = { viewModel.cancelBrowserUse() }) { Text("Cancel") }
+                                }
+                            }
+                            when (browserState.phase) {
+                                BrowserUseRunState.Phase.RUNNING -> Text("Browser Use is running remotely…", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+                                BrowserUseRunState.Phase.SUCCEEDED -> {
+                                    Text("Completed${browserState.steps?.let { " in $it steps" }.orEmpty()}", fontSize = 12.sp)
+                                    Text(browserState.result.take(4_000), fontSize = 12.sp)
+                                }
+                                BrowserUseRunState.Phase.FAILED -> Text("Failed: ${browserState.error}", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+                                BrowserUseRunState.Phase.CANCELLED -> Text("Cancelled", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+                                BrowserUseRunState.Phase.IDLE -> Unit
                             }
                         }
                     }

@@ -33,6 +33,15 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 
+data class BrowserUseRunState(
+    val phase: Phase = Phase.IDLE,
+    val result: String = "",
+    val error: String = "",
+    val steps: Int? = null,
+) {
+    enum class Phase { IDLE, RUNNING, SUCCEEDED, FAILED, CANCELLED }
+}
+
 @HiltViewModel
 class WorkspaceTaskViewModel @Inject constructor(
     private val repository: WorkspaceTaskRepository,
@@ -57,6 +66,9 @@ class WorkspaceTaskViewModel @Inject constructor(
 
     private val _message = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message
+    private val _browserUseState = kotlinx.coroutines.flow.MutableStateFlow(BrowserUseRunState())
+    val browserUseState: StateFlow<BrowserUseRunState> = _browserUseState
+    @Volatile private var browserCall: okhttp3.Call? = null
 
     fun saveOpenSwarmServerUrl(url: String) {
         viewModelScope.launch {
@@ -76,6 +88,70 @@ class WorkspaceTaskViewModel @Inject constructor(
 
     fun setAutoRunGeneratedCode(enabled: Boolean) {
         viewModelScope.launch { settingsRepository.setAutoRunGeneratedCode(enabled) }
+    }
+
+    fun runBrowserUse(prompt: String, useFmhy: Boolean, maxSteps: Int = 15) {
+        val requestPrompt = prompt.trim()
+        if (requestPrompt.isBlank()) {
+            _browserUseState.value = BrowserUseRunState(BrowserUseRunState.Phase.FAILED, error = "Enter a browser task first.")
+            return
+        }
+        cancelBrowserUse(silent = true)
+        _browserUseState.value = BrowserUseRunState(phase = BrowserUseRunState.Phase.RUNNING)
+        viewModelScope.launch {
+            try {
+                val state = withContext(Dispatchers.IO) {
+                    val configuredUrl = settingsRepository.openSwarmServerUrl.first().trim().trimEnd('/')
+                    val baseUrl = configuredUrl.removeSuffix("/execute").trimEnd('/')
+                    check(baseUrl.isNotBlank()) { "Set the Cloud Backend URL first." }
+                    val clientToken = settingsRepository.openSwarmClientToken.value
+                    check(clientToken.isNotBlank()) { "Save the backend APP_CLIENT_TOKEN first." }
+                    val payload = JSONObject()
+                        .put("task_id", "browser-${System.currentTimeMillis()}")
+                        .put("prompt", requestPrompt)
+                        .put("plugin_id", if (useFmhy) "fmhy_browser" else "browser_use")
+                        .put("browser_max_steps", maxSteps.coerceIn(1, 15))
+                        .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                    val request = Request.Builder().url("$baseUrl/execute")
+                        .header("Authorization", "Bearer $clientToken").post(payload).build()
+                    val call = cloudClient.newCall(request)
+                    browserCall = call
+                    call.execute().use { response ->
+                        val body = response.body?.string().orEmpty()
+                        if (!response.isSuccessful) {
+                            val detail = runCatching { JSONObject(body).optString("error") }.getOrNull().orEmpty()
+                            error("Browser Use returned HTTP ${response.code}${detail.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()}")
+                        }
+                        check(body.isNotBlank()) { "Browser Use returned an empty response." }
+                        val json = JSONObject(body)
+                        BrowserUseRunState(
+                            phase = BrowserUseRunState.Phase.SUCCEEDED,
+                            result = json.optString("result").ifBlank { json.optString("output") }.ifBlank { body }.take(20_000),
+                            steps = json.optInt("steps").takeIf { it > 0 },
+                        )
+                    }
+                }
+                _browserUseState.value = state
+                _message.value = "Remote Browser Use completed."
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                _browserUseState.value = BrowserUseRunState(
+                    phase = if (browserCall?.isCanceled() == true || _browserUseState.value.phase == BrowserUseRunState.Phase.CANCELLED) BrowserUseRunState.Phase.CANCELLED else BrowserUseRunState.Phase.FAILED,
+                    error = failure.message ?: "Browser Use failed.",
+                )
+            } finally {
+                browserCall = null
+            }
+        }
+    }
+
+    fun cancelBrowserUse(silent: Boolean = false) {
+        browserCall?.cancel()
+        if (!silent && _browserUseState.value.phase == BrowserUseRunState.Phase.RUNNING) {
+            _browserUseState.value = BrowserUseRunState(phase = BrowserUseRunState.Phase.CANCELLED)
+            _message.value = "Remote Browser Use cancelled."
+        }
     }
 
     fun createTask(

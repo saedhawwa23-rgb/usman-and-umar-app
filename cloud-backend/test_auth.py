@@ -72,7 +72,8 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
             "Read https://example.com and summarize the page.",
             allowed_domains=["example.com"],
             model=None,
-            max_steps=8,
+            max_steps=15,
+            allow_fmhy_external=False,
         )
 
     async def test_nvidia_key_forces_the_provisioned_model_in_execute(self) -> None:
@@ -90,7 +91,8 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
             "Read https://example.com and summarize the page.",
             allowed_domains=["example.com"],
             model=NVIDIA_DEFAULT_MODEL,
-            max_steps=8,
+            max_steps=15,
+            allow_fmhy_external=False,
         )
 
     async def test_missing_public_url_is_rejected_before_browser_starts(self) -> None:
@@ -100,6 +102,28 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Include at least one public http(s) URL", response.json()["error"])
         browser_task.assert_not_awaited()
+
+    async def test_fmhy_plugin_adds_fmhy_and_dynamic_external_trust(self) -> None:
+        with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            with patch("main.run_browser_task", new_callable=AsyncMock) as browser_task:
+                browser_task.return_value = "FMHY tool result"
+                response = await self.client.post(
+                    "/execute",
+                    headers={"Authorization": "Bearer test-secret"},
+                    json={
+                        "task_id": "fmhy-1",
+                        "prompt": "Find a public image generator on FMHY and generate a cat.",
+                        "plugin_id": "fmhy_browser",
+                    },
+                )
+        self.assertEqual(response.status_code, 200)
+        browser_task.assert_awaited_once_with(
+            "Find a public image generator on FMHY and generate a cat.",
+            allowed_domains=["fmhy.net"],
+            model=None,
+            max_steps=15,
+            allow_fmhy_external=True,
+        )
 
     async def test_private_hostname_is_rejected(self) -> None:
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):

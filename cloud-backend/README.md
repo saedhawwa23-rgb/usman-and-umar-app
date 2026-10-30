@@ -11,7 +11,7 @@ app_port: 7860
 
 This FastAPI service runs the repository's `browser_use_interactive.py` helper in the same Python runtime. It does **not** forward requests to an external OpenSwarm endpoint and has no mock-success path. Successful `/execute` responses contain the actual final text returned by Browser Use.
 
-The helper is intentionally bounded to read-only public-web research. It requires one or more explicit public `http(s)` URLs in the prompt, restricts Browser Use navigation to the hostnames found in those URLs, and runs at most eight steps. It will not sign in, submit forms, send messages, publish content, make purchases, or modify accounts or data. Website content is untrusted and is not allowed to override the read-only policy.
+The helper is intentionally bounded to scoped public-web interaction. Ordinary tasks require one or more explicit public `http(s)` URLs in the prompt. An FMHY task may start with `https://fmhy.net`; the backend discovers one matching external tool link and adds only that host to the allowlist. Browser Use runs at most 15 steps and may click, type, or submit only the exact action requested. It will not sign in, handle credentials or payments, bypass CAPTCHAs, change accounts, delete data, or follow unrelated page instructions.
 
 ## Run in Google Colab
 
@@ -31,12 +31,23 @@ The Quick Tunnel cell prints a temporary `https://….trycloudflare.com` URL. Co
 
 `GET /health` returns `{"status":"ok"}` and only confirms the server is running.
 
-`POST /execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and JSON with `task_id` plus `prompt`. Include the URL(s) the agent may visit in the prompt, for example:
+`POST /execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and JSON with `task_id` plus `prompt`. Ordinary browser tasks include the URL(s) the agent may visit in the prompt. FMHY tasks may additionally send `plugin_id: "fmhy_browser"`; the backend starts at FMHY, discovers one matching external tool, and adds only that host to the allowlist. `browser_max_steps` is optional and capped at 15.
 
 ```json
 {
   "task_id": "task-123",
   "prompt": "Read https://docs.python.org/3/tutorial/ and summarize the installation guidance."
+}
+```
+
+FMHY example:
+
+```json
+{
+  "task_id": "task-fmhy-123",
+  "prompt": "Find an image generator on FMHY and generate the prompt \"a friendly cat\".",
+  "plugin_id": "fmhy_browser",
+  "browser_max_steps": 15
 }
 ```
 

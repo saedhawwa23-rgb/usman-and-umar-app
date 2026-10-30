@@ -41,6 +41,9 @@ _BLOCKED_HOSTS = {"localhost", "metadata.google.internal", "metadata"}
 class ExecuteRequest(BaseModel):
     task_id: str = Field(min_length=1, max_length=128)
     prompt: str = Field(min_length=1, max_length=64_000)
+    plugin_id: str | None = Field(default=None, max_length=64)
+    plugins: list[str] = Field(default_factory=list, max_length=8)
+    browser_max_steps: int = Field(default=15, ge=1, le=15)
 
 
 def _error_response(status_code: int, message: str) -> JSONResponse:
@@ -50,7 +53,21 @@ def _error_response(status_code: int, message: str) -> JSONResponse:
     )
 
 
-def _allowed_domains_from_prompt(prompt: str) -> list[str]:
+def _browser_plugin_requested(request: ExecuteRequest) -> bool:
+    requested = {item.strip().lower() for item in request.plugins if item.strip()}
+    if request.plugin_id:
+        requested.add(request.plugin_id.strip().lower())
+    return bool(requested & {"browser_use", "web_browser", "fmhy_browser", "fmhy_directory"})
+
+
+def _fmhy_plugin_requested(request: ExecuteRequest) -> bool:
+    requested = {item.strip().lower() for item in request.plugins if item.strip()}
+    if request.plugin_id:
+        requested.add(request.plugin_id.strip().lower())
+    return bool(requested & {"fmhy_browser", "fmhy_directory"}) or "fmhy.net" in request.prompt.lower()
+
+
+def _allowed_domains_from_prompt(prompt: str, include_fmhy: bool = False) -> list[str]:
     """Require explicit public URLs and use their hosts as Browser Use's allowlist."""
     domains: list[str] = []
     for match in _URL_PATTERN.findall(prompt):
@@ -79,10 +96,10 @@ def _allowed_domains_from_prompt(prompt: str) -> list[str]:
         if host not in domains:
             domains.append(host)
     if not domains:
-        raise HTTPException(
-            status_code=400,
-            detail="Include at least one public http(s) URL in the prompt; browser navigation is restricted to hosts in the prompt.",
-        )
+        if not include_fmhy:
+            raise HTTPException(status_code=400, detail="Include at least one public http(s) URL in the prompt; browser navigation is restricted to hosts in the prompt.")
+    if include_fmhy and "fmhy.net" not in domains:
+        domains.insert(0, "fmhy.net")
     return domains
 
 
@@ -123,7 +140,8 @@ async def _execute_impl(
         _request_times[client_ip] = recent
 
     try:
-        allowed_domains = _allowed_domains_from_prompt(request.prompt)
+        fmhy_requested = _fmhy_plugin_requested(request)
+        allowed_domains = _allowed_domains_from_prompt(request.prompt, include_fmhy=fmhy_requested)
     except HTTPException as exc:
         return _error_response(exc.status_code, str(exc.detail))
 
@@ -138,7 +156,8 @@ async def _execute_impl(
                     request.prompt,
                     allowed_domains=allowed_domains,
                     model=model,
-                    max_steps=8,
+                    max_steps=request.browser_max_steps,
+                    allow_fmhy_external=fmhy_requested,
                 ),
                 timeout=_EXECUTION_TIMEOUT_SECONDS,
             )
