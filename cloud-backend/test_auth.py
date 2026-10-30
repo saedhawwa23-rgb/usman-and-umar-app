@@ -7,6 +7,7 @@ import httpx
 from main import app
 from browser_use_interactive import (
     NVIDIA_BASE_URL,
+    NVIDIA_DEFAULT_MODEL,
     OPENROUTER_BASE_URL,
     _select_provider,
 )
@@ -70,6 +71,25 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
         browser_task.assert_awaited_once_with(
             "Read https://example.com and summarize the page.",
             allowed_domains=["example.com"],
+            model=None,
+            max_steps=8,
+        )
+
+    async def test_nvidia_key_forces_the_provisioned_model_in_execute(self) -> None:
+        environment = {
+            "APP_CLIENT_TOKEN": "test-secret",
+            "NVIDIA_API_KEY": "nvidia-test-key",
+            "NVIDIA_MODEL": "nvidia/stale-model-from-colab",
+        }
+        with patch.dict(os.environ, environment, clear=False):
+            with patch("main.run_browser_task", new_callable=AsyncMock) as browser_task:
+                browser_task.return_value = "Actual Browser Use output."
+                response = await self.post_execute("Bearer test-secret")
+        self.assertEqual(response.status_code, 200)
+        browser_task.assert_awaited_once_with(
+            "Read https://example.com and summarize the page.",
+            allowed_domains=["example.com"],
+            model=NVIDIA_DEFAULT_MODEL,
             max_steps=8,
         )
 
@@ -107,21 +127,28 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
 
 
 class InferenceProviderSelectionTests(unittest.TestCase):
-    def test_nvidia_takes_priority_and_uses_configured_model(self) -> None:
-        with patch.dict(os.environ, {"NVIDIA_MODEL": "nvidia/custom-model"}, clear=True):
-            provider = _select_provider(None, "nvidia-key", "openrouter-key")
-        self.assertEqual(provider, ("NVIDIA", "nvidia-key", "nvidia/custom-model", NVIDIA_BASE_URL))
+    def test_nvidia_takes_priority_and_ignores_stale_model_overrides(self) -> None:
+        with patch.dict(os.environ, {"NVIDIA_MODEL": "nvidia/stale-model-from-colab"}, clear=True):
+            provider = _select_provider("nvidia/custom-model", "nvidia-key", "openrouter-key")
+        self.assertEqual(
+            provider,
+            ("NVIDIA", "nvidia-key", NVIDIA_DEFAULT_MODEL, NVIDIA_BASE_URL),
+        )
+        self.assertEqual(
+            NVIDIA_BASE_URL + "/chat/completions",
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+        )
 
     def test_openrouter_is_fallback_when_nvidia_key_is_missing(self) -> None:
         with patch.dict(os.environ, {"OPENROUTER_MODEL": "openrouter/custom-model"}, clear=True):
             provider = _select_provider(None, None, "openrouter-key")
         self.assertEqual(provider, ("OpenRouter", "openrouter-key", "openrouter/custom-model", OPENROUTER_BASE_URL))
 
-    def test_requested_model_overrides_provider_default(self) -> None:
+    def test_requested_model_overrides_openrouter_default(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            provider = _select_provider("nvidia/requested-model", "nvidia-key", None)
-        self.assertEqual(provider[0], "NVIDIA")
-        self.assertEqual(provider[2], "nvidia/requested-model")
+            provider = _select_provider("openrouter/requested-model", None, "openrouter-key")
+        self.assertEqual(provider[0], "OpenRouter")
+        self.assertEqual(provider[2], "openrouter/requested-model")
 
     def test_local_ollama_remains_last_fallback(self) -> None:
         with patch.dict(os.environ, {}, clear=True):

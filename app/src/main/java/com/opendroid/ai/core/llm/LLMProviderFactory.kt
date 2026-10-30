@@ -32,6 +32,7 @@ class LLMProviderFactory @Inject constructor(
     private val groqProvider: Provider<GroqProvider>,
     private val ollamaProvider: Provider<OllamaProvider>,
     private val openRouterProvider: Provider<OpenRouterProvider>,
+    private val nvidiaNimProvider: Provider<NvidiaNimProvider>,
     private val togetherAIProvider: Provider<TogetherAIProvider>,
     private val cohereProvider: Provider<CohereProvider>,
     private val deepSeekProvider: Provider<DeepSeekProvider>,
@@ -57,6 +58,7 @@ class LLMProviderFactory @Inject constructor(
             "Groq" -> groqProvider.get()
             "Ollama" -> ollamaProvider.get()
             "OpenRouter" -> openRouterProvider.get()
+            "NVIDIA NIM" -> nvidiaNimProvider.get()
             "Together AI" -> togetherAIProvider.get()
             "Cohere" -> cohereProvider.get()
             "DeepSeek" -> deepSeekProvider.get()

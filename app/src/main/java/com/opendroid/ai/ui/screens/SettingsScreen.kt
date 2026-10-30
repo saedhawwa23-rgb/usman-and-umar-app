@@ -38,6 +38,8 @@ import com.opendroid.ai.data.models.LLMConfig
 import com.opendroid.ai.data.models.effectiveGrantedActions
 import com.opendroid.ai.data.models.resolvedAutoMode
 import com.opendroid.ai.core.llm.ConnectionTestState
+import com.opendroid.ai.core.llm.AIModel
+import com.opendroid.ai.core.llm.ProviderCatalog
 import com.opendroid.ai.core.llm.error.LLMError
 import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.opendroid.ai.core.agent.InstalledAiAppPreferences
@@ -101,6 +103,7 @@ fun SettingsScreen(
         "Groq",
         "Mistral AI",
         "OpenRouter",
+        "NVIDIA NIM",
         "Together AI",
         "Cohere",
         "DeepSeek",
@@ -363,6 +366,19 @@ fun SettingsScreen(
                         val modelsLoading by viewModel.modelsLoading.collectAsState()
                         val modelFetchNotice by viewModel.modelFetchNotice.collectAsState()
                         val fetchedModels = config.modelCache[config.activeProvider] ?: emptyList()
+                        val modelChoices = if (config.activeProvider == "NVIDIA NIM") {
+                            val pinnedModel = ProviderCatalog.defaultModel("NVIDIA NIM")
+                            listOf(
+                                AIModel(
+                                    id = pinnedModel,
+                                    displayName = "Nemotron 3.5 Bolt E4B",
+                                    provider = "NVIDIA NIM",
+                                    isRecommended = true,
+                                )
+                            )
+                        } else {
+                            fetchedModels
+                        }
                         var modelDropdownExpanded by remember { mutableStateOf(false) }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -406,6 +422,7 @@ fun SettingsScreen(
                             OutlinedTextField(
                                 value = config.activeModel,
                                 onValueChange = { viewModel.updateActiveModel(it) },
+                                readOnly = config.activeProvider == "NVIDIA NIM",
                                 label = { Text("Active LLM Model", fontSize = 12.sp) },
                                 singleLine = true,
                                 trailingIcon = {
@@ -426,7 +443,7 @@ fun SettingsScreen(
                                 modifier = Modifier.fillMaxWidth()
                             )
 
-                        if (fetchedModels.isNotEmpty()) {
+                        if (modelChoices.isNotEmpty()) {
                                 DropdownMenu(
                                     expanded = modelDropdownExpanded,
                                     onDismissRequest = { modelDropdownExpanded = false },
@@ -435,7 +452,7 @@ fun SettingsScreen(
                                         .background(CardBackground)
                                         .border(1.dp, BorderColor)
                                 ) {
-                                    fetchedModels.forEach { model ->
+                                    modelChoices.forEach { model ->
                                         DropdownMenuItem(
                                             text = {
                                                 Row(

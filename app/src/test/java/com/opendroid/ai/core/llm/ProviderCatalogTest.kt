@@ -13,10 +13,16 @@ class ProviderCatalogTest {
 
     @Test
     fun `catalog has one default for every stable provider`() {
-        assertEquals(12, ProviderCatalog.providers.size)
+        assertEquals(13, ProviderCatalog.providers.size)
         ProviderCatalog.providers.forEach { provider ->
             assertTrue(provider.displayName, ProviderCatalog.defaultModel(provider.displayName).isNotBlank())
         }
+    }
+
+    @Test
+    fun `NVIDIA NIM defaults to the model provisioned for its API key`() {
+        assertEquals("nvidia/nemotron-3.5-bolt-e4b", ProviderCatalog.defaultModel("NVIDIA NIM"))
+        assertTrue(ProviderCatalog.requiresApiKey("NVIDIA NIM"))
     }
 
     @Test

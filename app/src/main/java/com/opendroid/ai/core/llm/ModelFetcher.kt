@@ -2,6 +2,7 @@ package com.opendroid.ai.core.llm
 
 import android.util.Log
 import com.opendroid.ai.core.util.UrlUtils
+import com.opendroid.ai.core.llm.providers.NvidiaNimProvider
 import com.opendroid.ai.data.repository.SettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -135,6 +136,13 @@ class ModelFetcher @Inject constructor(
                         headers = apiKey?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap()
                     )
                     ModelFetchOutcome.Success(ModelListParsers.openRouter(page, provider))
+                }
+
+                "NVIDIA NIM" -> {
+                    apiKey ?: return@withContext needsKey(provider)
+                    ModelFetchOutcome.Success(
+                        openAiStyle(NvidiaNimProvider.NVIDIA_MODELS_URL, apiKey, provider)
+                    )
                 }
 
                 "Cohere" -> {

@@ -20,7 +20,7 @@ Use `USMAN_COLAB_BACKEND.ipynb` from the repository. It installs the FastAPI and
 Add these values in Colab **Secrets** and grant notebook access:
 
 - `APP_CLIENT_TOKEN`: a strong random Bearer token. Configure the same value in the Android app.
-- `NVIDIA_API_KEY`: preferred inference provider. NVIDIA takes priority when both provider keys are set. The default model is `nvidia/nemotron-3-ultra-550b`; override it with optional `NVIDIA_MODEL`.
+- `NVIDIA_API_KEY`: preferred inference provider. When present, every browser task uses `nvidia/nemotron-3.5-bolt-e4b` at `https://integrate.api.nvidia.com/v1/chat/completions`. The model is pinned; stale `NVIDIA_MODEL` values and request overrides are ignored.
 - `OPENROUTER_API_KEY`: fallback inference provider when `NVIDIA_API_KEY` is unset. The default model is `openrouter/free`; override it with optional `OPENROUTER_MODEL`.
 
 The notebook requires `APP_CLIENT_TOKEN` and at least one inference API key. It can use local Ollama as a final fallback when run outside the notebook without provider keys.
@@ -59,7 +59,6 @@ From `cloud-backend/`, install `requirements.txt`, install Browser Use and Chrom
 ```sh
 APP_CLIENT_TOKEN=local-test-token \
 NVIDIA_API_KEY=your-nvidia-key \
-NVIDIA_MODEL=nvidia/nemotron-3-ultra-550b \
 python -m uvicorn main:app --host 0.0.0.0 --port 7860
 ```
 

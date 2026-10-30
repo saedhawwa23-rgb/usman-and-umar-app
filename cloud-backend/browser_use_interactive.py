@@ -11,9 +11,9 @@ Colab setup for local Ollama fallback (run only when neither provider API key is
     !python -m playwright install --with-deps chromium
     !curl -fsSL https://ollama.com/install.sh | sh
 
-For NVIDIA, add a Colab Secret named NVIDIA_API_KEY and optionally set
-NVIDIA_MODEL (default: `nvidia/nemotron-3-ultra-550b`). NVIDIA inference uses
-`https://integrate.api.nvidia.com/v1`. If no NVIDIA key is present, add
+For NVIDIA, add a Colab Secret named NVIDIA_API_KEY. NVIDIA inference is pinned
+to `nvidia/nemotron-3.5-bolt-e4b` and uses `https://integrate.api.nvidia.com/v1`.
+If no NVIDIA key is present, add
 OPENROUTER_API_KEY to use OpenRouter's free-model router (`openrouter/free`)
 or set OPENROUTER_MODEL. Model availability and pricing vary by provider.
 
@@ -38,7 +38,7 @@ from urllib.request import urlopen
 
 DEFAULT_LOCAL_MODEL = "llama3.1:8b"
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-NVIDIA_DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b"
+NVIDIA_DEFAULT_MODEL = "nvidia/nemotron-3.5-bolt-e4b"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_FREE_MODEL = "openrouter/free"
 
@@ -143,8 +143,9 @@ def _select_provider(
     """Choose NVIDIA first, then OpenRouter, then local Ollama."""
     override = requested_model.strip() if requested_model and requested_model.strip() else ""
     if nvidia_key:
-        model_name = override or os.environ.get("NVIDIA_MODEL", "").strip() or NVIDIA_DEFAULT_MODEL
-        return "NVIDIA", nvidia_key, model_name, NVIDIA_BASE_URL
+        # A configured NVIDIA key is always paired with the model provisioned
+        # for it; ignore stale env vars or request-level model overrides.
+        return "NVIDIA", nvidia_key, NVIDIA_DEFAULT_MODEL, NVIDIA_BASE_URL
     if openrouter_key:
         model_name = override or os.environ.get("OPENROUTER_MODEL", "").strip() or OPENROUTER_FREE_MODEL
         return "OpenRouter", openrouter_key, model_name, OPENROUTER_BASE_URL
@@ -163,8 +164,9 @@ async def run_browser_task(
     `allowed_domains` is required; keep it to the smallest trusted set needed.
     The domain restriction is defense-in-depth, not a substitute for reviewing
     actions and output. Never use this helper for a logged-in or consequential task.
-    NVIDIA_API_KEY takes priority; model overrides NVIDIA_MODEL, whose default is
-    `nvidia/nemotron-3-ultra-550b`. If absent, OPENROUTER_API_KEY is used and
+    NVIDIA_API_KEY takes priority and is pinned to
+    `nvidia/nemotron-3.5-bolt-e4b`, ignoring model overrides. If absent,
+    OPENROUTER_API_KEY is used and
     model overrides OPENROUTER_MODEL. Without either key, Ollama is used.
     """
     if not isinstance(task, str) or not task.strip():

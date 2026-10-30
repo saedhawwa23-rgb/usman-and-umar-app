@@ -23,7 +23,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from browser_use_interactive import run_browser_task
+from browser_use_interactive import NVIDIA_DEFAULT_MODEL, run_browser_task
 
 app = FastAPI(title="USMAN AND UMAR Direct Browser Use Executor", version="2.0.0")
 logger = logging.getLogger(__name__)
@@ -129,10 +129,15 @@ async def _execute_impl(
 
     try:
         async with _execution_semaphore:
+            # NVIDIA is intentionally pinned to the model provisioned for the
+            # Colab key. The helper enforces the same model and ignores stale
+            # NVIDIA_MODEL environment values or request-level overrides.
+            model = NVIDIA_DEFAULT_MODEL if os.getenv("NVIDIA_API_KEY", "").strip() else None
             result = await asyncio.wait_for(
                 run_browser_task(
                     request.prompt,
                     allowed_domains=allowed_domains,
+                    model=model,
                     max_steps=8,
                 ),
                 timeout=_EXECUTION_TIMEOUT_SECONDS,
