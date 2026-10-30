@@ -115,7 +115,7 @@ class WorkspaceTaskViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.setAutoRunGeneratedCode(enabled) }
     }
 
-    fun runBrowserUse(prompt: String, useFmhy: Boolean, maxSteps: Int = 15) {
+    fun runBrowserUse(prompt: String, useFmhy: Boolean, maxSteps: Int = 15, thinkHarder: Boolean = false) {
         val requestPrompt = prompt.trim()
         if (requestPrompt.isBlank()) {
             _browserUseState.value = BrowserUseRunState(BrowserUseRunState.Phase.FAILED, error = "Enter a browser task first.")
@@ -132,6 +132,7 @@ class WorkspaceTaskViewModel @Inject constructor(
                         pluginId = if (useFmhy) BrowserUseRemoteProtocol.FMHY_PLUGIN_ID else "openswarm_agent",
                         target = "auto",
                         maxSteps = maxSteps,
+                        thinkHarder = thinkHarder,
                     )
                     val parsed = BrowserUseRemoteProtocol.parseSuccess(body)
                     BrowserUseRunState(BrowserUseRunState.Phase.SUCCEEDED, parsed.result.take(20_000), steps = parsed.steps)
@@ -268,13 +269,13 @@ class WorkspaceTaskViewModel @Inject constructor(
 
     private suspend fun executeCloud(task: WorkspaceTaskEntity) = withContext(Dispatchers.IO) {
         val target = task.toolId.orEmpty().substringAfterLast(':', "auto")
-        val body = postToCloudServers(task.id, promptOf(task), "openswarm_agent", target, 15)
+        val body = postToCloudServers(task.id, promptOf(task), "openswarm_agent", target, 15, thinkHarder = false)
         val result = runCatching { JSONObject(body).optString("result").takeIf { it.isNotBlank() } ?: body }.getOrDefault(body)
         repository.recordOutcome(task.id, true, outputRedacted = result.take(20_000), event = "openswarm_cloud")
         _message.value = "OpenSwarm completed with an actual result."
     }
 
-    private suspend fun postToCloudServers(taskId: String, prompt: String, pluginId: String, target: String, maxSteps: Int): String {
+    private suspend fun postToCloudServers(taskId: String, prompt: String, pluginId: String, target: String, maxSteps: Int, thinkHarder: Boolean = false): String {
         val urls = settingsRepository.cloudServerUrls.first()
         val enabled = settingsRepository.cloudServerEnabled.first()
         val tokens = settingsRepository.cloudServerTokens.value
@@ -294,7 +295,7 @@ class WorkspaceTaskViewModel @Inject constructor(
                 val baseUrl = urls[index].trim().trimEnd('/').removeSuffix("/execute").trimEnd('/')
                 val token = tokens.getOrElse(index) { "" }.trim()
                 check(token.isNotBlank()) { "$label token is not configured." }
-                val body = JSONObject().put("task_id", taskId).put("prompt", prompt).put("plugin_id", pluginId).put("browser_max_steps", maxSteps)
+                val body = JSONObject().put("task_id", taskId).put("prompt", prompt).put("plugin_id", pluginId).put("browser_max_steps", if (thinkHarder) 30 else maxSteps.coerceIn(1, 30)).put("think_harder", thinkHarder)
                     .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
                 val request = Request.Builder().url("$baseUrl/execute").header("Authorization", "Bearer $token").post(body).build()
                 val call = cloudClient.newCall(request)

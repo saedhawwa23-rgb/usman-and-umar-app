@@ -10,6 +10,7 @@ data class BrowserUseRemoteResult(
 
 object BrowserUseRemoteProtocol {
     const val MAX_STEPS = 15
+    const val THINK_HARDER_MAX_STEPS = 30
     const val FMHY_PLUGIN_ID = "fmhy_browser"
     const val GENERIC_PLUGIN_ID = "browser_use"
 
@@ -18,6 +19,7 @@ object BrowserUseRemoteProtocol {
         prompt: String,
         useFmhy: Boolean,
         maxSteps: Int = MAX_STEPS,
+        thinkHarder: Boolean = false,
     ): JsonObject {
         require(taskId.isNotBlank()) { "Browser task ID must not be blank." }
         require(prompt.isNotBlank()) { "Browser prompt must not be blank." }
@@ -25,7 +27,8 @@ object BrowserUseRemoteProtocol {
             addProperty("task_id", taskId)
             addProperty("prompt", prompt.trim())
             addProperty("plugin_id", if (useFmhy) FMHY_PLUGIN_ID else GENERIC_PLUGIN_ID)
-            addProperty("browser_max_steps", maxSteps.coerceIn(1, MAX_STEPS))
+            addProperty("browser_max_steps", if (thinkHarder) THINK_HARDER_MAX_STEPS else maxSteps.coerceIn(1, THINK_HARDER_MAX_STEPS))
+            addProperty("think_harder", thinkHarder)
         }
     }
 

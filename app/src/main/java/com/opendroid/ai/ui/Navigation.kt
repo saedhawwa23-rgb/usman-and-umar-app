@@ -474,7 +474,13 @@ fun MainDashboard(
                 label = "DashboardTabTransition"
             ) { tab ->
                 when (tab) {
-                    Screen.Chat -> ChatScreen(viewModel = chatViewModel)
+                    Screen.Chat -> ChatScreen(
+                        viewModel = chatViewModel,
+                        onOpenProjects = { currentTab = Screen.TaskManager },
+                        onOpenRemote = { currentTab = Screen.Settings },
+                        onOpenScheduled = onNavigateToRoutines,
+                        onOpenPlugins = {},
+                    )
                     Screen.TaskManager -> WorkspaceTaskScreen(
                         viewModel = workspaceTaskViewModel,
                         onOpenDriveSettings = onNavigateToGoogleDrive,

@@ -29,6 +29,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
@@ -38,6 +40,11 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Share
@@ -89,7 +96,11 @@ import java.util.Locale
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenProjects: () -> Unit = {},
+    onOpenRemote: () -> Unit = {},
+    onOpenScheduled: () -> Unit = {},
+    onOpenPlugins: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -122,9 +133,12 @@ fun ChatScreen(
     var thinkEnabled by remember { mutableStateOf(false) }
     var searchEnabled by remember { mutableStateOf(false) }
     var showAttachmentSheet by remember { mutableStateOf(false) }
+    var showPluginSelector by remember { mutableStateOf(false) }
+    var selectedPluginId by remember { mutableStateOf<String?>(null) }
     var selectedAttachment by remember { mutableStateOf<PendingChatAttachment?>(null) }
     var attachmentToRead by remember { mutableStateOf<Pair<Uri, Boolean>?>(null) }
     var messageForActions by remember { mutableStateOf<ChatMessage?>(null) }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
 
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -197,6 +211,7 @@ fun ChatScreen(
         val modeInstructions = buildString {
             if (thinkEnabled) append("\n[Use deeper internal reasoning before answering; do not reveal private chain-of-thought.]\n")
             if (searchEnabled) append("\n[Use the web-search capability when current or externally verifiable information is needed.]\n")
+            selectedPluginId?.let { append("\n[Route this request through plugin_id=$it.]\n") }
         }
         val text = inputQuery + attachmentText + modeInstructions
         if (inputQuery.isBlank() && attachment == null) return
@@ -212,6 +227,7 @@ fun ChatScreen(
         selectedAttachment = null
         thinkEnabled = false
         searchEnabled = false
+        selectedPluginId = null
     }
 
     // Scroll to bottom on history change. Keyed on currentSessionId too: keying on
@@ -258,9 +274,51 @@ fun ChatScreen(
         }
     }
 
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = DarkSurface,
+                drawerContentColor = TextPrimary,
+            ) {
+                Text(
+                    "USMAN AND UMAR",
+                    color = TextPrimary,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    modifier = Modifier.padding(24.dp, 28.dp, 24.dp, 16.dp)
+                )
+                Text("WORKSPACE", color = TextSecondary, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+                DrawerDestination("Projects", Icons.Default.Folder) {
+                    scope.launch { drawerState.close() }
+                    onOpenProjects()
+                }
+                DrawerDestination("Remote", Icons.Default.Cloud) {
+                    scope.launch { drawerState.close() }
+                    onOpenRemote()
+                }
+                DrawerDestination("Scheduled", Icons.Default.Schedule) {
+                    scope.launch { drawerState.close() }
+                    onOpenScheduled()
+                }
+                DrawerDestination("Plugins", Icons.Default.Extension) {
+                    scope.launch { drawerState.close() }
+                    showPluginSelector = true
+                    showAttachmentSheet = true
+                    onOpenPlugins()
+                }
+            }
+        }
+    ) {
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        Icon(Icons.Default.Menu, contentDescription = "Open navigation", tint = TextPrimary)
+                    }
+                },
                 title = {
                     Column {
                         Text(
@@ -435,6 +493,31 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp)
                 ) {
+                    if (history.isEmpty()) {
+                        item(key = "welcome") {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(top = 96.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text("How can I help?", color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+                                Spacer(Modifier.height(18.dp))
+                                val suggestions = listOf(
+                                    "Find free video editors on FMHY",
+                                    "Research latest Python updates",
+                                    "Launch OpenSwarm to build a script",
+                                )
+                                suggestions.forEach { suggestion ->
+                                    AssistChip(
+                                        onClick = { inputQuery = suggestion },
+                                        label = { Text(suggestion, color = TextPrimary, fontSize = 12.sp) },
+                                        modifier = Modifier.padding(vertical = 4.dp),
+                                        colors = AssistChipDefaults.assistChipColors(containerColor = DarkSurface),
+                                        border = BorderStroke(1.dp, BorderColor),
+                                    )
+                                }
+                            }
+                        }
+                    }
                     items(history) { msg ->
                         ChatBubble(
                             message = msg,
@@ -592,7 +675,7 @@ fun ChatScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(
-                            onClick = { showAttachmentSheet = true },
+                            onClick = { showPluginSelector = false; showAttachmentSheet = true },
                             modifier = Modifier.size(42.dp)
                         ) {
                             Icon(Icons.Default.AttachFile, contentDescription = "Add attachment", tint = TextSecondary)
@@ -715,6 +798,7 @@ fun ChatScreen(
             }
         }
     }
+    }
 
     sessionPendingDelete?.let { session ->
         AlertDialog(
@@ -785,18 +869,41 @@ fun ChatScreen(
             onDismissRequest = { showAttachmentSheet = false },
             containerColor = DarkSurface,
         ) {
-            Text("ADD ATTACHMENT", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(20.dp, 4.dp))
-            AttachmentOption("Camera", Icons.Default.CameraAlt) {
-                showAttachmentSheet = false
-                cameraLauncher.launch(null)
-            }
-            AttachmentOption("Photo from gallery", Icons.Default.PhotoLibrary) {
-                showAttachmentSheet = false
-                galleryLauncher.launch("image/*")
-            }
-            AttachmentOption("Document (text, CSV, JSON, XML)", Icons.Default.Description) {
-                showAttachmentSheet = false
-                documentLauncher.launch(arrayOf("text/*", "application/json", "application/xml", "application/csv"))
+            Text(if (showPluginSelector) "SELECT PLUGIN" else "ADD ATTACHMENT", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(20.dp, 4.dp))
+            if (showPluginSelector) {
+                listOf(
+                    "FMHY" to "fmhy_browser",
+                    "OpenSwarm" to "openswarm_agent",
+                    "Web Browser" to "browser_use",
+                    "Code Executor" to "code_executor",
+                ).forEach { (label, pluginId) ->
+                    AttachmentOption(if (selectedPluginId == pluginId) "$label · selected" else label, Icons.Default.Extension) {
+                        selectedPluginId = pluginId
+                        showPluginSelector = false
+                    }
+                }
+                AttachmentOption("Back to attachments", Icons.Default.ArrowBack) { showPluginSelector = false }
+            } else {
+                AttachmentOption("Camera", Icons.Default.CameraAlt) {
+                    showAttachmentSheet = false
+                    cameraLauncher.launch(null)
+                }
+                AttachmentOption("Photos", Icons.Default.PhotoLibrary) {
+                    showAttachmentSheet = false
+                    galleryLauncher.launch("image/*")
+                }
+                AttachmentOption("Files", Icons.Default.Description) {
+                    showAttachmentSheet = false
+                    documentLauncher.launch(arrayOf("text/*", "application/json", "application/xml", "application/csv"))
+                }
+                AttachmentOption("Plugins", Icons.Default.Extension) { showPluginSelector = true }
+                ListItem(
+                    headlineContent = { Text("Think Harder", color = TextPrimary) },
+                    supportingContent = { Text("Use the selected provider for up to 30 agent steps", color = TextSecondary, fontSize = 12.sp) },
+                    trailingContent = { Switch(checked = thinkEnabled, onCheckedChange = { thinkEnabled = it }) },
+                    leadingContent = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = AccentCyan) },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                )
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -848,6 +955,26 @@ private fun AttachmentOption(label: String, icon: androidx.compose.ui.graphics.v
         leadingContent = { Icon(icon, contentDescription = null, tint = AccentCyan) },
         modifier = Modifier.clickable(onClick = onClick),
         colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+    )
+}
+
+@Composable
+private fun DrawerDestination(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit,
+) {
+    NavigationDrawerItem(
+        label = { Text(label, color = TextPrimary) },
+        selected = false,
+        onClick = onClick,
+        icon = { Icon(icon, contentDescription = null, tint = AccentCyan) },
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+        colors = NavigationDrawerItemDefaults.colors(
+            unselectedContainerColor = Color.Transparent,
+            unselectedTextColor = TextPrimary,
+            unselectedIconColor = AccentCyan,
+        )
     )
 }
 

@@ -89,6 +89,24 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json(), {"result": "Manager delegated to a real specialist and returned this answer."})
         swarm.assert_awaited_once()
 
+    async def test_think_harder_requests_thirty_steps_without_model_override(self) -> None:
+        with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            with patch("main.run_openswarm_task", new_callable=AsyncMock) as swarm:
+                swarm.return_value = "Deep result from the selected provider."
+                response = await self.client.post(
+                    "/execute",
+                    headers={"Authorization": "Bearer test-secret"},
+                    json={
+                        "task_id": "deep-1",
+                        "prompt": "Write a careful implementation plan.",
+                        "plugin_id": "openswarm_agent",
+                        "think_harder": True,
+                        "browser_max_steps": 15,
+                    },
+                )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(swarm.await_args.kwargs["max_steps"], 30)
+
     async def test_nvidia_key_forces_the_provisioned_model_in_execute(self) -> None:
         environment = {
             "APP_CLIENT_TOKEN": "test-secret",

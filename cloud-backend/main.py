@@ -38,7 +38,8 @@ class ExecuteRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=64_000)
     plugin_id: str | None = Field(default=None, max_length=64)
     plugins: list[str] = Field(default_factory=list, max_length=8)
-    browser_max_steps: int = Field(default=15, ge=1, le=15)
+    browser_max_steps: int = Field(default=15, ge=1, le=30)
+    think_harder: bool = False
 
 
 def _error_response(status_code: int, message: str) -> JSONResponse:
@@ -131,13 +132,14 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
         return _error_response(exc.status_code, str(exc.detail))
     try:
         async with _execution_semaphore:
+            max_steps = 30 if request.think_harder else request.browser_max_steps
             if openswarm_requested:
                 result = await asyncio.wait_for(run_openswarm_task(
                     task_id=request.task_id,
                     prompt=request.prompt,
                     plugin_id="openswarm_agent",
                     allowed_domains=allowed_domains,
-                    max_steps=request.browser_max_steps,
+                    max_steps=max_steps,
                 ), timeout=_EXECUTION_TIMEOUT_SECONDS)
             else:
                 model = NVIDIA_DEFAULT_MODEL if os.getenv("NVIDIA_API_KEY", "").strip() else None
@@ -145,7 +147,7 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
                     request.prompt,
                     allowed_domains=allowed_domains,
                     model=model,
-                    max_steps=request.browser_max_steps,
+                    max_steps=max_steps,
                     allow_fmhy_external=fmhy_requested,
                 ), timeout=_EXECUTION_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:

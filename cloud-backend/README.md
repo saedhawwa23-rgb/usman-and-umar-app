@@ -31,7 +31,7 @@ The Quick Tunnel cell prints a temporary `https://….trycloudflare.com` URL. Co
 
 `GET /health` returns `{"status":"ok"}` and only confirms the server is running.
 
-`POST /execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and JSON with `task_id` plus `prompt`. Ordinary browser tasks include the URL(s) the agent may visit in the prompt. FMHY tasks may additionally send `plugin_id: "fmhy_browser"` for direct FMHY Browser Use, or `plugin_id: "openswarm_agent"` for the Manager Agent swarm; the backend starts at FMHY, discovers one matching external tool, and adds only that host to the allowlist. `browser_max_steps` is optional and capped at 15.
+`POST /execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and JSON with `task_id` plus `prompt`. Ordinary browser tasks include the URL(s) the agent may visit in the prompt. FMHY tasks may additionally send `plugin_id: "fmhy_browser"` for direct FMHY Browser Use, or `plugin_id: "openswarm_agent"` for the Manager Agent swarm; the backend starts at FMHY, discovers one matching external tool, and adds only that host to the allowlist. `browser_max_steps` is optional and capped at 15 by default. Set `think_harder: true` to keep the selected provider and raise the agent budget to 30 steps; no model override is performed.
 
 ```json
 {
