@@ -38,8 +38,16 @@ class BrowserUseRemoteProtocolTest {
         val tooLarge = BrowserUseRemoteProtocol.buildRequestJson("task-a", "task", false, 99)
         val tooSmall = BrowserUseRemoteProtocol.buildRequestJson("task-b", "task", false, 0)
 
-        assertEquals(15, tooLarge.get("browser_max_steps").asInt)
+        assertEquals(30, tooLarge.get("browser_max_steps").asInt)
         assertEquals(1, tooSmall.get("browser_max_steps").asInt)
+    }
+
+    @Test
+    fun thinkHarderSetsThirtyStepsAndExplicitFlag() {
+        val request = BrowserUseRemoteProtocol.buildRequestJson("task-deep", "research", false, thinkHarder = true)
+
+        assertEquals(30, request.get("browser_max_steps").asInt)
+        assertTrue(request.get("think_harder").asBoolean)
     }
 
     @Test
