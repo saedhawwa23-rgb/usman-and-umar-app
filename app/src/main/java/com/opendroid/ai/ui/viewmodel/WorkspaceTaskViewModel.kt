@@ -10,6 +10,7 @@ import com.usmanandumar.workspace.core.task.TaskExecutionMode
 import com.usmanandumar.workspace.core.task.TaskQuickAddParser
 import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.accessibility.OpenDroidAccessibilityService
+import com.opendroid.ai.core.browser.BrowserUseRemoteProtocol
 import com.opendroid.ai.core.termux.TermuxIntegration
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.data.repository.SettingsRepository
@@ -106,12 +107,12 @@ class WorkspaceTaskViewModel @Inject constructor(
                     check(baseUrl.isNotBlank()) { "Set the Cloud Backend URL first." }
                     val clientToken = settingsRepository.openSwarmClientToken.value
                     check(clientToken.isNotBlank()) { "Save the backend APP_CLIENT_TOKEN first." }
-                    val payload = JSONObject()
-                        .put("task_id", "browser-${System.currentTimeMillis()}")
-                        .put("prompt", requestPrompt)
-                        .put("plugin_id", if (useFmhy) "fmhy_browser" else "browser_use")
-                        .put("browser_max_steps", maxSteps.coerceIn(1, 15))
-                        .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                    val payload = BrowserUseRemoteProtocol.buildRequestJson(
+                        taskId = "browser-${System.currentTimeMillis()}",
+                        prompt = requestPrompt,
+                        useFmhy = useFmhy,
+                        maxSteps = maxSteps,
+                    ).toString().toRequestBody("application/json; charset=utf-8".toMediaType())
                     val request = Request.Builder().url("$baseUrl/execute")
                         .header("Authorization", "Bearer $clientToken").post(payload).build()
                     val call = cloudClient.newCall(request)
@@ -119,15 +120,13 @@ class WorkspaceTaskViewModel @Inject constructor(
                     call.execute().use { response ->
                         val body = response.body?.string().orEmpty()
                         if (!response.isSuccessful) {
-                            val detail = runCatching { JSONObject(body).optString("error") }.getOrNull().orEmpty()
-                            error("Browser Use returned HTTP ${response.code}${detail.takeIf { it.isNotBlank() }?.let { ": $it" }.orEmpty()}")
+                            error(BrowserUseRemoteProtocol.httpError(response.code, body))
                         }
-                        check(body.isNotBlank()) { "Browser Use returned an empty response." }
-                        val json = JSONObject(body)
+                        val parsed = BrowserUseRemoteProtocol.parseSuccess(body)
                         BrowserUseRunState(
                             phase = BrowserUseRunState.Phase.SUCCEEDED,
-                            result = json.optString("result").ifBlank { json.optString("output") }.ifBlank { body }.take(20_000),
-                            steps = json.optInt("steps").takeIf { it > 0 },
+                            result = parsed.result.take(20_000),
+                            steps = parsed.steps,
                         )
                     }
                 }
