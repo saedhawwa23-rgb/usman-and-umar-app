@@ -5,6 +5,11 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from main import app
+from browser_use_interactive import (
+    NVIDIA_BASE_URL,
+    OPENROUTER_BASE_URL,
+    _select_provider,
+)
 
 
 class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
@@ -51,10 +56,12 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
             response = await self.post_execute("Basic test-secret")
         self.assertEqual(response.status_code, 401)
 
-    async def test_missing_upstream_url_runs_browser_use_directly(self) -> None:
-        environment = {"APP_CLIENT_TOKEN": "test-secret"}
+    async def test_upstream_url_is_ignored_and_browser_use_runs_directly(self) -> None:
+        environment = {
+            "APP_CLIENT_TOKEN": "test-secret",
+            "OPEN_SWARM_EXECUTE_URL": "https://unused.example/execute",
+        }
         with patch.dict(os.environ, environment, clear=False):
-            os.environ.pop("OPEN_SWARM_EXECUTE_URL", None)
             with patch("main.run_browser_task", new_callable=AsyncMock) as browser_task:
                 browser_task.return_value = "Extracted actual page content."
                 response = await self.post_execute("Bearer test-secret")
@@ -97,6 +104,30 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Browser Use failed (RuntimeError)", response.json()["error"])
         self.assertIn("full traceback is in the colab backend log", response.json()["error"].lower())
         self.assertNotIn("Traceback", response.text)
+
+
+class InferenceProviderSelectionTests(unittest.TestCase):
+    def test_nvidia_takes_priority_and_uses_configured_model(self) -> None:
+        with patch.dict(os.environ, {"NVIDIA_MODEL": "nvidia/custom-model"}, clear=True):
+            provider = _select_provider(None, "nvidia-key", "openrouter-key")
+        self.assertEqual(provider, ("NVIDIA", "nvidia-key", "nvidia/custom-model", NVIDIA_BASE_URL))
+
+    def test_openrouter_is_fallback_when_nvidia_key_is_missing(self) -> None:
+        with patch.dict(os.environ, {"OPENROUTER_MODEL": "openrouter/custom-model"}, clear=True):
+            provider = _select_provider(None, None, "openrouter-key")
+        self.assertEqual(provider, ("OpenRouter", "openrouter-key", "openrouter/custom-model", OPENROUTER_BASE_URL))
+
+    def test_requested_model_overrides_provider_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            provider = _select_provider("nvidia/requested-model", "nvidia-key", None)
+        self.assertEqual(provider[0], "NVIDIA")
+        self.assertEqual(provider[2], "nvidia/requested-model")
+
+    def test_local_ollama_remains_last_fallback(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            provider = _select_provider(None, None, None)
+        self.assertEqual(provider[0], "Ollama")
+        self.assertIsNone(provider[1])
 
 
 if __name__ == "__main__":

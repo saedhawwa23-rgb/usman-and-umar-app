@@ -1,20 +1,21 @@
 """Run Browser Use locally inside an interactive Google Colab runtime.
 
-The browser runs in the current runtime. If OPENROUTER_API_KEY is available
-in the process environment or Colab Secrets, inference uses OpenRouter. Otherwise,
-it falls back to a local Ollama model. This module starts no HTTP server and
-creates no public endpoint or tunnel.
+The browser runs in the current runtime. Inference prefers NVIDIA when
+NVIDIA_API_KEY is available, falls back to OpenRouter when OPENROUTER_API_KEY
+is available, then to a local Ollama model. This module starts no HTTP server
+and creates no public endpoint or tunnel.
 
-Colab setup for local Ollama fallback (run as notebook cells; skip with OpenRouter):
+Colab setup for local Ollama fallback (run only when neither provider API key is configured):
 
     %pip install -U browser-use
     !python -m playwright install --with-deps chromium
     !curl -fsSL https://ollama.com/install.sh | sh
 
-To use OpenRouter, add a Colab Secret named OPENROUTER_API_KEY and grant the
-notebook access. By default the script uses OpenRouter's free-model router,
-`openrouter/free`. Set OPENROUTER_MODEL to another OpenRouter model slug only
-if you intend to use that model; model pricing varies.
+For NVIDIA, add a Colab Secret named NVIDIA_API_KEY and optionally set
+NVIDIA_MODEL (default: `nvidia/nemotron-3-ultra-550b`). NVIDIA inference uses
+`https://integrate.api.nvidia.com/v1`. If no NVIDIA key is present, add
+OPENROUTER_API_KEY to use OpenRouter's free-model router (`openrouter/free`)
+or set OPENROUTER_MODEL. Model availability and pricing vary by provider.
 
 Example notebook cell:
 
@@ -36,6 +37,8 @@ from typing import Iterable
 from urllib.request import urlopen
 
 DEFAULT_LOCAL_MODEL = "llama3.1:8b"
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+NVIDIA_DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_FREE_MODEL = "openrouter/free"
 
@@ -63,21 +66,29 @@ def _validate_domains(domains: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(cleaned))
 
 
-def _openrouter_api_key() -> str | None:
-    """Read the key from the process environment or Colab Secrets, without printing it."""
-    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+def _provider_api_key(name: str) -> str | None:
+    """Read a provider key from the environment or Colab Secrets, without printing it."""
+    key = os.environ.get(name, "").strip()
     if key:
         return key
     try:
         from google.colab import userdata  # type: ignore[import-not-found]
 
-        key = str(userdata.get("OPENROUTER_API_KEY") or "").strip()
+        key = str(userdata.get(name) or "").strip()
     except Exception:
         key = ""
     if key:
-        os.environ["OPENROUTER_API_KEY"] = key
+        os.environ[name] = key
         return key
     return None
+
+
+def _nvidia_api_key() -> str | None:
+    return _provider_api_key("NVIDIA_API_KEY")
+
+
+def _openrouter_api_key() -> str | None:
+    return _provider_api_key("OPENROUTER_API_KEY")
 
 
 def _ollama_ready() -> bool:
@@ -94,8 +105,8 @@ def _ensure_ollama_server() -> None:
     executable = shutil.which("ollama")
     if not executable:
         raise RuntimeError(
-            "No OpenRouter key was found and Ollama is not installed. Add the "
-            "OPENROUTER_API_KEY Colab Secret, or run: !curl -fsSL https://ollama.com/install.sh | sh"
+            "No NVIDIA_API_KEY or OPENROUTER_API_KEY was found and Ollama is not installed. "
+            "Add a provider API key in Colab Secrets, or run: !curl -fsSL https://ollama.com/install.sh | sh"
         )
     subprocess.Popen(
         [executable, "serve"],
@@ -124,12 +135,20 @@ def _ensure_model(model: str) -> None:
         subprocess.run([executable, "pull", model], check=True)
 
 
-def _select_model(requested_model: str | None, has_openrouter_key: bool) -> str:
-    if requested_model and requested_model.strip():
-        return requested_model.strip()
-    if has_openrouter_key:
-        return os.environ.get("OPENROUTER_MODEL", "").strip() or OPENROUTER_FREE_MODEL
-    return DEFAULT_LOCAL_MODEL
+def _select_provider(
+    requested_model: str | None,
+    nvidia_key: str | None,
+    openrouter_key: str | None,
+) -> tuple[str, str | None, str, str | None]:
+    """Choose NVIDIA first, then OpenRouter, then local Ollama."""
+    override = requested_model.strip() if requested_model and requested_model.strip() else ""
+    if nvidia_key:
+        model_name = override or os.environ.get("NVIDIA_MODEL", "").strip() or NVIDIA_DEFAULT_MODEL
+        return "NVIDIA", nvidia_key, model_name, NVIDIA_BASE_URL
+    if openrouter_key:
+        model_name = override or os.environ.get("OPENROUTER_MODEL", "").strip() or OPENROUTER_FREE_MODEL
+        return "OpenRouter", openrouter_key, model_name, OPENROUTER_BASE_URL
+    return "Ollama", None, override or DEFAULT_LOCAL_MODEL, None
 
 
 async def run_browser_task(
@@ -144,8 +163,9 @@ async def run_browser_task(
     `allowed_domains` is required; keep it to the smallest trusted set needed.
     The domain restriction is defense-in-depth, not a substitute for reviewing
     actions and output. Never use this helper for a logged-in or consequential task.
-    If `OPENROUTER_API_KEY` is available, `model` overrides OPENROUTER_MODEL;
-    otherwise it selects the local Ollama model (default: llama3.1:8b).
+    NVIDIA_API_KEY takes priority; model overrides NVIDIA_MODEL, whose default is
+    `nvidia/nemotron-3-ultra-550b`. If absent, OPENROUTER_API_KEY is used and
+    model overrides OPENROUTER_MODEL. Without either key, Ollama is used.
     """
     if not isinstance(task, str) or not task.strip():
         raise ValueError("Provide a non-empty browser task.")
@@ -153,8 +173,13 @@ async def run_browser_task(
     if not 1 <= int(max_steps) <= 20:
         raise ValueError("max_steps must be between 1 and 20.")
 
-    openrouter_key = _openrouter_api_key()
-    selected_model = _select_model(model, bool(openrouter_key))
+    nvidia_key = _nvidia_api_key()
+    openrouter_key = None if nvidia_key else _openrouter_api_key()
+    provider_name, api_key, selected_model, base_url = _select_provider(
+        model,
+        nvidia_key,
+        openrouter_key,
+    )
 
     try:
         from browser_use import Agent, Browser, ChatOllama, ChatOpenAI
@@ -163,14 +188,14 @@ async def run_browser_task(
             "Browser Use is not installed. In a Colab cell run: %pip install -U browser-use"
         ) from exc
 
-    if openrouter_key:
-        # OpenRouter is OpenAI-compatible. The key is only passed to the client.
+    if api_key and base_url:
+        # NVIDIA and OpenRouter both expose OpenAI-compatible chat APIs.
         llm = ChatOpenAI(
             model=selected_model,
-            base_url=OPENROUTER_BASE_URL,
-            api_key=openrouter_key,
+            base_url=base_url,
+            api_key=api_key,
         )
-        print(f"Using OpenRouter model: {selected_model}")
+        print(f"Using {provider_name} model: {selected_model}")
     else:
         _ensure_ollama_server()
         _ensure_model(selected_model)

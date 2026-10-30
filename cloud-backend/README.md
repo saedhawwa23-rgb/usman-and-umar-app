@@ -9,27 +9,23 @@ app_port: 7860
 
 # USMAN AND UMAR Direct Browser Use Executor
 
-This FastAPI service runs the repository's `browser_use_interactive.py` helper in the same Python runtime. It does **not** forward requests to `OPEN_SWARM_EXECUTE_URL`, does not use `OPEN_SWARM_BEARER_TOKEN`, and has no mock-success path. Successful `/execute` responses contain the actual final text returned by Browser Use.
+This FastAPI service runs the repository's `browser_use_interactive.py` helper in the same Python runtime. It does **not** forward requests to an external OpenSwarm endpoint and has no mock-success path. Successful `/execute` responses contain the actual final text returned by Browser Use.
 
 The helper is intentionally bounded to read-only public-web research. It requires one or more explicit public `http(s)` URLs in the prompt, restricts Browser Use navigation to the hostnames found in those URLs, and runs at most eight steps. It will not sign in, submit forms, send messages, publish content, make purchases, or modify accounts or data. Website content is untrusted and is not allowed to override the read-only policy.
 
 ## Run in Google Colab
 
-Use `USMAN_COLAB_BACKEND.ipynb` from the repository. It installs the FastAPI and Browser Use dependencies, installs Chromium, and starts the service on port 7860 before starting the zrok tunnel.
+Use `USMAN_COLAB_BACKEND.ipynb` from the repository. It installs the FastAPI and Browser Use dependencies, installs Chromium and `cloudflared`, starts the server on port 7860, then launches a Cloudflare Quick Tunnel.
 
 Add these values in Colab **Secrets** and grant notebook access:
 
 - `APP_CLIENT_TOKEN`: a strong random Bearer token. Configure the same value in the Android app.
-- `OPENROUTER_API_KEY`: recommended for agent inference. The helper uses OpenRouter's free-model router by default; model availability and pricing may vary. If no key is provided, the helper requires an installed and running Ollama service and model in the runtime.
-- `OPENROUTER_MODEL`: optional OpenRouter model slug; defaults to `openrouter/free`.
+- `NVIDIA_API_KEY`: preferred inference provider. NVIDIA takes priority when both provider keys are set. The default model is `nvidia/nemotron-3-ultra-550b`; override it with optional `NVIDIA_MODEL`.
+- `OPENROUTER_API_KEY`: fallback inference provider when `NVIDIA_API_KEY` is unset. The default model is `openrouter/free`; override it with optional `OPENROUTER_MODEL`.
 
-`OPEN_SWARM_EXECUTE_URL`, `OPEN_SWARM_BEARER_TOKEN`, and `ENABLE_MOCK_EXECUTION` are not used by this direct executor. After changing secrets, rerun the secrets cell and restart the FastAPI server so its process receives the current environment.
+The notebook requires `APP_CLIENT_TOKEN` and at least one inference API key. It can use local Ollama as a final fallback when run outside the notebook without provider keys.
 
-Keep the Colab runtime and zrok share running while you use the API. The tunnel URL is publicly reachable, so protect the Bearer token and only expose it to trusted clients.
-
-## Docker or Render deployment
-
-The Dockerfile installs Browser Use and Chromium and copies both `main.py` and `browser_use_interactive.py`. For Hugging Face Spaces or another Docker host, place the contents of `cloud-backend/` at the deployment repository root and set `APP_CLIENT_TOKEN` and `OPENROUTER_API_KEY` as secrets. For Render, the included manifest installs Chromium during the build; supply the same secrets in the Render dashboard. No `OPEN_SWARM_EXECUTE_URL` is needed.
+The Quick Tunnel cell prints a temporary `https://….trycloudflare.com` URL. Copy that base URL—without `/execute`—into the Android app's **Task Manager → Cloud Browser Use settings → Cloud Backend URL**. The app appends `/execute` automatically. Quick Tunnel URLs are not reserved and may change after the tunnel or Colab runtime restarts; update the Android setting when a new URL is printed. Keep the Colab runtime and tunnel process running while using the API. Protect the Android Bearer token because the tunnel URL is publicly reachable.
 
 ## API
 
@@ -52,17 +48,22 @@ Full Python tracebacks are written to the backend server log for diagnosis and a
 !tail -n 100 /tmp/usman-fastapi.log
 ```
 
+## Docker or Render deployment
+
+The Dockerfile installs Browser Use and Chromium and copies both `main.py` and `browser_use_interactive.py`. For Hugging Face Spaces or another Docker host, place the contents of `cloud-backend/` at the deployment repository root and set `APP_CLIENT_TOKEN` plus at least one of `NVIDIA_API_KEY` or `OPENROUTER_API_KEY` as secrets. For Render, the included manifest installs Chromium during the build; provide those secrets in the dashboard.
+
 ## Local development
 
 From `cloud-backend/`, install `requirements.txt`, install Browser Use and Chromium using the setup instructions in the Colab notebook, then run:
 
 ```sh
 APP_CLIENT_TOKEN=local-test-token \
-OPENROUTER_API_KEY=your-key \
+NVIDIA_API_KEY=your-nvidia-key \
+NVIDIA_MODEL=nvidia/nemotron-3-ultra-550b \
 python -m uvicorn main:app --host 0.0.0.0 --port 7860
 ```
 
-Run the backend contract and authentication tests with:
+If NVIDIA is not configured, set `OPENROUTER_API_KEY` instead. Run the backend contract and provider-selection tests with:
 
 ```sh
 python -m unittest -v test_auth.py
