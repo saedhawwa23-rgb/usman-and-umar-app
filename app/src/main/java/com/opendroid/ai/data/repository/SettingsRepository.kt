@@ -59,9 +59,13 @@ class SettingsRepository internal constructor(
     private val llmConfigKey = stringPreferencesKey("llm_config")
     private val openSwarmServerUrlKey = stringPreferencesKey("openswarm_backend_url")
     private val legacyOpenSwarmServerUrlKey = stringPreferencesKey("openswarm_render_url")
+    private val cloudServerUrlKeys = (1..3).map { stringPreferencesKey("openswarm_server_${it}_url") }
+    private val cloudServerEnabledKeys = (1..3).map { booleanPreferencesKey("openswarm_server_${it}_enabled") }
     private val autoRunGeneratedCodeKey = booleanPreferencesKey("auto_run_generated_code")
     private val mutableOpenSwarmClientToken = MutableStateFlow("")
     val openSwarmClientToken: StateFlow<String> = mutableOpenSwarmClientToken.asStateFlow()
+    private val mutableCloudServerTokens = MutableStateFlow(listOf("", "", ""))
+    val cloudServerTokens: StateFlow<List<String>> = mutableCloudServerTokens.asStateFlow()
 
     /** A UI-safe recovery signal; it never contains credential or ciphertext data. */
     val providerCredentialRecoveryState = providerCredentialStore.recoveryState
@@ -186,7 +190,9 @@ class SettingsRepository internal constructor(
             val previousValue = when (credential) {
                 is ProviderCredentialId.ApiKey -> snapshot.providerApiKeys[credential.providerName]
                 ProviderCredentialId.ElevenLabsApiKey -> snapshot.elevenLabsApiKey
-                ProviderCredentialId.HuggingFaceToken, ProviderCredentialId.OpenSwarmClientToken -> null
+                ProviderCredentialId.HuggingFaceToken, ProviderCredentialId.OpenSwarmClientToken,
+                ProviderCredentialId.OpenSwarmServer1Token, ProviderCredentialId.OpenSwarmServer2Token,
+                ProviderCredentialId.OpenSwarmServer3Token -> null
             }
             val result = persistCredential(credential, previousValue)
             if (result !is CredentialStoreResult.Success) return result.toPersistenceState()
@@ -297,7 +303,24 @@ class SettingsRepository internal constructor(
         }
         .flowOn(Dispatchers.IO)
 
+    val cloudServerUrls: Flow<List<String>> = dataStore.data.map { preferences ->
+        (0..2).map { index ->
+            preferences[cloudServerUrlKeys[index]].orEmpty().ifBlank {
+                if (index == 0) preferences[openSwarmServerUrlKey] ?: preferences[legacyOpenSwarmServerUrlKey] ?: "" else ""
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    val cloudServerEnabled: Flow<List<Boolean>> = dataStore.data.map { preferences ->
+        (0..2).map { index -> preferences[cloudServerEnabledKeys[index]] ?: (index == 0) }
+    }.flowOn(Dispatchers.IO)
+
     suspend fun saveOpenSwarmServerUrl(value: String) {
+        saveCloudServerUrl(0, value)
+    }
+
+    suspend fun saveCloudServerUrl(index: Int, value: String) {
+        require(index in 0..2) { "Server index must be between 0 and 2." }
         val normalized = value.trim().trimEnd('/')
         if (normalized.isNotEmpty()) {
             val uri = java.net.URI(normalized)
@@ -309,31 +332,47 @@ class SettingsRepository internal constructor(
             }
         }
         dataStore.edit { preferences ->
-            if (normalized.isBlank()) {
-                preferences.remove(openSwarmServerUrlKey)
-                preferences.remove(legacyOpenSwarmServerUrlKey)
-            } else {
-                preferences[openSwarmServerUrlKey] = normalized
+            if (normalized.isBlank()) preferences.remove(cloudServerUrlKeys[index])
+            else preferences[cloudServerUrlKeys[index]] = normalized
+            if (index == 0) {
+                if (normalized.isBlank()) preferences.remove(openSwarmServerUrlKey)
+                else preferences[openSwarmServerUrlKey] = normalized
                 preferences.remove(legacyOpenSwarmServerUrlKey)
             }
         }
     }
 
+    suspend fun setCloudServerEnabled(index: Int, enabled: Boolean) {
+        require(index in 0..2) { "Server index must be between 0 and 2." }
+        dataStore.edit { it[cloudServerEnabledKeys[index]] = enabled }
+    }
+
     private fun readOpenSwarmClientToken() {
-        val result = providerCredentialStore.read(ProviderCredentialId.OpenSwarmClientToken)
-        mutableOpenSwarmClientToken.value = (result as? CredentialStoreResult.Success)?.value.orEmpty()
+        val ids = listOf(ProviderCredentialId.OpenSwarmServer1Token, ProviderCredentialId.OpenSwarmServer2Token, ProviderCredentialId.OpenSwarmServer3Token)
+        val values = ids.map { (providerCredentialStore.read(it) as? CredentialStoreResult.Success)?.value.orEmpty() }
+        mutableCloudServerTokens.value = values
+        mutableOpenSwarmClientToken.value = values.firstOrNull().orEmpty()
     }
 
     suspend fun saveOpenSwarmClientToken(value: String) = withContext(Dispatchers.IO) {
+        saveCloudServerToken(0, value)
+    }
+
+    suspend fun saveCloudServerToken(index: Int, value: String) = withContext(Dispatchers.IO) {
+        require(index in 0..2) { "Server index must be between 0 and 2." }
         val normalized = value.trim()
         require(normalized.length <= 512) { "The bridge token is too long." }
+        val credential = listOf(ProviderCredentialId.OpenSwarmServer1Token, ProviderCredentialId.OpenSwarmServer2Token, ProviderCredentialId.OpenSwarmServer3Token)[index]
         val result = if (normalized.isBlank()) {
-            providerCredentialStore.remove(ProviderCredentialId.OpenSwarmClientToken)
+            providerCredentialStore.remove(credential)
         } else {
-            providerCredentialStore.write(ProviderCredentialId.OpenSwarmClientToken, normalized)
+            providerCredentialStore.write(credential, normalized)
         }
         when (result) {
-            is CredentialStoreResult.Success -> mutableOpenSwarmClientToken.value = normalized
+            is CredentialStoreResult.Success -> {
+                mutableCloudServerTokens.value = mutableCloudServerTokens.value.toMutableList().also { it[index] = normalized }
+                if (index == 0) mutableOpenSwarmClientToken.value = normalized
+            }
             CredentialStoreResult.CredentialsMustBeReentered -> error("Credential storage needs recovery before the cloud token can be saved.")
             CredentialStoreResult.StorageUnavailable -> error("Android secure storage is unavailable; the cloud token was not saved.")
         }

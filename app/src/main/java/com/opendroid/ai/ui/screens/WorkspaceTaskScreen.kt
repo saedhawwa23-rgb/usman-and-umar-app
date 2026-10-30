@@ -75,13 +75,15 @@ fun WorkspaceTaskScreen(
         InstalledAiAppDiscovery.scan(context.packageManager)
     }
     val tasks by viewModel.tasks.collectAsState()
-    val serverUrl by viewModel.openSwarmServerUrl.collectAsState()
-    val clientToken by viewModel.openSwarmClientToken.collectAsState()
+    val serverUrls by viewModel.cloudServerUrls.collectAsState()
+    val serverEnabled by viewModel.cloudServerEnabled.collectAsState()
+    val serverTokens by viewModel.cloudServerTokens.collectAsState()
     val autoRunCode by viewModel.autoRunGeneratedCode.collectAsState()
     val message by viewModel.message.collectAsState()
     val browserState by viewModel.browserUseState.collectAsState()
     var rawText by remember { mutableStateOf("") }
     var mode by remember { mutableStateOf(TaskExecutionMode.LOCAL_AI_APP) }
+    var cloudTarget by remember { mutableStateOf("auto") }
     var providerPackage by remember(installedAiApps) {
         val saved = InstalledAiAppPreferences.selectedPackage(context)
         mutableStateOf(installedAiApps.firstOrNull { it.packageName == saved }?.packageName
@@ -90,7 +92,6 @@ fun WorkspaceTaskScreen(
     var scriptLanguage by remember { mutableStateOf("bash") }
     var page by remember { mutableStateOf(TaskuaryPage.INBOX) }
     var settingsExpanded by remember { mutableStateOf(false) }
-    var urlDraft by remember(serverUrl) { mutableStateOf(serverUrl) }
     var browserPrompt by remember { mutableStateOf("") }
     var useFmhy by remember { mutableStateOf(true) }
     var taskPendingExport by remember { mutableStateOf<WorkspaceTaskEntity?>(null) }
@@ -183,6 +184,8 @@ fun WorkspaceTaskScreen(
                             },
                             modifier = Modifier.weight(1f),
                         )
+                    } else if (mode == TaskExecutionMode.CLOUD_OPENSWARM) {
+                        CloudTargetMenu(target = cloudTarget, onSelect = { cloudTarget = it }, modifier = Modifier.weight(1f))
                     } else if (mode == TaskExecutionMode.TERMUX_SCRIPT) {
                         ScriptLanguageMenu(language = scriptLanguage, onSelect = { scriptLanguage = it }, modifier = Modifier.weight(1f))
                     }
@@ -190,7 +193,7 @@ fun WorkspaceTaskScreen(
             }
             item {
                 Button(
-                    onClick = { viewModel.createTask(rawText, mode, providerPackage, scriptLanguage) { rawText = "" } },
+                    onClick = { viewModel.createTask(rawText, mode, providerPackage, scriptLanguage, cloudTarget) { rawText = "" } },
                     enabled = rawText.isNotBlank() &&
                         (mode != TaskExecutionMode.LOCAL_AI_APP || installedAiApps.any { it.packageName == providerPackage }),
                     modifier = Modifier.fillMaxWidth(),
@@ -220,35 +223,22 @@ fun WorkspaceTaskScreen(
                         Text("CLOUD BROWSER USE SETTINGS", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
                         Spacer(Modifier.height(4.dp))
                         Button(onClick = { settingsExpanded = !settingsExpanded }) {
-                            Text(if (settingsExpanded) "Hide server settings" else "Configure cloud backend")
+                            Text(if (settingsExpanded) "Hide server settings" else "Configure 3 cloud servers")
                         }
                         if (settingsExpanded) {
-                            OutlinedTextField(
-                                value = urlDraft,
-                                onValueChange = { urlDraft = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                                label = { Text("Cloud Backend URL") },
-                                placeholder = { Text("https://your-cloud-backend.example") },
-                                supportingText = { Text("Enter the server base URL; the app appends /execute. A URL ending in /execute is also accepted.") },
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { viewModel.saveOpenSwarmServerUrl(urlDraft) }) { Text("Save URL") }
-                                Button(onClick = { urlDraft = ""; viewModel.saveOpenSwarmServerUrl("") }) { Text("Clear") }
-                            }
-                            var tokenDraft by remember(clientToken) { mutableStateOf(clientToken) }
-                            OutlinedTextField(
-                                value = tokenDraft,
-                                onValueChange = { tokenDraft = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                                label = { Text("APP_CLIENT_TOKEN") },
-                                supportingText = { Text("Match APP_CLIENT_TOKEN configured as a backend secret. Stored with Android Keystore encryption.") },
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { viewModel.saveOpenSwarmClientToken(tokenDraft) }) { Text("Save token") }
-                                Button(onClick = { tokenDraft = ""; viewModel.saveOpenSwarmClientToken("") }) { Text("Clear token") }
+                            (0..2).forEach { index ->
+                                var urlDraft by remember(serverUrls.getOrElse(index) { "" }) { mutableStateOf(serverUrls.getOrElse(index) { "" }) }
+                                var tokenDraft by remember(serverTokens.getOrElse(index) { "" }) { mutableStateOf(serverTokens.getOrElse(index) { "" }) }
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Server ${index + 1}", fontSize = 13.sp)
+                                    Switch(checked = serverEnabled.getOrElse(index) { index == 0 }, onCheckedChange = { viewModel.setCloudServerEnabled(index, it) })
+                                }
+                                OutlinedTextField(value = urlDraft, onValueChange = { urlDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Server ${index + 1} URL") }, placeholder = { Text("https://server-${index + 1}.example") })
+                                OutlinedTextField(value = tokenDraft, onValueChange = { tokenDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), label = { Text("Server ${index + 1} Token") })
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(onClick = { viewModel.saveCloudServerUrl(index, urlDraft); viewModel.saveCloudServerToken(index, tokenDraft) }) { Text("Save Server ${index + 1}") }
+                                    Button(onClick = { urlDraft = ""; tokenDraft = ""; viewModel.saveCloudServerUrl(index, ""); viewModel.saveCloudServerToken(index, "") }) { Text("Clear") }
+                                }
                             }
                             Spacer(Modifier.height(12.dp))
                             Text("REMOTE BROWSER USE", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
@@ -419,6 +409,25 @@ private fun ScriptLanguageMenu(language: String, onSelect: (String) -> Unit, mod
 }
 
 @Composable
+private fun CloudTargetMenu(target: String, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    val options = listOf("auto", "server1", "server2", "server3")
+    Column(modifier) {
+        Button(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (target == "auto") "Auto / Load Balance" else "Server ${target.removePrefix("server")}", fontSize = 12.sp)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { item ->
+                DropdownMenuItem(
+                    text = { Text(if (item == "auto") "Auto / Load Balance" else "Server ${item.removePrefix("server")}") },
+                    onClick = { onSelect(item); expanded = false },
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun TaskCard(
     task: WorkspaceTaskEntity,
     onRun: (WorkspaceTaskEntity) -> Unit,
@@ -481,7 +490,7 @@ private fun SectionTitle(text: String) {
 
 private fun modeLabel(toolId: String?): String = when {
     toolId?.startsWith("hybrid:LOCAL_AI_APP:") == true -> "Local AI · ${toolId.substringAfterLast(':')}"
-    toolId == "hybrid:CLOUD_OPENSWARM" -> "Cloud Browser Use"
+    toolId?.startsWith("hybrid:CLOUD_OPENSWARM") == true -> "Cloud OpenSwarm"
     toolId?.startsWith("hybrid:TERMUX_SCRIPT") == true -> "Local Termux · ${toolId.substringAfterLast(':')}"
     else -> "No execution mode"
 }

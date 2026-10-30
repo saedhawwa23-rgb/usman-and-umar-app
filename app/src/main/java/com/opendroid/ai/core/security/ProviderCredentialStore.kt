@@ -58,6 +58,10 @@ sealed class ProviderCredentialId protected constructor(
         legacyPreferenceKey = "openswarm_client_token"
     )
 
+    data object OpenSwarmServer1Token : ProviderCredentialId("openswarm-server-1-token", "openswarm_server_1_token")
+    data object OpenSwarmServer2Token : ProviderCredentialId("openswarm-server-2-token", "openswarm_server_2_token")
+    data object OpenSwarmServer3Token : ProviderCredentialId("openswarm-server-3-token", "openswarm_server_3_token")
+
     internal companion object {
         private const val STORAGE_KEY_PREFIX = "credential."
         private const val API_KEY_LOGICAL_PREFIX = "provider-api-key:"
@@ -88,6 +92,9 @@ sealed class ProviderCredentialId protected constructor(
             logicalId == ElevenLabsApiKey.logicalId -> ElevenLabsApiKey
             logicalId == HuggingFaceToken.logicalId -> HuggingFaceToken
             logicalId == OpenSwarmClientToken.logicalId -> OpenSwarmClientToken
+            logicalId == OpenSwarmServer1Token.logicalId -> OpenSwarmServer1Token
+            logicalId == OpenSwarmServer2Token.logicalId -> OpenSwarmServer2Token
+            logicalId == OpenSwarmServer3Token.logicalId -> OpenSwarmServer3Token
             logicalId.startsWith(API_KEY_LOGICAL_PREFIX) -> runCatching {
                 ApiKey(logicalId.removePrefix(API_KEY_LOGICAL_PREFIX))
             }.getOrNull()

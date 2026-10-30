@@ -86,6 +86,9 @@ fun SettingsScreen(
     val connectionResults by viewModel.connectionResults.collectAsState()
     val providerCredentialRecoveryState by viewModel.providerCredentialRecoveryState.collectAsState()
     val providerCredentialPersistenceState by viewModel.providerCredentialPersistenceState.collectAsState()
+    val cloudServerUrls by viewModel.settingsRepository.cloudServerUrls.collectAsState(initial = listOf("", "", ""))
+    val cloudServerEnabled by viewModel.settingsRepository.cloudServerEnabled.collectAsState(initial = listOf(true, false, false))
+    val cloudServerTokens by viewModel.settingsRepository.cloudServerTokens.collectAsState()
     val installedAiApps = remember(context.packageManager) {
         InstalledAiAppDiscovery.scan(context.packageManager)
     }
@@ -271,6 +274,26 @@ fun SettingsScreen(
                                     )
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = CardBackground)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        Text("OPENSWARM CLOUD SERVERS", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
+                        Text("Configure three Colab/FastAPI backends. Auto mode load-balances and retries Server 2/3 after timeout, HTTP 500, or HTTP 503.", color = TextSecondary, fontSize = 12.sp)
+                        (0..2).forEach { index ->
+                            var url by remember(cloudServerUrls.getOrElse(index) { "" }) { mutableStateOf(cloudServerUrls.getOrElse(index) { "" }) }
+                            var token by remember(cloudServerTokens.getOrElse(index) { "" }) { mutableStateOf(cloudServerTokens.getOrElse(index) { "" }) }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                Text("Server ${index + 1}", color = TextPrimary, fontWeight = FontWeight.Bold)
+                                Switch(checked = cloudServerEnabled.getOrElse(index) { index == 0 }, onCheckedChange = { coroutineScope.launch { viewModel.settingsRepository.setCloudServerEnabled(index, it) } })
+                            }
+                            OutlinedTextField(value = url, onValueChange = { url = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Server ${index + 1} URL") })
+                            OutlinedTextField(value = token, onValueChange = { token = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("Server ${index + 1} Token") })
+                            Button(onClick = { coroutineScope.launch { viewModel.settingsRepository.saveCloudServerUrl(index, url); viewModel.settingsRepository.saveCloudServerToken(index, token) } }) { Text("Save Server ${index + 1}") }
                         }
                     }
                 }

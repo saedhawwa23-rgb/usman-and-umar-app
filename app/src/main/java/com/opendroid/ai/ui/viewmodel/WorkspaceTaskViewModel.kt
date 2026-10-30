@@ -18,6 +18,7 @@ import com.opendroid.ai.data.repository.WorkspaceTaskRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.TimeUnit
+import java.io.IOException
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -55,6 +56,11 @@ class WorkspaceTaskViewModel @Inject constructor(
     val openSwarmServerUrl: StateFlow<String> = settingsRepository.openSwarmServerUrl
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
     val openSwarmClientToken: StateFlow<String> = settingsRepository.openSwarmClientToken
+    val cloudServerUrls: StateFlow<List<String>> = settingsRepository.cloudServerUrls
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), listOf("", "", ""))
+    val cloudServerEnabled: StateFlow<List<Boolean>> = settingsRepository.cloudServerEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), listOf(true, false, false))
+    val cloudServerTokens: StateFlow<List<String>> = settingsRepository.cloudServerTokens
     val autoRunGeneratedCode: StateFlow<Boolean> = settingsRepository.autoRunGeneratedCode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
@@ -79,11 +85,29 @@ class WorkspaceTaskViewModel @Inject constructor(
         }
     }
 
+    fun saveCloudServerUrl(index: Int, url: String) {
+        viewModelScope.launch {
+            runCatching { settingsRepository.saveCloudServerUrl(index, url) }
+                .onFailure { _message.value = it.message ?: "Unable to save server URL." }
+        }
+    }
+
+    fun setCloudServerEnabled(index: Int, enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setCloudServerEnabled(index, enabled) }
+    }
+
     fun saveOpenSwarmClientToken(token: String) {
         viewModelScope.launch {
             runCatching { settingsRepository.saveOpenSwarmClientToken(token) }
                 .onSuccess { _message.value = if (token.isBlank()) "Bridge token cleared from secure storage." else "Bridge token saved in Android secure storage." }
                 .onFailure { _message.value = it.message ?: "Unable to save the bridge token." }
+        }
+    }
+
+    fun saveCloudServerToken(index: Int, token: String) {
+        viewModelScope.launch {
+            runCatching { settingsRepository.saveCloudServerToken(index, token) }
+                .onFailure { _message.value = it.message ?: "Unable to save server token." }
         }
     }
 
@@ -102,33 +126,15 @@ class WorkspaceTaskViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val state = withContext(Dispatchers.IO) {
-                    val configuredUrl = settingsRepository.openSwarmServerUrl.first().trim().trimEnd('/')
-                    val baseUrl = configuredUrl.removeSuffix("/execute").trimEnd('/')
-                    check(baseUrl.isNotBlank()) { "Set the Cloud Backend URL first." }
-                    val clientToken = settingsRepository.openSwarmClientToken.value
-                    check(clientToken.isNotBlank()) { "Save the backend APP_CLIENT_TOKEN first." }
-                    val payload = BrowserUseRemoteProtocol.buildRequestJson(
+                    val body = postToCloudServers(
                         taskId = "browser-${System.currentTimeMillis()}",
                         prompt = requestPrompt,
-                        useFmhy = useFmhy,
+                        pluginId = if (useFmhy) BrowserUseRemoteProtocol.FMHY_PLUGIN_ID else "openswarm_agent",
+                        target = "auto",
                         maxSteps = maxSteps,
-                    ).toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-                    val request = Request.Builder().url("$baseUrl/execute")
-                        .header("Authorization", "Bearer $clientToken").post(payload).build()
-                    val call = cloudClient.newCall(request)
-                    browserCall = call
-                    call.execute().use { response ->
-                        val body = response.body?.string().orEmpty()
-                        if (!response.isSuccessful) {
-                            error(BrowserUseRemoteProtocol.httpError(response.code, body))
-                        }
-                        val parsed = BrowserUseRemoteProtocol.parseSuccess(body)
-                        BrowserUseRunState(
-                            phase = BrowserUseRunState.Phase.SUCCEEDED,
-                            result = parsed.result.take(20_000),
-                            steps = parsed.steps,
-                        )
-                    }
+                    )
+                    val parsed = BrowserUseRemoteProtocol.parseSuccess(body)
+                    BrowserUseRunState(BrowserUseRunState.Phase.SUCCEEDED, parsed.result.take(20_000), steps = parsed.steps)
                 }
                 _browserUseState.value = state
                 _message.value = "Remote Browser Use completed."
@@ -158,6 +164,7 @@ class WorkspaceTaskViewModel @Inject constructor(
         mode: TaskExecutionMode,
         providerPackage: String,
         scriptLanguage: String = "bash",
+        cloudTarget: String = "auto",
         onSaved: () -> Unit = {},
     ) {
         if (rawText.isBlank()) return
@@ -166,7 +173,7 @@ class WorkspaceTaskViewModel @Inject constructor(
             val title = parsed.title.ifBlank { rawText.trim() }
             val tool = when (mode) {
                 TaskExecutionMode.LOCAL_AI_APP -> "hybrid:LOCAL_AI_APP:$providerPackage"
-                TaskExecutionMode.CLOUD_OPENSWARM -> "hybrid:CLOUD_OPENSWARM"
+                TaskExecutionMode.CLOUD_OPENSWARM -> "hybrid:CLOUD_OPENSWARM:${cloudTarget.lowercase()}"
                 TaskExecutionMode.TERMUX_SCRIPT -> "hybrid:TERMUX_SCRIPT:${scriptLanguage.lowercase()}"
             }
             runCatching {
@@ -260,41 +267,51 @@ class WorkspaceTaskViewModel @Inject constructor(
     }
 
     private suspend fun executeCloud(task: WorkspaceTaskEntity) = withContext(Dispatchers.IO) {
-        val configuredUrl = settingsRepository.openSwarmServerUrl.first().trim().trimEnd('/')
-        val baseUrl = configuredUrl.removeSuffix("/execute").trimEnd('/')
-        check(baseUrl.isNotBlank()) { "Set the Cloud Backend URL in Task Manager → Cloud settings." }
-        val clientToken = settingsRepository.openSwarmClientToken.value
-        check(clientToken.isNotBlank()) { "Save the backend APP_CLIENT_TOKEN in Task Manager → Cloud settings before running cloud tasks." }
-        val prompt = promptOf(task)
-        val payload = JSONObject().put("task_id", task.id).put("prompt", prompt)
-            .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-        val request = Request.Builder().url("$baseUrl/execute").header("Authorization", "Bearer $clientToken").post(payload).build()
-        cloudClient.newCall(request).execute().use { response ->
-            val body = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
-                val detail = runCatching {
-                    val json = JSONObject(body)
-                    listOf("error", "detail", "message")
-                        .asSequence()
-                        .map { json.optString(it).trim() }
-                        .firstOrNull { it.isNotBlank() }
-                }.getOrNull()
-                val diagnostic = detail?.replace(Regex("\\s+"), " ")?.take(300)
-                    ?: if (body.isBlank()) null else "Non-JSON response body; check the configured URL and tunnel response."
-                val suffix = diagnostic?.let { ": $it" }.orEmpty()
-                error("Cloud Browser Use returned HTTP ${response.code}$suffix")
+        val target = task.toolId.orEmpty().substringAfterLast(':', "auto")
+        val body = postToCloudServers(task.id, promptOf(task), "openswarm_agent", target, 15)
+        val result = runCatching { JSONObject(body).optString("result").takeIf { it.isNotBlank() } ?: body }.getOrDefault(body)
+        repository.recordOutcome(task.id, true, outputRedacted = result.take(20_000), event = "openswarm_cloud")
+        _message.value = "OpenSwarm completed with an actual result."
+    }
+
+    private suspend fun postToCloudServers(taskId: String, prompt: String, pluginId: String, target: String, maxSteps: Int): String {
+        val urls = settingsRepository.cloudServerUrls.first()
+        val enabled = settingsRepository.cloudServerEnabled.first()
+        val tokens = settingsRepository.cloudServerTokens.value
+        val candidates = (0..2).filter { enabled.getOrElse(it) { false } && urls.getOrElse(it) { "" }.isNotBlank() }
+        check(candidates.isNotEmpty()) { "Enable and configure at least one cloud server in Settings." }
+        val ordered = when (target.lowercase()) {
+            "server1", "server 1" -> listOf(0)
+            "server2", "server 2" -> listOf(1)
+            "server3", "server 3" -> listOf(2)
+            else -> candidates.drop((System.currentTimeMillis() / 60_000L % candidates.size).toInt()) + candidates.take((System.currentTimeMillis() / 60_000L % candidates.size).toInt())
+        }.filter { it in candidates }
+        check(ordered.isNotEmpty()) { "The selected cloud server is disabled or not configured." }
+        var lastError: Throwable? = null
+        for ((position, index) in ordered.withIndex()) {
+            val label = "Server ${index + 1}"
+            try {
+                val baseUrl = urls[index].trim().trimEnd('/').removeSuffix("/execute").trimEnd('/')
+                val token = tokens.getOrElse(index) { "" }.trim()
+                check(token.isNotBlank()) { "$label token is not configured." }
+                val body = JSONObject().put("task_id", taskId).put("prompt", prompt).put("plugin_id", pluginId).put("browser_max_steps", maxSteps)
+                    .toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+                val request = Request.Builder().url("$baseUrl/execute").header("Authorization", "Bearer $token").post(body).build()
+                val call = cloudClient.newCall(request)
+                browserCall = call
+                call.execute().use { response ->
+                    val responseBody = response.body?.string().orEmpty()
+                    if (response.isSuccessful) return responseBody
+                    val retryable = response.code == 500 || response.code == 503
+                    if (!retryable || position == ordered.lastIndex) error(BrowserUseRemoteProtocol.httpError(response.code, responseBody))
+                    lastError = IOException("HTTP ${response.code}")
+                }
+            } catch (failure: IOException) {
+                lastError = failure
             }
-            check(body.isNotBlank()) { "Browser Use returned an empty response; the task was not marked successful." }
-            val result = runCatching {
-                val json = JSONObject(body)
-                json.optString("result").takeIf { it.isNotBlank() }
-                    ?: json.optString("response").takeIf { it.isNotBlank() }
-                    ?: json.optString("output").takeIf { it.isNotBlank() }
-                    ?: body
-            }.getOrDefault(body)
-            repository.recordOutcome(task.id, true, outputRedacted = result.take(20_000), event = "openswarm_cloud")
-            _message.value = "Browser Use completed with an actual result."
+            if (position < ordered.lastIndex) _message.value = "$label timed out or returned an unavailable error. Failing over to Server ${ordered[position + 1] + 1}..."
         }
+        throw lastError ?: IOException("All configured cloud servers failed.")
     }
 
     private suspend fun executeTermux(task: WorkspaceTaskEntity) = withContext(Dispatchers.IO) {
@@ -336,7 +353,7 @@ class WorkspaceTaskViewModel @Inject constructor(
 
     private fun modeOf(task: WorkspaceTaskEntity): TaskExecutionMode? = when {
         task.toolId?.startsWith("hybrid:LOCAL_AI_APP:") == true -> TaskExecutionMode.LOCAL_AI_APP
-        task.toolId == "hybrid:CLOUD_OPENSWARM" -> TaskExecutionMode.CLOUD_OPENSWARM
+        task.toolId?.startsWith("hybrid:CLOUD_OPENSWARM") == true -> TaskExecutionMode.CLOUD_OPENSWARM
         task.toolId?.startsWith("hybrid:TERMUX_SCRIPT") == true -> TaskExecutionMode.TERMUX_SCRIPT
         else -> null
     }

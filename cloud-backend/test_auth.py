@@ -76,6 +76,19 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
             allow_fmhy_external=False,
         )
 
+    async def test_openswarm_plugin_runs_manager_graph_without_fabricating_output(self) -> None:
+        with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            with patch("main.run_openswarm_task", new_callable=AsyncMock) as swarm:
+                swarm.return_value = "Manager delegated to a real specialist and returned this answer."
+                response = await self.client.post(
+                    "/execute",
+                    headers={"Authorization": "Bearer test-secret"},
+                    json={"task_id": "swarm-1", "prompt": "Write a Python function that reverses a string.", "plugin_id": "openswarm_agent"},
+                )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"result": "Manager delegated to a real specialist and returned this answer."})
+        swarm.assert_awaited_once()
+
     async def test_nvidia_key_forces_the_provisioned_model_in_execute(self) -> None:
         environment = {
             "APP_CLIENT_TOKEN": "test-secret",

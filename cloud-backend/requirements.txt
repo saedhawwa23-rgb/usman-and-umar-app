@@ -1,4 +1,11 @@
 fastapi==0.115.12
 httpx==0.28.1
 uvicorn[standard]==0.34.0
-browser-use
+pydantic==2.11.3
+openai>=2.45.0,<3
+langchain>=1,<2
+langchain-openai>=1,<2
+langgraph>=1,<2
+langgraph-swarm>=0.1,<1
+playwright>=1.51.0,<2
+browser-use>=0.1.48

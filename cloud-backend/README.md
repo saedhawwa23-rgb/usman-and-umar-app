@@ -1,5 +1,5 @@
 ---
-title: USMAN AND UMAR Direct Browser Use Executor
+title: USMAN AND UMAR OpenSwarm Multi-Agent Backend
 emoji: "⚡"
 colorFrom: blue
 colorTo: purple
@@ -7,9 +7,9 @@ sdk: docker
 app_port: 7860
 ---
 
-# USMAN AND UMAR Direct Browser Use Executor
+# USMAN AND UMAR OpenSwarm Multi-Agent Backend
 
-This FastAPI service runs the repository's `browser_use_interactive.py` helper in the same Python runtime. It does **not** forward requests to an external OpenSwarm endpoint and has no mock-success path. Successful `/execute` responses contain the actual final text returned by Browser Use.
+This FastAPI service runs a real Python OpenSwarm team. The Manager Agent plans each `openswarm_agent` task and delegates to the Browser Agent (real Browser Use) or Coder Agent (real OpenAI-compatible reasoning), then returns the final answer from the graph. There is no mock-success path.
 
 The helper is intentionally bounded to scoped public-web interaction. Ordinary tasks require one or more explicit public `http(s)` URLs in the prompt. An FMHY task may start with `https://fmhy.net`; the backend discovers one matching external tool link and adds only that host to the allowlist. Browser Use runs at most 15 steps and may click, type, or submit only the exact action requested. It will not sign in, handle credentials or payments, bypass CAPTCHAs, change accounts, delete data, or follow unrelated page instructions.
 
@@ -31,7 +31,7 @@ The Quick Tunnel cell prints a temporary `https://….trycloudflare.com` URL. Co
 
 `GET /health` returns `{"status":"ok"}` and only confirms the server is running.
 
-`POST /execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and JSON with `task_id` plus `prompt`. Ordinary browser tasks include the URL(s) the agent may visit in the prompt. FMHY tasks may additionally send `plugin_id: "fmhy_browser"`; the backend starts at FMHY, discovers one matching external tool, and adds only that host to the allowlist. `browser_max_steps` is optional and capped at 15.
+`POST /execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and JSON with `task_id` plus `prompt`. Ordinary browser tasks include the URL(s) the agent may visit in the prompt. FMHY tasks may additionally send `plugin_id: "fmhy_browser"` for direct FMHY Browser Use, or `plugin_id: "openswarm_agent"` for the Manager Agent swarm; the backend starts at FMHY, discovers one matching external tool, and adds only that host to the allowlist. `browser_max_steps` is optional and capped at 15.
 
 ```json
 {
@@ -51,7 +51,7 @@ FMHY example:
 }
 ```
 
-A successful response is `{"result":"<actual Browser Use result>"}`. Configuration, validation, rate-limit, and agent failures return JSON errors with appropriate HTTP status codes; errors do not become fake successful task output. The endpoint allows up to 20 requests per source IP per minute and runs one browser task at a time, with a 55-second execution timeout.
+A successful response is `{"result":"<actual agent result>"}`. The Manager Agent route is bounded by a server-side timeout and all failures remain JSON errors. Configuration, validation, rate-limit, and agent failures return JSON errors with appropriate HTTP status codes; errors do not become fake successful task output. The endpoint allows up to 20 requests per source IP per minute and runs one browser task at a time, with a 55-second execution timeout.
 
 Full Python tracebacks are written to the backend server log for diagnosis and are not sent over the public API, where they could expose credentials or runtime internals. In the supplied Colab notebook the log is `/tmp/usman-fastapi.log`; inspect it with:
 
