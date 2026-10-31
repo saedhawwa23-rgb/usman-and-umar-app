@@ -46,7 +46,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.input.pointer.consume
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -63,6 +62,7 @@ import com.usmanandumar.workspace.core.task.TaskExecutionMode
 import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.ui.theme.AppTheme
+import com.opendroid.ai.ui.theme.AccentCyan
 import com.opendroid.ai.ui.viewmodel.BrowserUseRunState
 import com.opendroid.ai.ui.viewmodel.WorkspaceTaskViewModel
 import kotlinx.coroutines.launch
@@ -338,11 +338,11 @@ fun WorkspaceTaskScreen(
                         var draggedTask by remember { mutableStateOf<WorkspaceTaskEntity?>(null) }
                         var dragPosition by remember { mutableStateOf(Offset.Unspecified) }
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                            KanbanColumn("DRAFT", tasks.filter { it.state == TaskState.DRAFT.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition.isSpecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified })
-                            KanbanColumn("RUNNING", tasks.filter { it.state == TaskState.RUNNING.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition.isSpecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified })
-                            KanbanColumn("SUCCEEDED", tasks.filter { it.state == TaskState.SUCCEEDED.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition.isSpecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified })
+                            KanbanColumn("DRAFT", tasks.filter { it.state == TaskState.DRAFT.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition != Offset.Unspecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified })
+                            KanbanColumn("RUNNING", tasks.filter { it.state == TaskState.RUNNING.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition != Offset.Unspecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified })
+                            KanbanColumn("SUCCEEDED", tasks.filter { it.state == TaskState.SUCCEEDED.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition != Offset.Unspecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified })
                         }
-                        if (draggedTask != null) Text("Drop ${draggedTask?.title} on a column to move it", color = AppTheme.colors.primary, fontSize = 12.sp)
+                        if (draggedTask != null) Text("Drop ${draggedTask?.title} on a column to move it", color = AccentCyan, fontSize = 12.sp)
                     }
                     val waiting = tasks.filter { it.state == TaskState.WAITING_FOR_NETWORK.name }
                     if (waiting.isNotEmpty()) {
@@ -444,7 +444,7 @@ private fun TaskCard(
             if (onDragStart != null && onDrag != null && onDragEnd != null) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = { onDragStart() },
-                    onDrag = { change, amount -> change.consume(); onDrag(amount) },
+                    onDrag = { _, amount -> onDrag(amount) },
                     onDragEnd = { onDragEnd() },
                     onDragCancel = { onDragEnd() },
                 )
