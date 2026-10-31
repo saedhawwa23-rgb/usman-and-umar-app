@@ -15,6 +15,7 @@ import com.opendroid.ai.core.browser.CloudServerClient
 import com.opendroid.ai.core.termux.TermuxIntegration
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.data.repository.SettingsRepository
+import com.opendroid.ai.data.repository.CloudServerConfig
 import com.opendroid.ai.data.repository.WorkspaceTaskRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -63,6 +64,8 @@ class WorkspaceTaskViewModel @Inject constructor(
     val cloudServerEnabled: StateFlow<List<Boolean>> = settingsRepository.cloudServerEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), listOf(true, false, false))
     val cloudServerTokens: StateFlow<List<String>> = settingsRepository.cloudServerTokens
+    val cloudServers: StateFlow<List<CloudServerConfig>> = settingsRepository.cloudServers
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val autoRunGeneratedCode: StateFlow<Boolean> = settingsRepository.autoRunGeneratedCode
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
@@ -96,6 +99,14 @@ class WorkspaceTaskViewModel @Inject constructor(
 
     fun setCloudServerEnabled(index: Int, enabled: Boolean) {
         viewModelScope.launch { settingsRepository.setCloudServerEnabled(index, enabled) }
+    }
+
+    fun saveNamedCloudServer(server: CloudServerConfig, token: String) {
+        viewModelScope.launch { runCatching { settingsRepository.saveCloudServer(server, token) }.onFailure { _message.value = it.message } }
+    }
+
+    fun setNamedCloudServerEnabled(id: String, enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.setCloudServerEnabled(id, enabled) }
     }
 
     fun saveOpenSwarmClientToken(token: String) {
@@ -236,6 +247,16 @@ class WorkspaceTaskViewModel @Inject constructor(
                 }
                 _message.value = failure.message ?: "Execution failed; no result was fabricated."
             }
+        }
+    }
+
+    /** Handles a Kanban drop using the same guarded state machine as the Run action. */
+    fun dropTaskOnColumn(task: WorkspaceTaskEntity, column: String) {
+        when (column.uppercase()) {
+            "RUNNING" -> runTask(task)
+            "DRAFT" -> _message.value = "Draft is the inbox state; move a task to RUNNING to execute it."
+            "SUCCEEDED" -> _message.value = "Succeeded is recorded only after the task returns a real result."
+            else -> _message.value = "Unsupported Kanban column."
         }
     }
 

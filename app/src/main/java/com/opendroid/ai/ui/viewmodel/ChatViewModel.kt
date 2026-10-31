@@ -180,17 +180,17 @@ class ChatViewModel @Inject constructor(
         return sessionId
     }
 
-    fun sendMessage(query: String, context: Context, imageBase64: String? = null, target: ChatTarget = ChatTarget.API_MODEL, pluginId: String? = null, thinkHarder: Boolean = false) {
+    fun sendMessage(query: String, context: Context, imageBase64: String? = null, target: ChatTarget = ChatTarget.API_MODEL, pluginIds: List<String> = emptyList(), thinkHarder: Boolean = false) {
         if (query.isBlank()) return
         val sessionId = pinTaskSessionSnapshot()
         if (target == ChatTarget.CLOUD_OPENSWARM) {
-            viewModelScope.launch { runCloudOpenSwarm(query, sessionId ?: conversationRepository.ensureCurrentSessionId(), pluginId, thinkHarder, imageBase64) }
+            viewModelScope.launch { runCloudOpenSwarm(query, sessionId ?: conversationRepository.ensureCurrentSessionId(), pluginIds, thinkHarder, imageBase64) }
         } else {
             agentLoop.processQuery(query, context, sessionId, imageBase64)
         }
     }
 
-    private suspend fun runCloudOpenSwarm(query: String, sessionId: String, pluginId: String?, thinkHarder: Boolean, imageBase64: String?) {
+    private suspend fun runCloudOpenSwarm(query: String, sessionId: String, pluginIds: List<String>, thinkHarder: Boolean, imageBase64: String?) {
         val userMessage = ChatMessage(UUID.randomUUID().toString(), query, ChatMessage.Sender.USER)
         conversationRepository.insertMessage(sessionId, userMessage)
         val assistantId = UUID.randomUUID().toString()
@@ -199,7 +199,8 @@ class ChatViewModel @Inject constructor(
             val body = cloudServerClient.execute(
                 taskId = "chat-${System.currentTimeMillis()}",
                 prompt = query,
-                pluginId = pluginId ?: "openswarm_agent",
+                pluginId = pluginIds.firstOrNull() ?: "openswarm_agent",
+                pluginIds = pluginIds.ifEmpty { listOf("openswarm_agent") },
                 thinkHarder = thinkHarder,
                 imageBase64 = imageBase64,
                 onLog = { log -> android.util.Log.i("CloudOpenSwarm", log) },
@@ -213,7 +214,12 @@ class ChatViewModel @Inject constructor(
             }
             if (result.isBlank()) conversationRepository.updateMessageText(assistantId, "Cloud OpenSwarm returned an empty result. Tap retry to run it again.")
         } catch (failure: Exception) {
-            conversationRepository.updateMessageText(assistantId, "Cloud OpenSwarm failed: ${failure.message ?: "Try again."}")
+            val detail = if (failure.message?.contains("cloud server", ignoreCase = true) == true && pluginIds.isNotEmpty()) {
+                "This plugin requires a Cloud Server. Configure it in Remote settings."
+            } else {
+                "Cloud OpenSwarm failed: ${failure.message ?: "Try again."}"
+            }
+            conversationRepository.updateMessageText(assistantId, detail)
         }
     }
 

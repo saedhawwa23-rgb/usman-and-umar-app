@@ -137,7 +137,7 @@ fun ChatScreen(
     var searchEnabled by remember { mutableStateOf(false) }
     var showAttachmentSheet by remember { mutableStateOf(false) }
     var showPluginSelector by remember { mutableStateOf(false) }
-    var selectedPluginId by remember { mutableStateOf<String?>(null) }
+    var selectedPluginIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedAttachment by remember { mutableStateOf<PendingChatAttachment?>(null) }
     var attachmentToRead by remember { mutableStateOf<Pair<Uri, Boolean>?>(null) }
     var messageForActions by remember { mutableStateOf<ChatMessage?>(null) }
@@ -214,7 +214,7 @@ fun ChatScreen(
         val modeInstructions = buildString {
             if (thinkEnabled) append("\n[Use deeper internal reasoning before answering; do not reveal private chain-of-thought.]\n")
             if (searchEnabled) append("\n[Use the web-search capability when current or externally verifiable information is needed.]\n")
-            selectedPluginId?.let { append("\n[Route this request through plugin_id=$it.]\n") }
+            if (selectedPluginIds.isNotEmpty()) append("\n[Use plugins: ${selectedPluginIds.joinToString(", ")}]\n")
         }
         val text = inputQuery + attachmentText + modeInstructions
         if (inputQuery.isBlank() && attachment == null) return
@@ -224,13 +224,13 @@ fun ChatScreen(
             editingMessageId = null
             textBeforeEdit = ""
         } else {
-            viewModel.sendMessage(text, context, attachment?.imageBase64, chatTarget, selectedPluginId, thinkEnabled)
+            viewModel.sendMessage(text, context, attachment?.imageBase64, chatTarget, selectedPluginIds.toList(), thinkEnabled)
         }
         inputQuery = ""
         selectedAttachment = null
         thinkEnabled = false
         searchEnabled = false
-        selectedPluginId = null
+        selectedPluginIds = emptySet()
         chatTarget = ChatTarget.API_MODEL
     }
 
@@ -288,7 +288,6 @@ fun ChatScreen(
                 Text(
                     "USMAN AND UMAR",
                     color = TextPrimary,
-                    fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp,
                     modifier = Modifier.padding(24.dp, 28.dp, 24.dp, 16.dp)
@@ -327,11 +326,9 @@ fun ChatScreen(
                     Column {
                         Text(
                             text = "USMAN AND UMAR",
-                            fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary,
                             fontSize = 20.sp,
-                            letterSpacing = 2.sp
                         )
                         AgentStatusSubtitle(visibleAgentState, runningElsewhere)
                     }
@@ -885,18 +882,29 @@ fun ChatScreen(
             containerColor = DarkSurface,
         ) {
             Text(if (showPluginSelector) "SELECT PLUGIN" else "ADD ATTACHMENT", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(20.dp, 4.dp))
-            if (showPluginSelector) {
+                    if (showPluginSelector) {
                 listOf(
                     "FMHY" to "fmhy_browser",
+                    "GitHub" to "github_search",
                     "OpenSwarm" to "openswarm_agent",
                     "Web Browser" to "browser_use",
                     "Code Executor" to "code_executor",
                 ).forEach { (label, pluginId) ->
-                    AttachmentOption(if (selectedPluginId == pluginId) "$label · selected" else label, Icons.Default.Extension) {
-                        selectedPluginId = pluginId
-                        showPluginSelector = false
+                    AttachmentOption(if (pluginId in selectedPluginIds) "✓  $label" else label, Icons.Default.Extension) {
+                        selectedPluginIds = if (pluginId in selectedPluginIds) {
+                            selectedPluginIds - pluginId
+                        } else {
+                            selectedPluginIds + pluginId
+                        }
+                        if (pluginId in setOf("fmhy_browser", "github_search", "browser_use")) {
+                            chatTarget = ChatTarget.CLOUD_OPENSWARM
+                        }
                     }
                 }
+                Button(
+                    onClick = { showPluginSelector = false },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                ) { Text("Done${if (selectedPluginIds.isEmpty()) " — no plugins" else " · ${selectedPluginIds.size} selected"}") }
                 AttachmentOption("Back to attachments", Icons.Default.ArrowBack) { showPluginSelector = false }
             } else {
                 AttachmentOption("Camera", Icons.Default.CameraAlt) {
@@ -1053,17 +1061,21 @@ fun ChatBubble(
     }
     var toolApproved by remember(message.id) { mutableStateOf(false) }
     val alignment = if (isAgent) Alignment.Start else Alignment.End
+    val isCloudError = isAgent && (
+        message.text.startsWith("Cloud OpenSwarm failed") ||
+            message.text.startsWith("This plugin requires a Cloud Server")
+        )
     val bubbleColor = if (isAgent) {
-        CardBackground
+        if (isCloudError) AccentRed.copy(alpha = 0.12f) else CardBackground
     } else {
         if (AppTheme.colors.isDark) Color(0xFF1E1E22) else Color(0xFFF1F3F5)
     }
     val bubbleBorder = if (isAgent) {
-        BorderColor
+        if (isCloudError) AccentRed.copy(alpha = 0.65f) else BorderColor
     } else {
         if (AppTheme.colors.isDark) Color(0xFF2E2E34) else Color(0xFFE2E8F0)
     }
-    val textColor = TextPrimary
+    val textColor = if (isCloudError) AccentRed else TextPrimary
     val timeFormat = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
 
     // If this is a contact picker message, render the ContactPickerCard instead
@@ -1103,7 +1115,7 @@ fun ChatBubble(
         ) {
             Column(
                 modifier = Modifier
-                    .widthIn(max = 290.dp)
+                    .widthIn(max = 348.dp)
                     .clip(
                         RoundedCornerShape(
                             topStart = 18.dp,

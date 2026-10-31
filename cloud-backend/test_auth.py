@@ -89,6 +89,25 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json(), {"result": "Manager delegated to a real specialist and returned this answer."})
         swarm.assert_awaited_once()
 
+    async def test_multi_plugin_request_routes_to_swarm_with_fmhy_and_github_domains(self) -> None:
+        with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            with patch("main.run_openswarm_task", new_callable=AsyncMock) as swarm:
+                swarm.return_value = "Combined browser result"
+                response = await self.client.post(
+                    "/execute",
+                    headers={"Authorization": "Bearer test-secret"},
+                    json={
+                        "task_id": "multi-1",
+                        "prompt": "Find the best open-source video editor on FMHY and inspect its GitHub repository.",
+                        "plugin_id": "fmhy_browser",
+                        "plugins": ["fmhy_browser", "github_search"],
+                    },
+                )
+        self.assertEqual(response.status_code, 200)
+        kwargs = swarm.await_args.kwargs
+        self.assertEqual(kwargs["plugin_ids"], ["fmhy_browser", "github_search"])
+        self.assertEqual(kwargs["allowed_domains"], ["github.com", "fmhy.net"])
+
     async def test_think_harder_requests_thirty_steps_without_model_override(self) -> None:
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
             with patch("main.run_openswarm_task", new_callable=AsyncMock) as swarm:

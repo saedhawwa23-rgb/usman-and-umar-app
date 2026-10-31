@@ -5,7 +5,9 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -37,10 +39,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.consume
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -78,6 +87,7 @@ fun WorkspaceTaskScreen(
     val serverUrls by viewModel.cloudServerUrls.collectAsState()
     val serverEnabled by viewModel.cloudServerEnabled.collectAsState()
     val serverTokens by viewModel.cloudServerTokens.collectAsState()
+    val cloudServers by viewModel.cloudServers.collectAsState()
     val autoRunCode by viewModel.autoRunGeneratedCode.collectAsState()
     val message by viewModel.message.collectAsState()
     val browserState by viewModel.browserUseState.collectAsState()
@@ -223,22 +233,24 @@ fun WorkspaceTaskScreen(
                         Text("CLOUD BROWSER USE SETTINGS", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
                         Spacer(Modifier.height(4.dp))
                         Button(onClick = { settingsExpanded = !settingsExpanded }) {
-                            Text(if (settingsExpanded) "Hide server settings" else "Configure 3 cloud servers")
+                            Text(if (settingsExpanded) "Hide server settings" else "Configure cloud servers")
                         }
                         if (settingsExpanded) {
-                            (0..2).forEach { index ->
-                                var urlDraft by remember(serverUrls.getOrElse(index) { "" }) { mutableStateOf(serverUrls.getOrElse(index) { "" }) }
-                                var tokenDraft by remember(serverTokens.getOrElse(index) { "" }) { mutableStateOf(serverTokens.getOrElse(index) { "" }) }
+                            if (cloudServers.isEmpty()) {
+                                Text("No cloud servers configured. Open Remote settings to add one.", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+                            }
+                            cloudServers.forEach { server ->
+                                var nameDraft by remember(server.id, server.name) { mutableStateOf(server.name) }
+                                var urlDraft by remember(server.id, server.url) { mutableStateOf(server.url) }
+                                var tokenDraft by remember(server.id, server.token) { mutableStateOf(server.token) }
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("Server ${index + 1}", fontSize = 13.sp)
-                                    Switch(checked = serverEnabled.getOrElse(index) { index == 0 }, onCheckedChange = { viewModel.setCloudServerEnabled(index, it) })
+                                    Text(nameDraft.ifBlank { "Cloud Server" }, fontSize = 13.sp)
+                                    Switch(checked = server.enabled, onCheckedChange = { viewModel.setNamedCloudServerEnabled(server.id, it) })
                                 }
-                                OutlinedTextField(value = urlDraft, onValueChange = { urlDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Server ${index + 1} URL") }, placeholder = { Text("https://server-${index + 1}.example") })
-                                OutlinedTextField(value = tokenDraft, onValueChange = { tokenDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), label = { Text("Server ${index + 1} Token") })
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Button(onClick = { viewModel.saveCloudServerUrl(index, urlDraft); viewModel.saveCloudServerToken(index, tokenDraft) }) { Text("Save Server ${index + 1}") }
-                                    Button(onClick = { urlDraft = ""; tokenDraft = ""; viewModel.saveCloudServerUrl(index, ""); viewModel.saveCloudServerToken(index, "") }) { Text("Clear") }
-                                }
+                                OutlinedTextField(value = nameDraft, onValueChange = { nameDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Server name") })
+                                OutlinedTextField(value = urlDraft, onValueChange = { urlDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("HTTPS backend URL") })
+                                OutlinedTextField(value = tokenDraft, onValueChange = { tokenDraft = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), label = { Text("Bearer token") })
+                                Button(onClick = { viewModel.saveNamedCloudServer(server.copy(name = nameDraft, url = urlDraft), tokenDraft) }) { Text("Save ${nameDraft.ifBlank { "server" }}") }
                             }
                             Spacer(Modifier.height(12.dp))
                             Text("REMOTE BROWSER USE", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
@@ -289,20 +301,6 @@ fun WorkspaceTaskScreen(
             }
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
-                    Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                        Text("GOOGLE DRIVE", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
-                        Text(
-                            "Connect an account in Drive settings, then save completed task output into USMAN_AND_UMAR_Tasks using drive.file access.",
-                            color = AppTheme.colors.textSecondary,
-                            fontSize = 12.sp,
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Button(onClick = onOpenDriveSettings) { Text("Google Drive settings") }
-                    }
-                }
-            }
-            item {
-                Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
                     Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) {
                             Text("AUTO-RUN AI-GENERATED CODE", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
@@ -336,11 +334,15 @@ fun WorkspaceTaskScreen(
                 }
                 TaskuaryPage.BOARD -> {
                     item {
+                        val columnBounds = remember { mutableStateMapOf<String, Rect>() }
+                        var draggedTask by remember { mutableStateOf<WorkspaceTaskEntity?>(null) }
+                        var dragPosition by remember { mutableStateOf(Offset.Unspecified) }
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                            KanbanColumn("DRAFT", tasks.filter { it.state == TaskState.DRAFT.name }, viewModel::runTask, ::beginDriveUpload)
-                            KanbanColumn("RUNNING", tasks.filter { it.state == TaskState.RUNNING.name }, viewModel::runTask, ::beginDriveUpload)
-                            KanbanColumn("SUCCEEDED", tasks.filter { it.state == TaskState.SUCCEEDED.name }, viewModel::runTask, ::beginDriveUpload)
+                            KanbanColumn("DRAFT", tasks.filter { it.state == TaskState.DRAFT.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition.isSpecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified })
+                            KanbanColumn("RUNNING", tasks.filter { it.state == TaskState.RUNNING.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition.isSpecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified })
+                            KanbanColumn("SUCCEEDED", tasks.filter { it.state == TaskState.SUCCEEDED.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition.isSpecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified })
                         }
+                        if (draggedTask != null) Text("Drop ${draggedTask?.title} on a column to move it", color = AppTheme.colors.primary, fontSize = 12.sp)
                     }
                     val waiting = tasks.filter { it.state == TaskState.WAITING_FOR_NETWORK.name }
                     if (waiting.isNotEmpty()) {
@@ -432,8 +434,24 @@ private fun TaskCard(
     task: WorkspaceTaskEntity,
     onRun: (WorkspaceTaskEntity) -> Unit,
     onSaveOutput: (WorkspaceTaskEntity) -> Unit,
+    modifier: Modifier = Modifier,
+    onDragStart: (() -> Unit)? = null,
+    onDrag: ((Offset) -> Unit)? = null,
+    onDragEnd: (() -> Unit)? = null,
 ) {
-    Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
+    Card(
+        modifier = modifier.pointerInput(task.id) {
+            if (onDragStart != null && onDrag != null && onDragEnd != null) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { onDragStart() },
+                    onDrag = { change, amount -> change.consume(); onDrag(amount) },
+                    onDragEnd = { onDragEnd() },
+                    onDragCancel = { onDragEnd() },
+                )
+            }
+        },
+        colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface),
+    ) {
         Column(Modifier.fillMaxWidth().padding(14.dp)) {
             Text(task.title, color = AppTheme.colors.textPrimary, fontSize = 16.sp)
             Spacer(Modifier.height(4.dp))
@@ -475,11 +493,39 @@ private fun KanbanColumn(
     tasks: List<WorkspaceTaskEntity>,
     onRun: (WorkspaceTaskEntity) -> Unit,
     onSaveOutput: (WorkspaceTaskEntity) -> Unit,
+    columnBounds: MutableMap<String, Rect>,
+    draggedTask: WorkspaceTaskEntity?,
+    dragPosition: Offset,
+    onDragStart: (WorkspaceTaskEntity) -> Unit,
+    onDrag: (Offset) -> Unit,
+    onDrop: (WorkspaceTaskEntity, String) -> Unit,
 ) {
-    Column(Modifier.width(280.dp).padding(end = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val highlighted = draggedTask != null && columnBounds[title]?.contains(dragPosition) == true
+    Column(
+        Modifier
+            .width(280.dp)
+            .padding(end = 10.dp)
+            .onGloballyPositioned { columnBounds[title] = it.boundsInWindow() }
+            .then(if (highlighted) Modifier.padding(4.dp) else Modifier),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         SectionTitle("$title · ${tasks.size}")
         if (tasks.isEmpty()) Text("No tasks", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
-        tasks.forEach { task -> TaskCard(task, onRun, onSaveOutput) }
+        tasks.forEach { task ->
+            TaskCard(
+                task, onRun, onSaveOutput,
+                modifier = if (draggedTask?.id == task.id) Modifier else Modifier,
+                onDragStart = {
+                    onDragStart(task)
+                    columnBounds[title]?.let { bounds -> onDrag(Offset(bounds.center.x, bounds.center.y)) }
+                },
+                onDrag = onDrag,
+                onDragEnd = {
+                    val destination = columnBounds.entries.firstOrNull { it.value.contains(dragPosition) }?.key
+                    if (destination != null && draggedTask != null) onDrop(draggedTask, destination)
+                },
+            )
+        }
     }
 }
 

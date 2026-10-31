@@ -1,6 +1,5 @@
 package com.opendroid.ai.core.browser
 
-import com.opendroid.ai.data.repository.CloudServerConfig
 import com.opendroid.ai.data.repository.SettingsRepository
 import kotlinx.coroutines.flow.first
 import okhttp3.MediaType.Companion.toMediaType
@@ -30,6 +29,7 @@ class CloudServerClient @Inject constructor(
         taskId: String,
         prompt: String,
         pluginId: String = "openswarm_agent",
+        pluginIds: List<String> = listOf(pluginId),
         targetId: String? = null,
         thinkHarder: Boolean = false,
         imageBase64: String? = null,
@@ -52,6 +52,7 @@ class CloudServerClient @Inject constructor(
                     .put("task_id", taskId)
                     .put("prompt", prompt)
                     .put("plugin_id", pluginId)
+                    .put("plugins", org.json.JSONArray(pluginIds.distinct().filter { it.isNotBlank() }))
                     .put("browser_max_steps", if (thinkHarder) 30 else 15)
                     .put("think_harder", thinkHarder)
                     .apply { imageBase64?.takeIf { it.isNotBlank() }?.let { put("image_base64", it) } }

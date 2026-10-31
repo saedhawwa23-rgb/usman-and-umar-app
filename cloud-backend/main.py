@@ -60,10 +60,10 @@ def _fmhy_plugin_requested(request: ExecuteRequest) -> bool:
 
 
 def _openswarm_plugin_requested(request: ExecuteRequest) -> bool:
-    return "openswarm_agent" in _requested_plugins(request)
+    return bool(_requested_plugins(request) & {"openswarm_agent", "github_search", "browser_use", "code_executor"})
 
 
-def _allowed_domains_from_prompt(prompt: str, include_fmhy: bool = False, require_url: bool = True) -> list[str]:
+def _allowed_domains_from_prompt(prompt: str, include_fmhy: bool = False, include_github: bool = False, require_url: bool = True) -> list[str]:
     domains: list[str] = []
     for match in _URL_PATTERN.findall(prompt):
         candidate = match.rstrip(".,;:!?)]}")
@@ -94,6 +94,8 @@ def _allowed_domains_from_prompt(prompt: str, include_fmhy: bool = False, requir
         raise HTTPException(status_code=400, detail="Include at least one public http(s) URL in the prompt; browser navigation is restricted to hosts in the prompt.")
     if include_fmhy and "fmhy.net" not in domains:
         domains.insert(0, "fmhy.net")
+    if include_github and "github.com" not in domains:
+        domains.insert(0, "github.com")
     return domains
 
 
@@ -122,12 +124,14 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
         recent.append(now)
         _request_times[client_ip] = recent
     fmhy_requested = _fmhy_plugin_requested(request)
+    github_requested = "github_search" in _requested_plugins(request)
     openswarm_requested = _openswarm_plugin_requested(request)
     try:
         allowed_domains = _allowed_domains_from_prompt(
             request.prompt,
             include_fmhy=fmhy_requested,
-            require_url=not openswarm_requested,
+            include_github=github_requested,
+            require_url=not openswarm_requested and not github_requested,
         )
     except HTTPException as exc:
         return _error_response(exc.status_code, str(exc.detail))
@@ -139,6 +143,7 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
                     task_id=request.task_id,
                     prompt=request.prompt,
                     plugin_id="openswarm_agent",
+                    plugin_ids=sorted(_requested_plugins(request)),
                     allowed_domains=allowed_domains,
                     max_steps=max_steps,
                 ), timeout=_EXECUTION_TIMEOUT_SECONDS)

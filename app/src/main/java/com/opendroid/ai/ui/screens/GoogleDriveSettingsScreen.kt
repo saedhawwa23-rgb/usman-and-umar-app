@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.dp
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
 import com.opendroid.ai.ui.theme.AppTheme
 
@@ -70,10 +72,11 @@ fun GoogleDriveSettingsScreen(onBack: () -> Unit) {
                     }
                 }
                 .addOnFailureListener { failure ->
-                    message = failure.message ?: "Google Drive authorization failed."
+                    val code = (failure as? ApiException)?.statusCode?.let(GoogleSignInStatusCodes::getStatusCodeString)
+                    message = "Google Drive authorization failed${code?.let { " ($it)" }.orEmpty()}. Verify that the installed APK signing SHA-1 is registered for package com.usmanandumar.app."
                 }
         } else {
-            message = "Google Drive connection was cancelled."
+            message = "Google Drive connection was cancelled before consent completed. Verify the Android OAuth client package and signing SHA-1, then try again."
         }
     }
 

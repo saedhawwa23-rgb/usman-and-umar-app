@@ -22,6 +22,7 @@ class SwarmState(TypedDict, total=False):
     task_id: str
     prompt: str
     plugin_id: str | None
+    plugin_ids: list[str]
     allowed_domains: list[str]
     max_steps: int
     route: Literal["browser", "coder"]
@@ -61,7 +62,10 @@ def _text(message: Any) -> str:
 def _manager_decision(state: SwarmState) -> dict[str, Any]:
     prompt = state["prompt"]
     plugin = (state.get("plugin_id") or "").lower()
-    if plugin == "fmhy_browser":
+    plugins = {item.lower() for item in state.get("plugin_ids", [])}
+    if plugin:
+        plugins.add(plugin)
+    if plugins & {"fmhy_browser", "github_search", "browser_use"}:
         route: Literal["browser", "coder"] = "browser"
     elif plugin == "openswarm_agent":
         decision = _text(_model().invoke([
@@ -85,7 +89,7 @@ async def _browser_agent(state: SwarmState) -> dict[str, str]:
         allowed_domains=state["allowed_domains"],
         model=NVIDIA_DEFAULT_MODEL if os.getenv("NVIDIA_API_KEY", "").strip() else None,
         max_steps=state["max_steps"],
-        allow_fmhy_external=state.get("plugin_id") == "fmhy_browser",
+        allow_fmhy_external=bool(set(state.get("plugin_ids", [])) & {"fmhy_browser", "github_search"}),
     )
     return {"specialist_result": result}
 
@@ -105,7 +109,7 @@ def _finalize(state: SwarmState) -> dict[str, str]:
     return {"final_answer": result}
 
 
-async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None, allowed_domains: list[str], max_steps: int) -> str:
+async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None, plugin_ids: list[str] | None = None, allowed_domains: list[str], max_steps: int) -> str:
     """Run the Manager -> specialist -> finalizer graph until an answer exists."""
     from langgraph.graph import END, START, StateGraph
 
@@ -124,6 +128,7 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
         "task_id": task_id,
         "prompt": prompt,
         "plugin_id": plugin_id,
+        "plugin_ids": plugin_ids or [],
         "allowed_domains": allowed_domains,
         "max_steps": max_steps,
         "iterations": 0,
