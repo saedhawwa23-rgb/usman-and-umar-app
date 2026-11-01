@@ -444,7 +444,10 @@ class OpenDroidAccessibilityService : AccessibilityService() {
                 return
             }
             request.beforeSendText = nodeTraversal.screenText(root)
-            nodeTraversal.findAndClickSubmitControl(root, listOf("send", "send message", "submit"))
+            nodeTraversal.findAndClickUniversalSubmitControl(
+                root,
+                listOf("send", "send message", "submit", "ask", "generate", "continue", "go", "done"),
+            )
         } finally { root.recycle() }
         if (!clicked) {
             finishLocalAi(request, null, "No accessible Send control was found; the prompt was not submitted.")
@@ -470,7 +473,7 @@ class OpenDroidAccessibilityService : AccessibilityService() {
                 finishLocalAi(request, null, "The selected AI app is no longer the active window; no response was captured.")
                 return
             }
-            nodeTraversal.screenText(root)
+            nodeTraversal.lastResponseText(root, request.prompt).ifBlank { nodeTraversal.screenText(root) }
         } finally { root.recycle() }
         val response = screen.replace(request.prompt, "").trim()
         val baseline = request.beforeSendText.replace(request.prompt, "").trim()
@@ -796,7 +799,7 @@ class OpenDroidAccessibilityService : AccessibilityService() {
 
     private fun performSubmitFallback(): Boolean {
         val rootNode = rootInActiveWindow ?: return false
-        val result = nodeTraversal.findAndClickSubmitControl(rootNode, imeSubmitLabels)
+        val result = nodeTraversal.findAndClickUniversalSubmitControl(rootNode, imeSubmitLabels)
         rootNode.recycle()
         return result
     }

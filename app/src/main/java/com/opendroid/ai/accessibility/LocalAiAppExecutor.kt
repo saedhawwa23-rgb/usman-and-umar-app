@@ -2,6 +2,7 @@ package com.opendroid.ai.accessibility
 
 import android.content.Context
 import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
+import com.opendroid.ai.core.agent.SmartLocalAiRouter
 import com.opendroid.ai.data.repository.WorkspaceTaskRepository
 import com.usmanandumar.workspace.core.task.TaskState
 import kotlinx.coroutines.flow.first
@@ -27,9 +28,17 @@ class LocalAiAppExecutor @Inject constructor(
         require(prompt.isNotBlank()) { "A prompt is required for the local AI app." }
         val packageManager = context.packageManager
         val installed = InstalledAiAppDiscovery.scan(packageManager)
-        val app = installed.firstOrNull { candidate ->
+        val explicit = installed.firstOrNull { candidate ->
             (!packageName.isNullOrBlank() && candidate.packageName.equals(packageName, ignoreCase = true)) ||
                 (!appName.isNullOrBlank() && candidate.displayName.equals(appName, ignoreCase = true))
+        }
+        val app = explicit ?: if (
+            packageName.isNullOrBlank() || packageName.equals(SmartLocalAiRouter.AUTO_TARGET, ignoreCase = true) ||
+                appName.isNullOrBlank() || appName.equals("auto", ignoreCase = true) || appName.equals("Smart AI Selection", ignoreCase = true)
+        ) {
+            SmartLocalAiRouter.select(prompt, installed)
+        } else {
+            null
         } ?: error("No launchable installed AI app matched '${packageName ?: appName ?: "(unspecified)"}'.")
 
         check(OpenDroidAccessibilityService.getInstance() != null) {

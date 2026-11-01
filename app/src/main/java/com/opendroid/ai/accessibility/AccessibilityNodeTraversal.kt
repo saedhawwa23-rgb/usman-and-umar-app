@@ -1,5 +1,6 @@
 package com.opendroid.ai.accessibility
 
+import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
 import javax.inject.Inject
 
@@ -85,10 +86,37 @@ class AccessibilityNodeTraversal @Inject constructor() {
         return findSubmitNode(root, labels)
     }
 
+    /**
+     * Universal submit matcher for local AI clients. It first uses semantic labels and then
+     * falls back to a clickable ImageView/Button positioned next to an editable input.
+     */
+    fun findAndClickUniversalSubmitControl(root: AccessibilityNodeInfo?, labels: List<String>): Boolean {
+        if (root == null) return false
+        if (findSubmitNode(root, labels)) return true
+        val editableBounds = mutableListOf<Rect>()
+        collectEditableBounds(root, editableBounds)
+        return findNearbySubmitNode(root, editableBounds)
+    }
+
+    /** Captures the last visible TextView/RecyclerView-backed response, with a tree-text fallback. */
+    fun lastResponseText(root: AccessibilityNodeInfo?, prompt: String): String {
+        if (root == null) return ""
+        val candidates = mutableListOf<String>()
+        collectResponseNodes(root, candidates)
+        val normalizedPrompt = prompt.trim()
+        return candidates.asReversed()
+            .map { it.trim() }
+            .firstOrNull { it.isNotBlank() && it != normalizedPrompt && it.length >= 2 }
+            ?: screenText(root)
+    }
+
     private fun findSubmitNode(node: AccessibilityNodeInfo, labels: List<String>): Boolean {
         val text = node.text?.toString()?.lowercase()
         val contentDesc = node.contentDescription?.toString()?.lowercase()
-        if (node.isClickable && (labels.contains(text) || labels.contains(contentDesc))) {
+        if (node.isClickable && labels.any { label ->
+                text == label.lowercase() || contentDesc == label.lowercase() ||
+                    text?.contains(label.lowercase()) == true || contentDesc?.contains(label.lowercase()) == true
+            }) {
             return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
         for (i in 0 until node.childCount) {
@@ -100,5 +128,55 @@ class AccessibilityNodeTraversal @Inject constructor() {
             child.recycle()
         }
         return false
+    }
+
+    private fun collectEditableBounds(node: AccessibilityNodeInfo, result: MutableList<Rect>) {
+        if (node.isEditable && node.isVisibleToUser) {
+            result += Rect().also(node::getBoundsInScreen)
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            collectEditableBounds(child, result)
+            child.recycle()
+        }
+    }
+
+    private fun findNearbySubmitNode(node: AccessibilityNodeInfo, editableBounds: List<Rect>): Boolean {
+        val className = node.className?.toString().orEmpty()
+        val description = node.contentDescription?.toString()?.lowercase().orEmpty()
+        val text = node.text?.toString()?.lowercase().orEmpty()
+        val isImageOrButton = className.contains("ImageView", ignoreCase = true) ||
+            className.contains("Button", ignoreCase = true)
+        if (node.isClickable && isImageOrButton && (description.contains("send") || text.contains("send") || editableBounds.any { input ->
+                val bounds = Rect().also(node::getBoundsInScreen)
+                val nearHorizontally = bounds.left >= input.right - 600 && bounds.right <= input.right + 900
+                val nearVertically = kotlin.math.abs(bounds.centerY() - input.centerY()) <= 220
+                nearHorizontally && nearVertically
+            })) {
+            return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (findNearbySubmitNode(child, editableBounds)) {
+                child.recycle()
+                return true
+            }
+            child.recycle()
+        }
+        return false
+    }
+
+    private fun collectResponseNodes(node: AccessibilityNodeInfo, result: MutableList<String>) {
+        val className = node.className?.toString().orEmpty()
+        val text = node.text?.toString().orEmpty()
+        if (text.isNotBlank() && (className.contains("TextView", ignoreCase = true) ||
+                className.contains("RecyclerView", ignoreCase = true))) {
+            result += text
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            collectResponseNodes(child, result)
+            child.recycle()
+        }
     }
 }

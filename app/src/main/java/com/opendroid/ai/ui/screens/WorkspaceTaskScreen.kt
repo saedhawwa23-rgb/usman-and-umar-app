@@ -58,6 +58,7 @@ import com.google.android.gms.common.api.Scope
 import com.opendroid.ai.core.drive.GoogleDriveUploader
 import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.opendroid.ai.core.agent.InstalledAiAppPreferences
+import com.opendroid.ai.core.agent.SmartLocalAiRouter
 import com.usmanandumar.workspace.core.task.TaskExecutionMode
 import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
@@ -97,7 +98,8 @@ fun WorkspaceTaskScreen(
     var providerPackage by remember(installedAiApps) {
         val saved = InstalledAiAppPreferences.selectedPackage(context)
         mutableStateOf(installedAiApps.firstOrNull { it.packageName == saved }?.packageName
-            ?: installedAiApps.firstOrNull()?.packageName.orEmpty())
+            ?: SmartLocalAiRouter.AUTO_TARGET
+        )
     }
     var scriptLanguage by remember { mutableStateOf("bash") }
     var page by remember { mutableStateOf(TaskuaryPage.INBOX) }
@@ -185,15 +187,29 @@ fun WorkspaceTaskScreen(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ModeMenu(mode = mode, onSelect = { mode = it }, modifier = Modifier.weight(1f))
                     if (mode == TaskExecutionMode.LOCAL_AI_APP) {
-                        ProviderMenu(
-                            providerPackage = providerPackage,
-                            installedApps = installedAiApps,
-                            onSelect = {
-                                providerPackage = it
-                                InstalledAiAppPreferences.setSelectedPackage(context, it)
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
+                        Column(Modifier.weight(1f)) {
+                            ProviderMenu(
+                                providerPackage = providerPackage,
+                                installedApps = installedAiApps,
+                                onSelect = {
+                                    providerPackage = it
+                                    if (it != SmartLocalAiRouter.AUTO_TARGET) {
+                                        InstalledAiAppPreferences.setSelectedPackage(context, it)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                Switch(
+                                    checked = providerPackage == SmartLocalAiRouter.AUTO_TARGET,
+                                    onCheckedChange = { enabled ->
+                                        providerPackage = if (enabled) SmartLocalAiRouter.AUTO_TARGET
+                                        else installedAiApps.firstOrNull()?.packageName.orEmpty()
+                                    },
+                                )
+                                Text("Smart AI Selection", fontSize = 12.sp)
+                            }
+                        }
                     } else if (mode == TaskExecutionMode.CLOUD_OPENSWARM) {
                         CloudTargetMenu(target = cloudTarget, onSelect = { cloudTarget = it }, modifier = Modifier.weight(1f))
                     } else if (mode == TaskExecutionMode.TERMUX_SCRIPT) {
@@ -205,7 +221,8 @@ fun WorkspaceTaskScreen(
                 Button(
                     onClick = { viewModel.createTask(rawText, mode, providerPackage, scriptLanguage, cloudTarget) { rawText = "" } },
                     enabled = rawText.isNotBlank() &&
-                        (mode != TaskExecutionMode.LOCAL_AI_APP || installedAiApps.any { it.packageName == providerPackage }),
+                        (mode != TaskExecutionMode.LOCAL_AI_APP ||
+                            (installedAiApps.isNotEmpty() && (providerPackage == SmartLocalAiRouter.AUTO_TARGET || installedAiApps.any { it.packageName == providerPackage }))),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     androidx.compose.material3.Icon(Icons.Default.AddTask, contentDescription = null)
@@ -218,7 +235,7 @@ fun WorkspaceTaskScreen(
                         TaskExecutionMode.LOCAL_AI_APP -> if (installedAiApps.isEmpty()) {
                             "No launchable apps were found. Install an AI chat app, then refresh the screen."
                         } else {
-                            "PackageManager found ${installedAiApps.size} launchable AI-app candidate(s) from installed app names. Select Manus, Genspark, or another recognized AI client."
+                            "PackageManager found ${installedAiApps.size} launchable AI-app candidate(s). Smart AI Selection ranks the installed apps for coding, research, and tool-specific tasks, then falls back when a preferred app is unavailable."
                         }
                         TaskExecutionMode.CLOUD_OPENSWARM -> "Cloud Browser Use sends the task to the remote executor. Use FMHY-first discovery or include a public URL; never include secrets or private data."
                         TaskExecutionMode.TERMUX_SCRIPT -> "Only the explicit script text you enter is sent to Termux; ordinary task prose is never interpreted as shell."
@@ -384,9 +401,17 @@ private fun ProviderMenu(
     var expanded by remember { mutableStateOf(false) }
     Column(modifier) {
         Button(onClick = { expanded = true }, enabled = installedApps.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
-            Text(installedApps.firstOrNull { it.packageName == providerPackage }?.displayName ?: "No installed app", fontSize = 12.sp)
+            Text(
+                if (providerPackage == SmartLocalAiRouter.AUTO_TARGET) "Auto / Smart Select"
+                else installedApps.firstOrNull { it.packageName == providerPackage }?.displayName ?: "No installed app",
+                fontSize = 12.sp,
+            )
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Auto / Smart Select") },
+                onClick = { onSelect(SmartLocalAiRouter.AUTO_TARGET); expanded = false },
+            )
             installedApps.forEach { app ->
                 DropdownMenuItem(
                     text = { Text(if (app.isAiCandidate) "${app.displayName} · AI candidate" else app.displayName) },

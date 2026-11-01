@@ -10,6 +10,8 @@ import com.usmanandumar.workspace.core.task.TaskExecutionMode
 import com.usmanandumar.workspace.core.task.TaskQuickAddParser
 import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.accessibility.OpenDroidAccessibilityService
+import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
+import com.opendroid.ai.core.agent.SmartLocalAiRouter
 import com.opendroid.ai.core.browser.BrowserUseRemoteProtocol
 import com.opendroid.ai.core.browser.CloudServerClient
 import com.opendroid.ai.core.termux.TermuxIntegration
@@ -332,7 +334,13 @@ class WorkspaceTaskViewModel @Inject constructor(
 
     private fun executeLocalAi(task: WorkspaceTaskEntity) {
         val storedTarget = task.toolId.orEmpty().substringAfterLast(':')
-        val packageName = LocalAiProvider.entries.firstOrNull { it.name == storedTarget }?.packageName ?: storedTarget
+        val packageName = LocalAiProvider.entries.firstOrNull { it.name == storedTarget }?.packageName
+            ?: if (storedTarget.equals(SmartLocalAiRouter.AUTO_TARGET, ignoreCase = true)) {
+                SmartLocalAiRouter.select(
+                    promptOf(task),
+                    InstalledAiAppDiscovery.scan(context.packageManager),
+                )?.packageName.orEmpty()
+            } else storedTarget
         require(packageName.isNotBlank()) { "Select an installed AI app before running this task." }
         @Suppress("DEPRECATION")
         val appInfo = runCatching { context.packageManager.getApplicationInfo(packageName, 0) }

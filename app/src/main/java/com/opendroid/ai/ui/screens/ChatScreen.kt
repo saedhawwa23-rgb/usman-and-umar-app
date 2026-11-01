@@ -138,6 +138,7 @@ fun ChatScreen(
     var thinkEnabled by remember { mutableStateOf(false) }
     var chatTarget by remember { mutableStateOf(ChatTarget.API_MODEL) }
     var targetMenuExpanded by remember { mutableStateOf(false) }
+    var smartAiSelection by remember { mutableStateOf(false) }
     var searchEnabled by remember { mutableStateOf(false) }
     var showAttachmentSheet by remember { mutableStateOf(false) }
     var showPluginSelector by remember { mutableStateOf(false) }
@@ -225,6 +226,10 @@ fun ChatScreen(
                     .joinToString("; ") { "${it.displayName} (${it.packageName})" }
                 append("\n[Local AI apps available through USE_LOCAL_APP: $apps. Use the real tool when their response is needed.]\n")
             }
+            if (smartAiSelection) {
+                val apps = installedAiApps.joinToString(", ") { "${it.displayName} (${it.packageName})" }
+                append("\n[Smart AI Selection is ON. Choose the best installed local AI app for this task using its real capabilities. Prefer coding specialists for code, research assistants for current/web research, and tool-oriented agents for browser/automation tasks. Verify the candidate is installed from this list before calling USE_LOCAL_APP; omit appName/packageName only when auto-selection is intended. Installed candidates: $apps]\n")
+            }
         }
         val text = inputQuery + attachmentText + modeInstructions
         if (inputQuery.isBlank() && attachment == null) return
@@ -242,6 +247,7 @@ fun ChatScreen(
         searchEnabled = false
         selectedPluginIds = emptySet()
         selectedLocalAppPackages = emptySet()
+        smartAiSelection = false
         chatTarget = ChatTarget.API_MODEL
     }
 
@@ -694,6 +700,26 @@ fun ChatScreen(
                         }
                     }
                     Row(
+                        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Switch(
+                            checked = smartAiSelection,
+                            onCheckedChange = {
+                                smartAiSelection = it
+                                if (it) selectedLocalAppPackages = emptySet()
+                            },
+                        )
+                        Text("Smart AI Selection", color = TextPrimary, fontSize = 12.sp)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (smartAiSelection) "The orchestrator will rank installed apps automatically."
+                            else "Choose local apps manually from Plugins.",
+                            color = TextSecondary,
+                            fontSize = 11.sp,
+                        )
+                    }
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -907,6 +933,22 @@ fun ChatScreen(
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Switch(
+                        checked = smartAiSelection,
+                        onCheckedChange = {
+                            smartAiSelection = it
+                            if (it) selectedLocalAppPackages = emptySet()
+                        },
+                    )
+                    Column(Modifier.padding(start = 8.dp)) {
+                        Text("Smart AI Selection", color = TextPrimary, fontWeight = FontWeight.SemiBold)
+                        Text("Automatically rank installed apps for this task", color = TextSecondary, fontSize = 11.sp)
+                    }
+                }
                 if (installedAiApps.isEmpty()) {
                     Text("No launchable installed apps were discovered.", color = TextSecondary, modifier = Modifier.padding(20.dp, 10.dp))
                 } else {
@@ -918,13 +960,14 @@ fun ChatScreen(
                             trailingContent = {
                                 Checkbox(
                                     checked = app.packageName in selectedLocalAppPackages,
+                                    enabled = !smartAiSelection,
                                     onCheckedChange = { checked ->
                                         selectedLocalAppPackages = if (checked) selectedLocalAppPackages + app.packageName else selectedLocalAppPackages - app.packageName
                                     },
                                     colors = CheckboxDefaults.colors(checkedColor = AccentPurple),
                                 )
                             },
-                            modifier = Modifier.fillMaxWidth().clickable {
+                            modifier = Modifier.fillMaxWidth().clickable(enabled = !smartAiSelection) {
                                 selectedLocalAppPackages = if (app.packageName in selectedLocalAppPackages) selectedLocalAppPackages - app.packageName else selectedLocalAppPackages + app.packageName
                             },
                             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
