@@ -154,7 +154,7 @@ internal class ToggleBluetoothAction(
 class SystemActions @Inject constructor(
     private val agentLoop: dagger.Lazy<AgentLoop>,
     private val visionEngine: dagger.Lazy<com.opendroid.ai.core.agent.VisionEngine>,
-    private val localAiAppExecutor: LocalAiAppExecutor,
+    private val localAiAppExecutor: dagger.Lazy<LocalAiAppExecutor>,
 ) {
 
     fun getActions(): List<Action> = listOf(
@@ -502,7 +502,7 @@ class SystemActions @Inject constructor(
     }
 
     private class UseLocalAppAction(
-        private val executor: LocalAiAppExecutor,
+        private val executor: dagger.Lazy<LocalAiAppExecutor>,
     ) : Action {
         override val name: String = "USE_LOCAL_APP"
 
@@ -510,7 +510,7 @@ class SystemActions @Inject constructor(
             val prompt = params["prompt"] ?: params["message"]
             if (prompt.isNullOrBlank()) return ActionResult(false, null, "prompt parameter missing")
             return runCatching {
-                val result = executor.execute(
+                val result = executor.get().execute(
                     context = context,
                     appName = params["appName"] ?: params["app_name"],
                     packageName = params["packageName"] ?: params["package_name"],
