@@ -118,7 +118,7 @@ jobs:
           expected_sha1=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | awk -F': ' '/SHA1:/{print toupper($2); exit}')
           actual_sha1=$(printf '%s\n' "$certs" | awk -F': ' '/certificate SHA-1 digest:/{print toupper($2); exit}')
           printf 'Expected APK SHA-1: %s\nActual APK SHA-1: %s\n' "$expected_sha1" "$actual_sha1"
-          test -n "$actual_sha1" && test "$actual_sha1" = "$expected_sha1"
+          test -n "$actual_sha1" && test "${actual_sha1//:/}" = "${expected_sha1//:/}"
           unzip -l "$apk" | grep -F 'assets/proot/proot'
           unzip -p "$apk" assets/proot/proot > /tmp/proot-from-apk
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
