@@ -1,9 +1,6 @@
 name: Publish verified Android artifact
 
 on:
-  push:
-    branches:
-      - feature/hybrid-task-orchestrator
   workflow_dispatch:
     inputs:
       ref:

@@ -11,6 +11,7 @@ import com.opendroid.ai.data.db.dao.MemoryDao
 import com.opendroid.ai.data.db.dao.PlanDao
 import com.opendroid.ai.data.db.dao.TaskHistoryDao
 import com.opendroid.ai.data.db.dao.WorkspaceTaskDao
+import com.opendroid.ai.data.db.dao.CloudServerDao
 import com.opendroid.ai.data.db.entities.ChatSessionEntity
 import com.opendroid.ai.data.db.entities.ConversationEntity
 import com.opendroid.ai.data.db.entities.MacroEntity
@@ -20,6 +21,7 @@ import com.opendroid.ai.data.db.entities.TaskHistoryEntity
 import com.opendroid.ai.data.db.entities.WorkspaceTaskDependencyEntity
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.data.db.entities.WorkspaceTaskExecutionEntity
+import com.opendroid.ai.data.db.entities.CloudServerEntity
 
 import com.opendroid.ai.data.db.dao.NotificationDao
 import com.opendroid.ai.data.db.dao.UnknownActionDao
@@ -70,9 +72,10 @@ import com.opendroid.ai.data.db.dao.SocialAuditLogDao
         SocialAuditLogEntity::class,
         WorkspaceTaskEntity::class,
         WorkspaceTaskDependencyEntity::class,
-        WorkspaceTaskExecutionEntity::class
+        WorkspaceTaskExecutionEntity::class,
+        CloudServerEntity::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = true
 )
 abstract class OpenDroidDatabase : RoomDatabase() {
@@ -82,6 +85,7 @@ abstract class OpenDroidDatabase : RoomDatabase() {
     abstract fun memoryDao(): MemoryDao
     abstract fun taskHistoryDao(): TaskHistoryDao
     abstract fun workspaceTaskDao(): WorkspaceTaskDao
+    abstract fun cloudServerDao(): CloudServerDao
     abstract fun macroDao(): MacroDao
     abstract fun unknownActionDao(): UnknownActionDao
     abstract fun notificationDao(): NotificationDao
@@ -517,6 +521,21 @@ abstract class OpenDroidDatabase : RoomDatabase() {
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_executions_taskId ON workspace_task_executions(taskId)")
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_executions_startedAt ON workspace_task_executions(startedAt)")
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_executions_toState ON workspace_task_executions(toState)")
+            }
+        }
+
+        /** Adds persisted OpenSwarm cluster metadata; credentials remain in encrypted storage. */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS cloud_servers (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        url TEXT NOT NULL,
+                        enabled INTEGER NOT NULL,
+                        position INTEGER NOT NULL
+                    )
+                """)
             }
         }
     }

@@ -7,6 +7,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -90,6 +92,10 @@ fun SettingsScreen(
     val cloudServerEnabled by viewModel.settingsRepository.cloudServerEnabled.collectAsState(initial = listOf(true, false, false))
     val cloudServerTokens by viewModel.settingsRepository.cloudServerTokens.collectAsState()
     val cloudServers by viewModel.cloudServers.collectAsState()
+    val cloudServerHealth by viewModel.cloudServerHealth.collectAsState()
+    val pingingCloudServers by viewModel.pingingCloudServers.collectAsState()
+    val cloudKeepAliveEnabled by viewModel.cloudKeepAliveEnabled.collectAsState()
+    var expandedCloudServerIds by remember { mutableStateOf(emptySet<String>()) }
     val installedAiApps = remember(context.packageManager) {
         InstalledAiAppDiscovery.scan(context.packageManager)
     }
@@ -284,24 +290,102 @@ fun SettingsScreen(
                 Card(modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = CardBackground)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
                         Text("OPENSWARM CLOUD SERVERS", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
-                        Text("Add as many named Colab/FastAPI backends as needed. Auto mode load-balances and fails over after timeout, HTTP 500, or HTTP 503.", color = TextSecondary, fontSize = 12.sp)
-                        cloudServers.forEach { server ->
-                            var name by remember(server.id, server.name) { mutableStateOf(server.name) }
-                            var url by remember(server.id, server.url) { mutableStateOf(server.url) }
-                            var token by remember(server.id, server.token) { mutableStateOf(server.token) }
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text(name.ifBlank { "Cloud Server" }, color = TextPrimary, fontWeight = FontWeight.Bold)
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Switch(checked = server.enabled, onCheckedChange = { viewModel.setCloudServerEnabled(server.id, it) })
-                                    IconButton(onClick = { viewModel.removeCloudServer(server.id) }) { Icon(Icons.Default.Delete, contentDescription = "Delete server", tint = AccentRed) }
-                                }
+                        Text("Room-backed cluster profiles. Auto mode probes /health concurrently, picks the lowest-latency HTTP 200 server, then fails over in ranked order.", color = TextSecondary, fontSize = 12.sp)
+                        Spacer(Modifier.height(8.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Button(onClick = viewModel::pingAllCloudServers, enabled = !pingingCloudServers && cloudServers.isNotEmpty()) {
+                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                Text(if (pingingCloudServers) " Checking…" else " Ping All")
                             }
-                            OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Server name") })
-                            OutlinedTextField(value = url, onValueChange = { url = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("HTTPS backend URL") })
-                            OutlinedTextField(value = token, onValueChange = { token = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("Bearer token") })
-                            Button(onClick = { viewModel.saveCloudServer(server.copy(name = name, url = url), token) }) { Text("Save ${name.ifBlank { "server" }}") }
-                            Spacer(Modifier.height(8.dp))
+                            Text("${cloudServers.size} configured", color = TextSecondary, fontSize = 12.sp)
                         }
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Switch(checked = cloudKeepAliveEnabled, onCheckedChange = viewModel::setCloudKeepAliveEnabled)
+                            Column {
+                                Text("Five-minute keep-alive", color = TextPrimary, fontSize = 13.sp)
+                                Text("Foreground checks for enabled servers", color = TextSecondary, fontSize = 11.sp)
+                            }
+                        }
+                        if (cloudKeepAliveEnabled) {
+                            Text("The foreground service continues five-minute /health checks while the app is minimized, with an ongoing notification. This cannot override Android restrictions or guarantee that Google Colab keeps a runtime alive; Colab may still disconnect it.", color = TextSecondary, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+
+            items(
+                items = cloudServers.sortedWith(
+                    compareBy<com.opendroid.ai.data.repository.CloudServerConfig> {
+                        if (cloudServerHealth[it.id]?.online == true) 0 else 1
+                    }.thenBy { it.name.lowercase(Locale.ROOT) },
+                ),
+                key = { it.id },
+            ) { server ->
+                var name by remember(server.id, server.name) { mutableStateOf(server.name) }
+                var url by remember(server.id, server.url) { mutableStateOf(server.url) }
+                var token by remember(server.id, server.token) { mutableStateOf(server.token) }
+                val health = cloudServerHealth[server.id]
+                val expanded = server.id in expandedCloudServerIds
+                Card(
+                    modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(10.dp)),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground),
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(9.dp).clip(CircleShape).background(
+                                when {
+                                    health?.online == true -> Color(0xFF35C759)
+                                    health?.online == false -> Color(0xFFE5484D)
+                                    else -> Color(0xFF8A8A8A)
+                                },
+                            ))
+                            Spacer(Modifier.width(9.dp))
+                            Column(
+                                Modifier.weight(1f).clickable {
+                                    expandedCloudServerIds = if (expanded) expandedCloudServerIds - server.id else expandedCloudServerIds + server.id
+                                },
+                            ) {
+                                Text(server.name.ifBlank { "Cloud Server" }, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(
+                                    when {
+                                        health == null -> "Not checked"
+                                        health.online -> "Online · ${health.latencyMs} ms"
+                                        else -> "Offline${health.httpCode?.let { " · HTTP $it" }.orEmpty()}"
+                                    },
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                            Switch(checked = server.enabled, onCheckedChange = { viewModel.setCloudServerEnabled(server.id, it) })
+                            IconButton(onClick = { viewModel.removeCloudServer(server.id) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete ${server.name}", tint = AccentRed)
+                            }
+                            IconButton(onClick = {
+                                expandedCloudServerIds = if (expanded) expandedCloudServerIds - server.id else expandedCloudServerIds + server.id
+                            }) {
+                                Icon(
+                                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = if (expanded) "Collapse server" else "Expand server",
+                                    tint = TextSecondary,
+                                )
+                            }
+                        }
+                        AnimatedVisibility(visible = expanded) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Server name") })
+                                OutlinedTextField(value = url, onValueChange = { url = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("HTTPS backend URL") })
+                                OutlinedTextField(value = token, onValueChange = { token = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("Bearer token") })
+                                Button(onClick = { viewModel.saveCloudServer(server.copy(name = name, url = url), token) }) { Text("Save server") }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = CardBackground)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("ADD CLUSTER SERVER", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
                         var newName by remember { mutableStateOf("") }
                         var newUrl by remember { mutableStateOf("") }
                         var newToken by remember { mutableStateOf("") }

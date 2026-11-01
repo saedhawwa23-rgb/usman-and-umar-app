@@ -302,10 +302,11 @@ class WorkspaceTaskViewModel @Inject constructor(
 
     private suspend fun postToCloudServers(taskId: String, prompt: String, pluginId: String, target: String, maxSteps: Int, thinkHarder: Boolean = false): String {
         val targetId = when (target.lowercase()) {
+            "auto" -> null
             "server1", "server 1" -> "legacy-1"
             "server2", "server 2" -> "legacy-2"
             "server3", "server 3" -> "legacy-3"
-            else -> null
+            else -> target.takeIf { it.isNotBlank() }
         }
         return cloudServerClient.execute(
             taskId = taskId,

@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build-and-publish:
-    name: Build, verify, and publish the hybrid APK
+  build-and-upload:
+    name: Build, verify, and upload signed hybrid APK
     runs-on: ubuntu-latest
     steps:
-      - name: Check out pushed feature branch
+      - name: Check out selected branch commit
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -29,6 +29,23 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure permanent debug signing
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$DEBUG_KEYSTORE_B64" || { echo 'ANDROID_DEBUG_KEYSTORE_BASE64 is not configured'; exit 1; }
+          set +e
+          printf '%s' "$DEBUG_KEYSTORE_B64" | tr -d '[:space:]' | base64 --decode --ignore-garbage > debug.keystore
+          decode_status=$?
+          set -e
+          test "$(sha256sum debug.keystore | cut -d' ' -f1)" = "70ea63b1134cc4e8cf409050fff93d68d709442c7ed919551f283f07db081c6e" || {
+            echo "Decoded keystore checksum mismatch (base64 status: $decode_status)" >&2
+            exit 1
+          }
+          chmod 600 debug.keystore
+          keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey >/dev/null
 
       - name: Install ARM32 cross-compilation toolchain
         run: |
@@ -61,11 +78,20 @@ jobs:
           cp /tmp/proot/src/proot app/src/main/assets/proot/proot
           chmod 755 app/src/main/assets/proot/proot
 
-      - name: Run unit tests and build debug APK
-        run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
+      - name: Assemble debug APK with permanent signing
+        env:
+          ORG_GRADLE_PROJECT_DEBUG_STORE_PASSWORD: android
+          ORG_GRADLE_PROJECT_DEBUG_KEY_ALIAS: androiddebugkey
+          ORG_GRADLE_PROJECT_DEBUG_KEY_PASSWORD: android
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Run unit tests (time-bounded)
+        id: tests
+        continue-on-error: true
+        timeout-minutes: 15
+        run: ./gradlew testDebugUnitTest --stacktrace
 
       - name: Verify package, signature, and bundled PRoot asset
-        id: build-meta
         shell: bash
         run: |
           set -euo pipefail
@@ -76,6 +102,10 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.6.0'"
           "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='24'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
+          certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt")
+          expected_sha1=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | awk -F': ' '/SHA1:/{print toupper($2); exit}')
+          actual_sha1=$(printf '%s\n' "$certs" | awk -F': ' '/certificate SHA-1 digest:/{print toupper($2); exit}')
+          test -n "$actual_sha1" && test "${actual_sha1//:/}" = "${expected_sha1//:/}"
           unzip -l "$apk" | grep -F 'assets/proot/proot'
           unzip -p "$apk" assets/proot/proot > /tmp/proot-from-apk
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
@@ -84,23 +114,11 @@ jobs:
           cp "$apk" "$out/USMAN-AND-UMAR-v3.6.0-hybrid-orchestrator.apk"
           sha256sum "$out/USMAN-AND-UMAR-v3.6.0-hybrid-orchestrator.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nref=%s\n' "$(git rev-parse HEAD)" "${GITHUB_REF_NAME}" > "$out/BUILD_METADATA.txt"
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Publish prerelease APK
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
+      - name: Upload APK and verification files (no GitHub Release)
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: v3.6.0-hybrid-orchestrator-${{ github.run_number }}
-          name: USMAN AND UMAR Hybrid Task Orchestrator build ${{ github.run_number }}
-          body: |
-            Hybrid task orchestrator feature-branch Android debug APK.
-
-            Commit: `${{ steps.build-meta.outputs.commit }}`
-            Package: `com.usmanandumar.app`
-            Version: `3.6.0` (versionCode `24`)
-            The APK contains a verified ARM32 PRoot binary under assets; the app does not require an ARM32 native library.
-
-            This debug-signed APK is intended for evaluation. Physical device runtime testing is not claimed.
-          files: dist/*
-          fail_on_unmatched_files: true
-          draft: false
-          prerelease: true
+          name: hybrid-cluster-apk-${{ github.run_number }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30

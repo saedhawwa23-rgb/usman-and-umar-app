@@ -221,6 +221,39 @@ class OpenDroidDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun `migration to version 12 adds Room-backed cluster servers and preserves existing data`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.deleteDatabase(TEST_DATABASE)
+        helper.createDatabase(databasePath, 10).use { db ->
+            db.execSQL(
+                "INSERT INTO memories (`key`, `value`, `type`, `timestamp`, `ttlHours`, `category`) " +
+                    "VALUES ('before-cluster', 'preserved', 'PREFERENCE', 55, -1, 'FACT')"
+            )
+        }
+
+        val migrated = helper.runMigrationsAndValidate(
+            databasePath,
+            12,
+            true,
+            OpenDroidDatabase.MIGRATION_10_11,
+            OpenDroidDatabase.MIGRATION_11_12,
+        )
+        migrated.execSQL(
+            "INSERT INTO cloud_servers (id, name, url, enabled, position) " +
+                "VALUES ('server-10', 'Colab 10', 'https://cluster.example', 1, 9)"
+        )
+        migrated.query("SELECT `value` FROM memories WHERE `key`='before-cluster'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("preserved", cursor.getString(0))
+        }
+        migrated.query("SELECT `name`, `position` FROM cloud_servers WHERE `id`='server-10'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Colab 10", cursor.getString(0))
+            assertEquals(9, cursor.getInt(1))
+        }
+    }
+
     private class V1SchemaCallback : SupportSQLiteOpenHelper.Callback(1) {
         override fun onCreate(db: SupportSQLiteDatabase) {
             V1_CREATE_STATEMENTS.forEach(db::execSQL)

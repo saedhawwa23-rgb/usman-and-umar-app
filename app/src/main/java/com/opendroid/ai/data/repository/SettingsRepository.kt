@@ -15,6 +15,8 @@ import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
 import com.opendroid.ai.core.security.ProviderCredentialStore
 import com.opendroid.ai.data.models.AutoReplyConfig
 import com.opendroid.ai.data.models.LLMConfig
+import com.opendroid.ai.data.db.dao.CloudServerDao
+import com.opendroid.ai.data.db.entities.CloudServerEntity
 import com.opendroid.ai.core.llm.ProviderCatalog
 import java.io.IOException
 import java.util.UUID
@@ -58,13 +60,15 @@ data class CloudServerConfig(
 class SettingsRepository internal constructor(
     private val dataStore: DataStore<Preferences>,
     private val providerCredentialStore: ProviderCredentialStore,
-    private val runStartupMigration: Boolean
+    private val runStartupMigration: Boolean,
+    private val cloudServerDao: CloudServerDao? = null,
 ) {
     @Inject
     constructor(
         @ApplicationContext context: Context,
-        providerCredentialStore: ProviderCredentialStore
-    ) : this(context.dataStore, providerCredentialStore, runStartupMigration = true)
+        providerCredentialStore: ProviderCredentialStore,
+        cloudServerDao: CloudServerDao,
+    ) : this(context.dataStore, providerCredentialStore, runStartupMigration = true, cloudServerDao = cloudServerDao)
 
     private val json = Json { ignoreUnknownKeys = true }
     private val llmConfigKey = stringPreferencesKey("llm_config")
@@ -73,19 +77,37 @@ class SettingsRepository internal constructor(
     private val cloudServerUrlKeys = (1..3).map { stringPreferencesKey("openswarm_server_${it}_url") }
     private val cloudServerEnabledKeys = (1..3).map { booleanPreferencesKey("openswarm_server_${it}_enabled") }
     private val cloudServersKey = stringPreferencesKey("openswarm_cloud_servers_v2")
+    private val cloudKeepAliveKey = booleanPreferencesKey("openswarm_cloud_keep_alive_enabled")
     private val autoRunGeneratedCodeKey = booleanPreferencesKey("auto_run_generated_code")
     private val mutableOpenSwarmClientToken = MutableStateFlow("")
     val openSwarmClientToken: StateFlow<String> = mutableOpenSwarmClientToken.asStateFlow()
     private val mutableCloudServerTokens = MutableStateFlow(listOf("", "", ""))
     val cloudServerTokens: StateFlow<List<String>> = mutableCloudServerTokens.asStateFlow()
 
-    /** Unlimited named backends. Token values are read only from encrypted storage at runtime. */
-    val cloudServers: Flow<List<CloudServerConfig>> = dataStore.data.map { preferences ->
-        val stored = preferences[cloudServersKey].orEmpty().let { raw ->
-            runCatching { json.decodeFromString<List<CloudServerConfig>>(raw) }.getOrNull()
-        } ?: legacyCloudServers(preferences)
-        stored.map { server -> server.copy(token = readDynamicCloudToken(server.id)) }
-    }.flowOn(Dispatchers.IO)
+    /** Unlimited server profiles are Room-backed; bearer tokens are hydrated from encrypted storage. */
+    val cloudServers: Flow<List<CloudServerConfig>> = if (cloudServerDao != null) {
+        cloudServerDao.observeAll().map { rows ->
+            rows.map { row ->
+                CloudServerConfig(row.id, row.name, row.url, row.enabled, readDynamicCloudToken(row.id))
+            }
+        }.flowOn(Dispatchers.IO)
+    } else {
+        // Keeps isolated repository tests and pre-Hilt migration callers compatible.
+        dataStore.data.map { preferences ->
+            val stored = preferences[cloudServersKey].orEmpty().let { raw ->
+                runCatching { json.decodeFromString<List<CloudServerConfig>>(raw) }.getOrNull()
+            } ?: legacyCloudServers(preferences)
+            stored.map { server -> server.copy(token = readDynamicCloudToken(server.id)) }
+        }.flowOn(Dispatchers.IO)
+    }
+
+    val cloudKeepAliveEnabled: Flow<Boolean> = dataStore.data
+        .map { it[cloudKeepAliveKey] ?: false }
+        .flowOn(Dispatchers.IO)
+
+    suspend fun setCloudKeepAliveEnabled(enabled: Boolean) {
+        dataStore.edit { it[cloudKeepAliveKey] = enabled }
+    }
 
     private fun legacyCloudServers(preferences: Preferences): List<CloudServerConfig> =
         (0..2).mapNotNull { index ->
@@ -100,15 +122,15 @@ class SettingsRepository internal constructor(
     private fun dynamicCloudCredential(id: String): ProviderCredentialId.ApiKey =
         ProviderCredentialId.ApiKey("openswarm-cloud-server-$id")
 
+    private fun cloudCredential(id: String): ProviderCredentialId = when (id.removePrefix("legacy-").toIntOrNull()) {
+        1 -> ProviderCredentialId.OpenSwarmServer1Token
+        2 -> ProviderCredentialId.OpenSwarmServer2Token
+        3 -> ProviderCredentialId.OpenSwarmServer3Token
+        else -> dynamicCloudCredential(id)
+    }
+
     private fun readDynamicCloudToken(id: String): String {
-        val legacyIndex = id.removePrefix("legacy-").toIntOrNull()?.minus(1)
-        val credential = when (legacyIndex) {
-            0 -> ProviderCredentialId.OpenSwarmServer1Token
-            1 -> ProviderCredentialId.OpenSwarmServer2Token
-            2 -> ProviderCredentialId.OpenSwarmServer3Token
-            else -> dynamicCloudCredential(id)
-        }
-        return (providerCredentialStore.read(credential) as? CredentialStoreResult.Success)?.value.orEmpty()
+        return (providerCredentialStore.read(cloudCredential(id)) as? CredentialStoreResult.Success)?.value.orEmpty()
     }
 
     suspend fun addCloudServer(name: String, url: String, token: String = ""): CloudServerConfig {
@@ -119,24 +141,56 @@ class SettingsRepository internal constructor(
 
     suspend fun saveCloudServer(server: CloudServerConfig, token: String = server.token) {
         val normalized = server.copy(name = server.name.trim().ifBlank { "Cloud Server" }.take(80), url = normalizeCloudServerUrl(server.url), token = "")
-        val current = cloudServers.first().map { it.copy(token = "") }.filterNot { it.id == normalized.id }
-        dataStore.edit { it[cloudServersKey] = json.encodeToString(current + normalized) }
         saveDynamicCloudToken(normalized.id, token)
+        if (cloudServerDao != null) {
+            val rows = cloudServerDao.observeAll().first()
+            val position = rows.firstOrNull { it.id == normalized.id }?.position
+                ?: ((rows.maxOfOrNull { it.position } ?: -1) + 1)
+            cloudServerDao.upsert(
+                CloudServerEntity(normalized.id, normalized.name, normalized.url, normalized.enabled, position)
+            )
+        } else {
+            val current = cloudServers.first().map { it.copy(token = "") }.filterNot { it.id == normalized.id }
+            dataStore.edit { it[cloudServersKey] = json.encodeToString(current + normalized) }
+        }
     }
 
     suspend fun removeCloudServer(id: String) {
-        val remaining = cloudServers.first().filterNot { it.id == id }.map { it.copy(token = "") }
-        dataStore.edit { it[cloudServersKey] = json.encodeToString(remaining) }
-        providerCredentialStore.remove(dynamicCloudCredential(id))
+        providerCredentialStore.remove(cloudCredential(id))
+        if (cloudServerDao != null) {
+            cloudServerDao.delete(id)
+        } else {
+            val remaining = cloudServers.first().filterNot { it.id == id }.map { it.copy(token = "") }
+            dataStore.edit { it[cloudServersKey] = json.encodeToString(remaining) }
+        }
     }
 
     suspend fun setCloudServerEnabled(id: String, enabled: Boolean) {
-        val updated = cloudServers.first().map { if (it.id == id) it.copy(enabled = enabled, token = "") else it.copy(token = "") }
-        dataStore.edit { it[cloudServersKey] = json.encodeToString(updated) }
+        if (cloudServerDao != null) {
+            cloudServerDao.setEnabled(id, enabled)
+        } else {
+            val updated = cloudServers.first().map { if (it.id == id) it.copy(enabled = enabled, token = "") else it.copy(token = "") }
+            dataStore.edit { it[cloudServersKey] = json.encodeToString(updated) }
+        }
+    }
+
+    private suspend fun migrateLegacyCloudServersToRoom() {
+        val dao = cloudServerDao ?: return
+        if (dao.observeAll().first().isNotEmpty()) return
+        val preferences = dataStore.data.first()
+        val legacy = preferences[cloudServersKey].orEmpty().let { raw ->
+            runCatching { json.decodeFromString<List<CloudServerConfig>>(raw) }.getOrNull()
+        } ?: legacyCloudServers(preferences)
+        if (legacy.isEmpty()) return
+        dao.upsertAll(legacy.mapIndexed { index, server ->
+            CloudServerEntity(server.id, server.name, normalizeCloudServerUrl(server.url), server.enabled, index)
+        })
+        dataStore.edit { it.remove(cloudServersKey) }
     }
 
     private suspend fun saveDynamicCloudToken(id: String, value: String) = withContext(Dispatchers.IO) {
-        val result = if (value.trim().isBlank()) providerCredentialStore.remove(dynamicCloudCredential(id)) else providerCredentialStore.write(dynamicCloudCredential(id), value.trim())
+        val credential = cloudCredential(id)
+        val result = if (value.trim().isBlank()) providerCredentialStore.remove(credential) else providerCredentialStore.write(credential, value.trim())
         when (result) {
             is CredentialStoreResult.Success -> Unit
             CredentialStoreResult.CredentialsMustBeReentered -> error("Credential storage needs recovery before saving a cloud token.")
@@ -175,6 +229,7 @@ class SettingsRepository internal constructor(
                     // The credential store has no plaintext fallback; a later update retries.
                 }
             }
+            runCatching { migrateLegacyCloudServersToRoom() }
             readOpenSwarmClientToken()
         }
     }
@@ -438,6 +493,11 @@ class SettingsRepository internal constructor(
         val values = ids.map { (providerCredentialStore.read(it) as? CredentialStoreResult.Success)?.value.orEmpty() }
         mutableCloudServerTokens.value = values
         mutableOpenSwarmClientToken.value = values.firstOrNull().orEmpty()
+    }
+
+    suspend fun currentOpenSwarmClientToken(): String = withContext(Dispatchers.IO) {
+        readOpenSwarmClientToken()
+        mutableOpenSwarmClientToken.value
     }
 
     suspend fun saveOpenSwarmClientToken(value: String) = withContext(Dispatchers.IO) {

@@ -11,6 +11,7 @@ import com.opendroid.ai.data.db.dao.PlanDao
 import com.opendroid.ai.data.db.dao.NotificationDao
 import com.opendroid.ai.data.db.dao.TaskHistoryDao
 import com.opendroid.ai.data.db.dao.WorkspaceTaskDao
+import com.opendroid.ai.data.db.dao.CloudServerDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -46,7 +47,8 @@ object DatabaseModule {
             OpenDroidDatabase.MIGRATION_7_8,
             OpenDroidDatabase.MIGRATION_8_9,
             OpenDroidDatabase.MIGRATION_9_10,
-            OpenDroidDatabase.MIGRATION_10_11
+            OpenDroidDatabase.MIGRATION_10_11,
+            OpenDroidDatabase.MIGRATION_11_12,
         )
         .build()
     }
@@ -74,6 +76,10 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideWorkspaceTaskDao(db: OpenDroidDatabase): WorkspaceTaskDao = db.workspaceTaskDao()
+
+    @Provides
+    @Singleton
+    fun provideCloudServerDao(db: OpenDroidDatabase): CloudServerDao = db.cloudServerDao()
 
     @Provides
     @Singleton

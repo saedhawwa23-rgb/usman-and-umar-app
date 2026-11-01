@@ -211,7 +211,7 @@ fun WorkspaceTaskScreen(
                             }
                         }
                     } else if (mode == TaskExecutionMode.CLOUD_OPENSWARM) {
-                        CloudTargetMenu(target = cloudTarget, onSelect = { cloudTarget = it }, modifier = Modifier.weight(1f))
+                        CloudTargetMenu(target = cloudTarget, servers = cloudServers, onSelect = { cloudTarget = it }, modifier = Modifier.weight(1f))
                     } else if (mode == TaskExecutionMode.TERMUX_SCRIPT) {
                         ScriptLanguageMenu(language = scriptLanguage, onSelect = { scriptLanguage = it }, modifier = Modifier.weight(1f))
                     }
@@ -436,18 +436,27 @@ private fun ScriptLanguageMenu(language: String, onSelect: (String) -> Unit, mod
 }
 
 @Composable
-private fun CloudTargetMenu(target: String, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun CloudTargetMenu(
+    target: String,
+    servers: List<com.opendroid.ai.data.repository.CloudServerConfig>,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var expanded by remember { mutableStateOf(false) }
-    val options = listOf("auto", "server1", "server2", "server3")
+    val options = listOf("auto" to "Auto / Load Balance") + servers
+        .filter { it.enabled }
+        .map { it.id to it.name.ifBlank { "Cloud Server" } }
+    val selectedLabel = options.firstOrNull { it.first == target }?.second
+        ?: if (target == "auto") "Auto / Load Balance" else "Selected server"
     Column(modifier) {
         Button(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (target == "auto") "Auto / Load Balance" else "Server ${target.removePrefix("server")}", fontSize = 12.sp)
+            Text(selectedLabel, fontSize = 12.sp)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { item ->
+            options.forEach { (id, label) ->
                 DropdownMenuItem(
-                    text = { Text(if (item == "auto") "Auto / Load Balance" else "Server ${item.removePrefix("server")}") },
-                    onClick = { onSelect(item); expanded = false },
+                    text = { Text(label) },
+                    onClick = { onSelect(id); expanded = false },
                 )
             }
         }
