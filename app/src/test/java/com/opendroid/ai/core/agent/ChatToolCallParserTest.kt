@@ -6,6 +6,17 @@ import org.junit.Test
 
 class ChatToolCallParserTest {
     @Test
+    fun parsesLocalAiToolCallWithPromptAndPackage() {
+        val call = ChatToolCallParser.parse(
+            """{"action":"use_local_app","app_name":"ChatGPT","package_name":"com.openai.chatgpt","prompt":"Summarize this"}"""
+        )
+        assertEquals("use_local_app", call?.action)
+        assertEquals("ChatGPT", call?.appName)
+        assertEquals("com.openai.chatgpt", call?.packageName)
+        assertEquals("Summarize this", call?.prompt)
+    }
+
+    @Test
     fun parsesPlainShellToolCall() {
         val call = ChatToolCallParser.parse("""{"action":"shell","command":"pm list packages"}""")
         assertEquals("shell", call?.action)

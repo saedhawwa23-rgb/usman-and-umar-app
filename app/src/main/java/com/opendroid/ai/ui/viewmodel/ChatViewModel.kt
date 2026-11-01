@@ -12,6 +12,7 @@ import android.os.Build
 import android.provider.Settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.opendroid.ai.accessibility.LocalAiAppExecutor
 import com.opendroid.ai.core.agent.AgentLoop
 import com.opendroid.ai.core.agent.AgentState
 import com.opendroid.ai.core.agent.ChatToolCall
@@ -52,6 +53,7 @@ class ChatViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val termuxIntegration: TermuxIntegration,
     private val cloudServerClient: CloudServerClient,
+    private val localAiAppExecutor: LocalAiAppExecutor,
 ) : ViewModel() {
 
     val llmConfig: StateFlow<LLMConfig> = settingsRepository.llmConfig
@@ -234,6 +236,17 @@ class ChatViewModel @Inject constructor(
                 sessionId,
                 ChatMessage(id = UUID.randomUUID().toString(), text = result.take(12_000), sender = ChatMessage.Sender.AGENT),
             )
+            if (call.action == "use_local_app" && !result.startsWith("Action failed:")) {
+                _taskSessionId.value = sessionId
+                agentLoop.processQuery(
+                    "The local AI app tool completed. Original prompt: ${call.prompt.orEmpty()}\n\n" +
+                        "Tool result from ${call.appName ?: call.packageName ?: "the selected local AI app"}:\n$result\n\n" +
+                        "Continue the user's workflow using this real result. Do not claim actions that were not completed.",
+                    context,
+                    sessionId,
+                    null,
+                )
+            }
         }
     }
 
@@ -291,6 +304,12 @@ class ChatViewModel @Inject constructor(
                 require(!url.isNullOrBlank()) { "Specify an HTTP or HTTPS URL." }
                 openUrl(context, url)
             }
+            "use_local_app" -> localAiAppExecutor.execute(
+                context = context,
+                appName = call.appName,
+                packageName = call.packageName,
+                prompt = call.prompt ?: call.command ?: error("Specify the prompt to send to the local AI app."),
+            )
             "device_info", "android_device_info" -> nativeDeviceProperty("getprop ro.build.version.release")
             "battery_status", "get_battery_status" -> nativeBatteryStatus(context)
             "network_status", "get_network_status" -> nativeNetworkStatus(context)

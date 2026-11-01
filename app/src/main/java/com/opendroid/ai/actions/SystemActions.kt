@@ -18,6 +18,7 @@ import android.provider.Settings
 import android.util.Log
 import androidx.annotation.RequiresPermission
 import androidx.core.net.toUri
+import com.opendroid.ai.accessibility.LocalAiAppExecutor
 import com.opendroid.ai.accessibility.OpenDroidAccessibilityService
 import com.opendroid.ai.actions.base.Action
 import com.opendroid.ai.actions.base.ActionResult
@@ -152,7 +153,8 @@ internal class ToggleBluetoothAction(
 @Singleton
 class SystemActions @Inject constructor(
     private val agentLoop: dagger.Lazy<AgentLoop>,
-    private val visionEngine: dagger.Lazy<com.opendroid.ai.core.agent.VisionEngine>
+    private val visionEngine: dagger.Lazy<com.opendroid.ai.core.agent.VisionEngine>,
+    private val localAiAppExecutor: LocalAiAppExecutor,
 ) {
 
     fun getActions(): List<Action> = listOf(
@@ -161,6 +163,7 @@ class SystemActions @Inject constructor(
         SetVolumeAction(),
         SetBrightnessAction(),
         OpenAppAction(),
+        UseLocalAppAction(localAiAppExecutor),
         LockScreenAction(),
         RestartDeviceAction(),
         ToggleBluetoothAction(),
@@ -455,7 +458,29 @@ class SystemActions @Inject constructor(
         }
     }
 
-    private class ToggleDndAction : Action {
+    private class UseLocalAppAction(
+        private val executor: LocalAiAppExecutor,
+    ) : Action {
+        override val name: String = "USE_LOCAL_APP"
+
+        override suspend fun execute(params: Map<String, String>, context: Context): ActionResult {
+            val prompt = params["prompt"] ?: params["message"]
+            if (prompt.isNullOrBlank()) return ActionResult(false, null, "prompt parameter missing")
+            return runCatching {
+                val result = executor.execute(
+                    context = context,
+                    appName = params["appName"] ?: params["app_name"],
+                    packageName = params["packageName"] ?: params["package_name"],
+                    prompt = prompt,
+                )
+                ActionResult(true, result, null)
+            }.getOrElse { failure ->
+                ActionResult(false, null, failure.message ?: "The local AI app could not complete the request.")
+            }
+        }
+    }
+
+    private class ToggleWifiAction : Action {
         override val name: String = "TOGGLE_DND"
         override suspend fun execute(params: Map<String, String>, context: Context): ActionResult {
             val requestedState = (params["state"] ?: params["on"] ?: "toggle")

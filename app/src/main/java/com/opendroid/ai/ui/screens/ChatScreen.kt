@@ -69,6 +69,7 @@ import com.opendroid.ai.core.agent.AgentState
 import com.opendroid.ai.core.agent.ChatToolCall
 import com.opendroid.ai.core.agent.ChatToolCallParser
 import com.opendroid.ai.core.agent.AutoApprovalPolicy
+import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.opendroid.ai.core.agent.ChatErrorPrimaryAction
 import com.opendroid.ai.core.agent.ChatErrorUiState
 import com.opendroid.ai.core.agent.guidance
@@ -105,6 +106,9 @@ fun ChatScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val installedAiApps = remember(context.packageManager) {
+        InstalledAiAppDiscovery.scan(context.packageManager)
+    }
     val history by viewModel.conversationHistory.collectAsState()
     // Scoped to whichever chat is on screen right now - a task that's actually running
     // in a DIFFERENT chat (safe since the pinned-session fix: it keeps writing there,
@@ -138,6 +142,7 @@ fun ChatScreen(
     var showAttachmentSheet by remember { mutableStateOf(false) }
     var showPluginSelector by remember { mutableStateOf(false) }
     var selectedPluginIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedLocalAppPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedAttachment by remember { mutableStateOf<PendingChatAttachment?>(null) }
     var attachmentToRead by remember { mutableStateOf<Pair<Uri, Boolean>?>(null) }
     var messageForActions by remember { mutableStateOf<ChatMessage?>(null) }
@@ -215,6 +220,11 @@ fun ChatScreen(
             if (thinkEnabled) append("\n[Use deeper internal reasoning before answering; do not reveal private chain-of-thought.]\n")
             if (searchEnabled) append("\n[Use the web-search capability when current or externally verifiable information is needed.]\n")
             if (selectedPluginIds.isNotEmpty()) append("\n[Use plugins: ${selectedPluginIds.joinToString(", ")}]\n")
+            if (selectedLocalAppPackages.isNotEmpty()) {
+                val apps = installedAiApps.filter { it.packageName in selectedLocalAppPackages }
+                    .joinToString("; ") { "${it.displayName} (${it.packageName})" }
+                append("\n[Local AI apps available through USE_LOCAL_APP: $apps. Use the real tool when their response is needed.]\n")
+            }
         }
         val text = inputQuery + attachmentText + modeInstructions
         if (inputQuery.isBlank() && attachment == null) return
@@ -231,6 +241,7 @@ fun ChatScreen(
         thinkEnabled = false
         searchEnabled = false
         selectedPluginIds = emptySet()
+        selectedLocalAppPackages = emptySet()
         chatTarget = ChatTarget.API_MODEL
     }
 
@@ -883,6 +894,50 @@ fun ChatScreen(
         ) {
             Text(if (showPluginSelector) "SELECT PLUGIN" else "ADD ATTACHMENT", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(20.dp, 4.dp))
                     if (showPluginSelector) {
+                Text(
+                    "LOCAL INSTALLED AI APPS",
+                    color = AccentCyan,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                )
+                Text(
+                    "Select one or more installed AI apps. The main agent can call USE_LOCAL_APP; Android Accessibility Service must be enabled.",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+                )
+                if (installedAiApps.isEmpty()) {
+                    Text("No launchable installed apps were discovered.", color = TextSecondary, modifier = Modifier.padding(20.dp, 10.dp))
+                } else {
+                    installedAiApps.forEach { app ->
+                        ListItem(
+                            headlineContent = { Text(app.displayName, color = TextPrimary) },
+                            supportingContent = { Text(app.packageName, color = TextSecondary, fontSize = 11.sp) },
+                            leadingContent = { Icon(Icons.Default.Smartphone, contentDescription = null, tint = AccentPurple) },
+                            trailingContent = {
+                                Checkbox(
+                                    checked = app.packageName in selectedLocalAppPackages,
+                                    onCheckedChange = { checked ->
+                                        selectedLocalAppPackages = if (checked) selectedLocalAppPackages + app.packageName else selectedLocalAppPackages - app.packageName
+                                    },
+                                    colors = CheckboxDefaults.colors(checkedColor = AccentPurple),
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                selectedLocalAppPackages = if (app.packageName in selectedLocalAppPackages) selectedLocalAppPackages - app.packageName else selectedLocalAppPackages + app.packageName
+                            },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        )
+                    }
+                }
+                Text(
+                    "CLOUD PLUGINS",
+                    color = AccentCyan,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                )
                 listOf(
                     "FMHY" to "fmhy_browser",
                     "GitHub" to "github_search",
@@ -915,7 +970,7 @@ fun ChatScreen(
                 Button(
                     onClick = { showPluginSelector = false },
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                ) { Text("Confirm Selection${if (selectedPluginIds.isEmpty()) "" else " · ${selectedPluginIds.size}"}") }
+                ) { Text("Confirm Selection${if (selectedPluginIds.size + selectedLocalAppPackages.size == 0) "" else " · ${selectedPluginIds.size + selectedLocalAppPackages.size}"}") }
                 AttachmentOption("Back to attachments", Icons.Default.ArrowBack) { showPluginSelector = false }
             } else {
                 AttachmentOption("Camera", Icons.Default.CameraAlt) {

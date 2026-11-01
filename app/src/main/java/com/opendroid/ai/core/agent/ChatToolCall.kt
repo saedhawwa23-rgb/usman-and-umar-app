@@ -11,6 +11,7 @@ data class ChatToolCall(
     val command: String? = null,
     val packageName: String? = null,
     val appName: String? = null,
+    val prompt: String? = null,
     val url: String? = null,
     val rawJson: String,
 )
@@ -28,6 +29,7 @@ object ChatToolCallParser {
             command = root.string("command") ?: root.string("cmd"),
             packageName = root.string("package") ?: root.string("package_name"),
             appName = root.string("app") ?: root.string("app_name") ?: root.string("name"),
+            prompt = root.string("prompt") ?: root.string("message"),
             url = root.string("url") ?: root.string("uri"),
             rawJson = candidate,
         )
