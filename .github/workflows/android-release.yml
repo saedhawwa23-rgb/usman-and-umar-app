@@ -114,8 +114,8 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.6.0'"
           "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='24'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
-          certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" | tr '[:lower:]' '[:upper:]')
-          printf '%s\n' "$certs" | grep -F 'F4:09:21:9F:13:04:83:7B:56:81:36:CC:60:1D:4B:45:4A:A3:00:47'
+          certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt" | tr '[:lower:]' '[:upper:]')
+          printf '%s\n' "$certs" | grep -F 'CERTIFICATE SHA-1 DIGEST: F4:09:21:9F:13:04:83:7B:56:81:36:CC:60:1D:4B:45:4A:A3:00:47'
           unzip -l "$apk" | grep -F 'assets/proot/proot'
           unzip -p "$apk" assets/proot/proot > /tmp/proot-from-apk
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
