@@ -83,7 +83,7 @@ fun GoogleDriveSettingsScreen(onBack: () -> Unit) {
     val signInOptions = remember {
         GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
-            .requestScopes(Scope(DRIVE_FILE_SCOPE))
+            .requestScopes(driveScope)
             .build()
     }
     val signInClient = remember(context, signInOptions) { GoogleSignIn.getClient(context, signInOptions) }

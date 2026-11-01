@@ -890,21 +890,32 @@ fun ChatScreen(
                     "Web Browser" to "browser_use",
                     "Code Executor" to "code_executor",
                 ).forEach { (label, pluginId) ->
-                    AttachmentOption(if (pluginId in selectedPluginIds) "✓  $label" else label, Icons.Default.Extension) {
-                        selectedPluginIds = if (pluginId in selectedPluginIds) {
-                            selectedPluginIds - pluginId
-                        } else {
-                            selectedPluginIds + pluginId
-                        }
-                        if (pluginId in setOf("fmhy_browser", "github_search", "browser_use")) {
-                            chatTarget = ChatTarget.CLOUD_OPENSWARM
-                        }
-                    }
+                    ListItem(
+                        headlineContent = { Text(label, color = TextPrimary) },
+                        leadingContent = { Icon(Icons.Default.Extension, contentDescription = null, tint = AccentCyan) },
+                        trailingContent = {
+                            Checkbox(
+                                checked = pluginId in selectedPluginIds,
+                                onCheckedChange = { checked ->
+                                    selectedPluginIds = if (checked) selectedPluginIds + pluginId else selectedPluginIds - pluginId
+                                    if (checked) chatTarget = ChatTarget.CLOUD_OPENSWARM
+                                },
+                                colors = CheckboxDefaults.colors(checkedColor = AccentCyan),
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selectedPluginIds = if (pluginId in selectedPluginIds) selectedPluginIds - pluginId else selectedPluginIds + pluginId
+                                chatTarget = ChatTarget.CLOUD_OPENSWARM
+                            },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    )
                 }
                 Button(
                     onClick = { showPluginSelector = false },
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                ) { Text("Done${if (selectedPluginIds.isEmpty()) " — no plugins" else " · ${selectedPluginIds.size} selected"}") }
+                ) { Text("Confirm Selection${if (selectedPluginIds.isEmpty()) "" else " · ${selectedPluginIds.size}"}") }
                 AttachmentOption("Back to attachments", Icons.Default.ArrowBack) { showPluginSelector = false }
             } else {
                 AttachmentOption("Camera", Icons.Default.CameraAlt) {

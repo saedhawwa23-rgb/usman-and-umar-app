@@ -34,6 +34,7 @@ android {
             project.hasProperty('RELEASE_KEY_ALIAS') &&
             project.hasProperty('RELEASE_KEY_PASSWORD') &&
             file("${rootProject.projectDir}/opendroid-release.keystore").exists()
+    def hasStableDebugKeystore = file("${rootProject.projectDir}/debug.keystore").exists()
 
     // Explicit opt-in for building release WITHOUT signing, so CI can exercise
     // R8/ProGuard (where reflection-dependent code breaks) without holding any
@@ -46,6 +47,16 @@ android {
     }
 
     signingConfigs {
+        if (hasStableDebugKeystore) {
+            debug {
+                storeFile file("${rootProject.projectDir}/debug.keystore")
+                storePassword project.findProperty('DEBUG_STORE_PASSWORD') ?: 'android'
+                keyAlias project.findProperty('DEBUG_KEY_ALIAS') ?: 'androiddebugkey'
+                keyPassword project.findProperty('DEBUG_KEY_PASSWORD') ?: 'android'
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
         if (hasSigningConfig) {
             release {
                 storeFile file("${rootProject.projectDir}/opendroid-release.keystore")
@@ -59,6 +70,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            if (hasStableDebugKeystore) {
+                signingConfig signingConfigs.debug
+            }
+        }
         release {
             minifyEnabled true
             shrinkResources = false

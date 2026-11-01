@@ -42,6 +42,16 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Configure permanent debug signing
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$DEBUG_KEYSTORE_B64" || { echo 'ANDROID_DEBUG_KEYSTORE_BASE64 is not configured'; exit 1; }
+          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > debug.keystore
+          chmod 600 debug.keystore
+          keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey >/dev/null
+
       - name: Install ARM32 cross-compilation toolchain
         run: |
           sudo dpkg --add-architecture armhf
@@ -74,6 +84,10 @@ jobs:
           chmod 755 app/src/main/assets/proot/proot
 
       - name: Run unit tests and build debug APK
+        env:
+          ORG_GRADLE_PROJECT_DEBUG_STORE_PASSWORD: android
+          ORG_GRADLE_PROJECT_DEBUG_KEY_ALIAS: androiddebugkey
+          ORG_GRADLE_PROJECT_DEBUG_KEY_PASSWORD: android
         run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
 
       - name: Verify package, ABI, signature, and checksums
@@ -89,6 +103,8 @@ jobs:
           "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.6.0'"
           "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='24'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
+          certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" | tr '[:lower:]' '[:upper:]')
+          printf '%s\n' "$certs" | grep -F 'F4:09:21:9F:13:04:83:7B:56:81:36:CC:60:1D:4B:45:4A:A3:00:47'
           unzip -l "$apk" | grep -F 'assets/proot/proot'
           unzip -p "$apk" assets/proot/proot > /tmp/proot-from-apk
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
