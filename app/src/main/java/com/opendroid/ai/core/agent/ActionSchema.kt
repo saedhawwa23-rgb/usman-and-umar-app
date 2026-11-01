@@ -57,7 +57,6 @@ object ActionSchema {
             examples = listOf("ask ChatGPT to summarize this", "use Gemini to compare these answers", "send this prompt to Claude"),
             category = ActionCategory.AGENT,
             isSimple = false,
-            neverAutoApprove = true,
         ),
         ActionDefinition(
             name = "TOGGLE_FLASHLIGHT",
