@@ -914,7 +914,7 @@ fun ChatScreen(
                         ListItem(
                             headlineContent = { Text(app.displayName, color = TextPrimary) },
                             supportingContent = { Text(app.packageName, color = TextSecondary, fontSize = 11.sp) },
-                            leadingContent = { Icon(Icons.Default.Smartphone, contentDescription = null, tint = AccentPurple) },
+                            leadingContent = { Icon(Icons.Default.Extension, contentDescription = null, tint = AccentPurple) },
                             trailingContent = {
                                 Checkbox(
                                     checked = app.packageName in selectedLocalAppPackages,

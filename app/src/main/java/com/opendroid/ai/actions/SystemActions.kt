@@ -458,29 +458,7 @@ class SystemActions @Inject constructor(
         }
     }
 
-    private class UseLocalAppAction(
-        private val executor: LocalAiAppExecutor,
-    ) : Action {
-        override val name: String = "USE_LOCAL_APP"
-
-        override suspend fun execute(params: Map<String, String>, context: Context): ActionResult {
-            val prompt = params["prompt"] ?: params["message"]
-            if (prompt.isNullOrBlank()) return ActionResult(false, null, "prompt parameter missing")
-            return runCatching {
-                val result = executor.execute(
-                    context = context,
-                    appName = params["appName"] ?: params["app_name"],
-                    packageName = params["packageName"] ?: params["package_name"],
-                    prompt = prompt,
-                )
-                ActionResult(true, result, null)
-            }.getOrElse { failure ->
-                ActionResult(false, null, failure.message ?: "The local AI app could not complete the request.")
-            }
-        }
-    }
-
-    private class ToggleWifiAction : Action {
+    private class ToggleDndAction : Action {
         override val name: String = "TOGGLE_DND"
         override suspend fun execute(params: Map<String, String>, context: Context): ActionResult {
             val requestedState = (params["state"] ?: params["on"] ?: "toggle")
@@ -519,6 +497,28 @@ class SystemActions @Inject constructor(
             } catch (e: Exception) {
                 Log.e("ToggleDND", "DND failed: ${e.localizedMessage}")
                 ActionResult(false, null, "Couldn't change Do Not Disturb.")
+            }
+        }
+    }
+
+    private class UseLocalAppAction(
+        private val executor: LocalAiAppExecutor,
+    ) : Action {
+        override val name: String = "USE_LOCAL_APP"
+
+        override suspend fun execute(params: Map<String, String>, context: Context): ActionResult {
+            val prompt = params["prompt"] ?: params["message"]
+            if (prompt.isNullOrBlank()) return ActionResult(false, null, "prompt parameter missing")
+            return runCatching {
+                val result = executor.execute(
+                    context = context,
+                    appName = params["appName"] ?: params["app_name"],
+                    packageName = params["packageName"] ?: params["package_name"],
+                    prompt = prompt,
+                )
+                ActionResult(true, result, null)
+            }.getOrElse { failure ->
+                ActionResult(false, null, failure.message ?: "The local AI app could not complete the request.")
             }
         }
     }
