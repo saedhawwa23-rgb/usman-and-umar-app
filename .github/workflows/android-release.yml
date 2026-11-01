@@ -50,7 +50,16 @@ jobs:
           test -n "$DEBUG_KEYSTORE_B64" || { echo 'ANDROID_DEBUG_KEYSTORE_BASE64 is not configured'; exit 1; }
           # GitHub Secret values are often pasted with wrapping whitespace or a
           # trailing code-fence marker; discard non-base64 formatting before decoding.
+          set +e
           printf '%s' "$DEBUG_KEYSTORE_B64" | tr -d '[:space:]' | base64 --decode --ignore-garbage > debug.keystore
+          decode_status=$?
+          set -e
+          # The checksum is the keystore identity; a decoder warning is harmless
+          # only when the resulting bytes are exactly the intended key.
+          test "$(sha256sum debug.keystore | cut -d' ' -f1)" = "70ea63b1134cc4e8cf409050fff93d68d709442c7ed919551f283f07db081c6e" || {
+            echo "Decoded keystore checksum mismatch (base64 status: $decode_status)" >&2
+            exit 1
+          }
           chmod 600 debug.keystore
           keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey >/dev/null
 
