@@ -56,6 +56,15 @@ data class CloudServerConfig(
     @kotlinx.serialization.Transient val token: String = "",
 )
 
+internal fun normalizeCloudServerUrl(value: String): String {
+    val normalized = value.trim().trimEnd('/')
+    require(normalized.isNotBlank()) { "Enter the HTTPS URL of your cloud backend." }
+    val uri = java.net.URI(normalized)
+    require(uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()) { "Enter the HTTPS URL of your cloud backend." }
+    require(uri.userInfo == null && uri.query == null && uri.fragment == null) { "The server URL must not contain credentials, a query, or a fragment." }
+    return normalized
+}
+
 @Singleton
 class SettingsRepository internal constructor(
     private val dataStore: DataStore<Preferences>,
@@ -196,15 +205,6 @@ class SettingsRepository internal constructor(
             CredentialStoreResult.CredentialsMustBeReentered -> error("Credential storage needs recovery before saving a cloud token.")
             CredentialStoreResult.StorageUnavailable -> error("Android secure storage is unavailable; the cloud token was not saved.")
         }
-    }
-
-    private fun normalizeCloudServerUrl(value: String): String {
-        val normalized = value.trim().trimEnd('/')
-        require(normalized.isNotBlank()) { "Enter the HTTPS URL of your cloud backend." }
-        val uri = java.net.URI(normalized)
-        require(uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()) { "Enter the HTTPS URL of your cloud backend." }
-        require(uri.userInfo == null && uri.query == null && uri.fragment == null) { "The server URL must not contain credentials, a query, or a fragment." }
-        return normalized
     }
 
     /** A UI-safe recovery signal; it never contains credential or ciphertext data. */

@@ -2,12 +2,17 @@ package com.opendroid.ai.data.db
 
 import android.app.Application
 import android.content.Context
+import androidx.room.Room
 import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
+import com.opendroid.ai.data.db.entities.CloudServerEntity
+import com.opendroid.ai.data.repository.normalizeCloudServerUrl
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -251,6 +256,50 @@ class OpenDroidDatabaseMigrationTest {
             assertTrue(cursor.moveToFirst())
             assertEquals("Colab 10", cursor.getString(0))
             assertEquals(9, cursor.getInt(1))
+        }
+    }
+
+    @Test
+    fun `Room preserves ten Colab server rows and long tunnel URLs without truncation`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val providedTunnelUrls = listOf(
+            "https://colab-node-1.trycloudflare.com",
+            "https://colab-node-2.trycloudflare.com",
+            "https://colab-node-3.trycloudflare.com",
+        )
+        val sourceUrls = (1..10).map { serverNumber ->
+            when (serverNumber) {
+                1, 2, 3 -> providedTunnelUrls[serverNumber - 1]
+                10 -> "https://colab-node-10.trycloudflare.com/${"runtime-segment/".repeat(24)}health-base/"
+                else -> "https://colab-node-$serverNumber.trycloudflare.com"
+            }
+        }
+        val normalizedUrls = sourceUrls.map(::normalizeCloudServerUrl)
+        assertEquals(10, normalizedUrls.size)
+        assertTrue(normalizedUrls.last().length > 300)
+
+        val database = Room.inMemoryDatabaseBuilder(context, OpenDroidDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            database.cloudServerDao().upsertAll(
+                normalizedUrls.mapIndexed { index, url ->
+                    CloudServerEntity(
+                        id = "colab-server-${index + 1}",
+                        name = "Colab Server ${index + 1}",
+                        url = url,
+                        enabled = true,
+                        position = index,
+                    )
+                }
+            )
+
+            val persisted = database.cloudServerDao().observeAll().first()
+            assertEquals(10, persisted.size)
+            assertEquals(normalizedUrls, persisted.map { it.url })
+            assertTrue(persisted.last().url.length > 300)
+        } finally {
+            database.close()
         }
     }
 
