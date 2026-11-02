@@ -17,9 +17,6 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from browser_use_interactive import NVIDIA_DEFAULT_MODEL, run_browser_task
-from openswarm_agent import run_openswarm_task
-
 app = FastAPI(title="USMAN AND UMAR OpenSwarm Task Backend", version="3.0.0")
 logger = logging.getLogger(__name__)
 _rate_lock = threading.Lock()
@@ -31,6 +28,41 @@ _execution_semaphore = asyncio.Semaphore(1)
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _BLOCKED_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".test", ".invalid")
 _BLOCKED_HOSTS = {"localhost", "metadata.google.internal", "metadata"}
+AI_PACKAGES_WAITING_MESSAGE = "AI packages are still downloading. Please wait."
+
+# Test seams and optional caches. The heavy modules are intentionally not imported
+# here: /health and the FastAPI/Cloudflare startup path must work without them.
+run_browser_task: Any = None
+run_openswarm_task: Any = None
+NVIDIA_DEFAULT_MODEL = "nvidia/nemotron-3.5-bolt-e4b"
+
+
+def _load_ai_execution_functions(openswarm_requested: bool) -> None:
+    """Load heavy AI/browser modules only when an /execute task needs them."""
+    global run_browser_task, run_openswarm_task, NVIDIA_DEFAULT_MODEL
+    try:
+        if openswarm_requested and run_openswarm_task is None:
+            import browser_use  # noqa: F401  # installed by the background Colab cell
+            import langchain  # noqa: F401
+            import langgraph  # noqa: F401
+            import playwright  # noqa: F401
+            from openswarm_agent import run_openswarm_task as loaded_swarm
+
+            run_openswarm_task = loaded_swarm
+        if not openswarm_requested and run_browser_task is None:
+            import browser_use  # noqa: F401  # installed by the background Colab cell
+            import langchain  # noqa: F401
+            import playwright  # noqa: F401
+            from browser_use_interactive import (
+                NVIDIA_DEFAULT_MODEL as loaded_model,
+                run_browser_task as loaded_browser,
+            )
+
+            NVIDIA_DEFAULT_MODEL = loaded_model
+            run_browser_task = loaded_browser
+    except ModuleNotFoundError as exc:
+        logger.info("AI dependency is not ready: %s", exc)
+        raise RuntimeError(AI_PACKAGES_WAITING_MESSAGE) from exc
 
 
 class ExecuteRequest(BaseModel):
@@ -136,6 +168,7 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
     except HTTPException as exc:
         return _error_response(exc.status_code, str(exc.detail))
     try:
+        _load_ai_execution_functions(openswarm_requested)
         async with _execution_semaphore:
             max_steps = 30 if request.think_harder else request.browser_max_steps
             if openswarm_requested:
@@ -159,6 +192,12 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
     except asyncio.TimeoutError:
         logger.exception("Agent execution timed out for task_id=%s", request.task_id)
         return _error_response(504, "Agent execution timed out; inspect the Colab backend log for the traceback.")
+    except RuntimeError as exc:
+        if str(exc) == AI_PACKAGES_WAITING_MESSAGE:
+            return _error_response(503, AI_PACKAGES_WAITING_MESSAGE)
+        logger.exception("Agent execution failed for task_id=%s", request.task_id)
+        label = "OpenSwarm execution" if openswarm_requested else "Browser Use"
+        return _error_response(500, f"{label} failed (RuntimeError): {_safe_exception_detail(exc)} Full traceback is in the Colab backend log.")
     except Exception as exc:
         logger.exception("Agent execution failed for task_id=%s", request.task_id)
         label = "OpenSwarm execution" if openswarm_requested else "Browser Use"
