@@ -12,6 +12,7 @@ import com.opendroid.ai.data.db.dao.PlanDao
 import com.opendroid.ai.data.db.dao.TaskHistoryDao
 import com.opendroid.ai.data.db.dao.WorkspaceTaskDao
 import com.opendroid.ai.data.db.dao.CloudServerDao
+import com.opendroid.ai.data.db.dao.GoogleDriveAccountDao
 import com.opendroid.ai.data.db.entities.ChatSessionEntity
 import com.opendroid.ai.data.db.entities.ConversationEntity
 import com.opendroid.ai.data.db.entities.MacroEntity
@@ -22,6 +23,7 @@ import com.opendroid.ai.data.db.entities.WorkspaceTaskDependencyEntity
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.data.db.entities.WorkspaceTaskExecutionEntity
 import com.opendroid.ai.data.db.entities.CloudServerEntity
+import com.opendroid.ai.data.db.entities.GoogleDriveAccountEntity
 
 import com.opendroid.ai.data.db.dao.NotificationDao
 import com.opendroid.ai.data.db.dao.UnknownActionDao
@@ -73,9 +75,10 @@ import com.opendroid.ai.data.db.dao.SocialAuditLogDao
         WorkspaceTaskEntity::class,
         WorkspaceTaskDependencyEntity::class,
         WorkspaceTaskExecutionEntity::class,
-        CloudServerEntity::class
+        CloudServerEntity::class,
+        GoogleDriveAccountEntity::class
     ],
-    version = 12,
+    version = 13,
     exportSchema = true
 )
 abstract class OpenDroidDatabase : RoomDatabase() {
@@ -86,6 +89,7 @@ abstract class OpenDroidDatabase : RoomDatabase() {
     abstract fun taskHistoryDao(): TaskHistoryDao
     abstract fun workspaceTaskDao(): WorkspaceTaskDao
     abstract fun cloudServerDao(): CloudServerDao
+    abstract fun googleDriveAccountDao(): GoogleDriveAccountDao
     abstract fun macroDao(): MacroDao
     abstract fun unknownActionDao(): UnknownActionDao
     abstract fun notificationDao(): NotificationDao
@@ -534,6 +538,24 @@ abstract class OpenDroidDatabase : RoomDatabase() {
                         url TEXT NOT NULL,
                         enabled INTEGER NOT NULL,
                         position INTEGER NOT NULL
+                    )
+                """)
+            }
+        }
+
+        /** Adds per-account Google Drive quota metadata without touching existing app data. */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS google_drive_accounts (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        email TEXT NOT NULL,
+                        displayName TEXT NOT NULL,
+                        connectedAtMillis INTEGER NOT NULL,
+                        quotaLimitBytes INTEGER,
+                        quotaUsageBytes INTEGER,
+                        quotaUpdatedAtMillis INTEGER,
+                        quotaError TEXT
                     )
                 """)
             }

@@ -260,6 +260,43 @@ class OpenDroidDatabaseMigrationTest {
     }
 
     @Test
+    fun `migration 12 to 13 adds independent Drive account rows and preserves cluster servers`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.deleteDatabase(TEST_DATABASE)
+        helper.createDatabase(databasePath, 12).use { db ->
+            db.execSQL(
+                "INSERT INTO cloud_servers (id, name, url, enabled, position) " +
+                    "VALUES ('server-1', 'Colab 1', 'https://cluster.example', 1, 0)"
+            )
+        }
+
+        val migrated = helper.runMigrationsAndValidate(
+            databasePath, 13, true, OpenDroidDatabase.MIGRATION_12_13
+        )
+        migrated.execSQL(
+            "INSERT INTO google_drive_accounts (id, email, displayName, connectedAtMillis, quotaLimitBytes, quotaUsageBytes, quotaUpdatedAtMillis, quotaError) " +
+                "VALUES ('one@example.com', 'one@example.com', 'one', 10, 16106127360, 2147483648, 11, NULL)"
+        )
+        migrated.execSQL(
+            "INSERT INTO google_drive_accounts (id, email, displayName, connectedAtMillis, quotaLimitBytes, quotaUsageBytes, quotaUpdatedAtMillis, quotaError) " +
+                "VALUES ('two@example.com', 'two@example.com', 'two', 12, 16106127360, 3221225472, 13, NULL)"
+        )
+
+        migrated.query("SELECT COUNT(*) FROM google_drive_accounts").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(2, cursor.getInt(0))
+        }
+        migrated.query("SELECT quotaUsageBytes FROM google_drive_accounts WHERE id='two@example.com'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(3221225472L, cursor.getLong(0))
+        }
+        migrated.query("SELECT name FROM cloud_servers WHERE id='server-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Colab 1", cursor.getString(0))
+        }
+    }
+
+    @Test
     fun `Room preserves ten Colab server rows and long tunnel URLs without truncation`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val providedTunnelUrls = listOf(

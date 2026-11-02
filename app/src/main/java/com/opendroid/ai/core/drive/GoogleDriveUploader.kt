@@ -1,85 +1,130 @@
 package com.opendroid.ai.core.drive
 
-import android.content.Context
-import com.google.android.gms.auth.GoogleAuthUtil
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.opendroid.ai.data.db.entities.GoogleDriveAccountEntity
+import com.opendroid.ai.data.repository.GoogleDriveAccountRepository
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
 
-/** OAuth-backed Drive file upload. The Android app only requests the narrow drive.file scope. */
-object GoogleDriveUploader {
-    private const val FOLDER_NAME = "USMAN_AND_UMAR_Tasks"
-    private const val DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"
-    private const val DRIVE_API = "https://www.googleapis.com/drive/v3/files"
-    private const val UPLOAD_API = "https://www.googleapis.com/upload/drive/v3/files"
-    private val client = OkHttpClient()
+internal data class DriveUploadCandidate(
+    val account: GoogleDriveAccountEntity,
+    val accessToken: String,
+    val quota: DriveStorageQuota,
+)
 
-    suspend fun uploadTaskOutput(
-        context: Context,
-        account: GoogleSignInAccount,
-        filename: String,
-        content: String,
-    ): String = withContext(Dispatchers.IO) {
-        val accountName = account.account?.name ?: error("Google account is missing")
-        val token = GoogleAuthUtil.getToken(context, accountName, "oauth2:$DRIVE_FILE_SCOPE")
-        val folderId = findOrCreateFolder(token)
-        val metadata = JSONObject()
-            .put("name", filename)
-            .put("mimeType", "text/plain")
-            .put("parents", JSONArray().put(folderId))
-        val body = MultipartBody.Builder()
-            .setType("multipart/related".toMediaType())
-            .addPart(
-                metadata.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
-            )
-            .addPart(content.toRequestBody("text/plain; charset=utf-8".toMediaType()))
-            .build()
-        val request = Request.Builder()
-            .url("$UPLOAD_API?uploadType=multipart&fields=id,name,webViewLink")
-            .header("Authorization", "Bearer $token")
-            .post(body)
-            .build()
-        client.newCall(request).execute().use { response ->
-            val raw = response.body?.string().orEmpty()
-            check(response.isSuccessful) { "Google Drive upload failed (HTTP ${response.code})." }
-            JSONObject(raw).optString("webViewLink").ifBlank { "Google Drive upload completed." }
+/** Unlimited accounts rank above finite quotas; otherwise upload to the account with most free bytes. */
+internal fun orderDriveCandidates(candidates: List<DriveUploadCandidate>): List<DriveUploadCandidate> =
+    candidates.sortedWith(
+        compareByDescending<DriveUploadCandidate> { it.quota.isUnlimited }
+            .thenByDescending { it.quota.freeBytes ?: 0L }
+    )
+
+data class GoogleDriveUploadResult(
+    val accountEmail: String,
+    val fileUrl: String,
+)
+
+@Singleton
+class GoogleDriveUploader @Inject constructor(
+    private val accountRepository: GoogleDriveAccountRepository,
+    private val tokenProvider: GoogleDriveAccessTokenProvider,
+    private val driveApi: GoogleDriveApi,
+) {
+    /** Refreshes each connected account's live Drive quota in parallel. */
+    suspend fun refreshAllQuotas(): List<GoogleDriveAccountEntity> {
+        val accounts = accountRepository.getAccounts()
+        return coroutineScope {
+            accounts.map { account ->
+                async(Dispatchers.IO) {
+                    try {
+                        probe(account).account
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        accountRepository.updateQuotaError(account.id, safeFailureMessage(failure))
+                        account.copy(quotaUpdatedAtMillis = System.currentTimeMillis(), quotaError = safeFailureMessage(failure))
+                    }
+                }
+            }.awaitAll()
         }
     }
 
-    private fun findOrCreateFolder(token: String): String {
-        val query = "name = '$FOLDER_NAME' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-        val findRequest = Request.Builder()
-            .url("$DRIVE_API?q=${java.net.URLEncoder.encode(query, "UTF-8")}&spaces=drive&fields=files(id,name)")
-            .header("Authorization", "Bearer $token")
-            .get()
-            .build()
-        client.newCall(findRequest).execute().use { response ->
-            val raw = response.body?.string().orEmpty()
-            check(response.isSuccessful) { "Google Drive folder lookup failed (HTTP ${response.code})." }
-            val files = JSONObject(raw).optJSONArray("files")
-            if (files != null && files.length() > 0) return files.getJSONObject(0).getString("id")
+    /** Every account is re-queried immediately before selection; no hard-coded pool size is used. */
+    suspend fun uploadTaskOutput(filename: String, content: String): GoogleDriveUploadResult =
+        withContext(Dispatchers.IO) {
+            val accounts = accountRepository.getAccounts()
+            require(accounts.isNotEmpty()) { "Add a Google account in Drive settings before uploading task results." }
+            val candidates = coroutineScope {
+                accounts.map { account ->
+                    async(Dispatchers.IO) {
+                        try {
+                            probe(account)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            accountRepository.updateQuotaError(account.id, safeFailureMessage(failure))
+                            null
+                        }
+                    }
+                }.awaitAll().filterNotNull()
+            }
+            val ranked = orderDriveCandidates(candidates)
+            check(ranked.isNotEmpty()) {
+                "Google Drive could not verify storage for any connected account. Reconnect an account or refresh storage, then retry."
+            }
+
+            var quotaFailure: Exception? = null
+            for (candidate in ranked) {
+                try {
+                    val url = try {
+                        driveApi.uploadTaskOutput(candidate.accessToken, filename, content)
+                    } catch (unauthorized: DriveApiException) {
+                        if (unauthorized.statusCode != 401) throw unauthorized
+                        tokenProvider.invalidate(candidate.account.email, candidate.accessToken)
+                        val refreshedToken = tokenProvider.getAccessToken(candidate.account.email)
+                        driveApi.uploadTaskOutput(refreshedToken, filename, content)
+                    }
+                    return@withContext GoogleDriveUploadResult(candidate.account.email, url)
+                } catch (failure: DriveApiException) {
+                    val isQuotaExceeded = failure.statusCode == 403 && failure.reason.contains("quota", ignoreCase = true)
+                    if (!isQuotaExceeded) throw failure
+                    quotaFailure = failure
+                    accountRepository.updateQuotaError(candidate.account.id, "Drive reported that this account is out of storage.")
+                }
+            }
+            throw quotaFailure ?: IllegalStateException("No connected Google Drive account has enough storage.")
         }
-        val folderBody = JSONObject()
-            .put("name", FOLDER_NAME)
-            .put("mimeType", "application/vnd.google-apps.folder")
-            .toString()
-            .toRequestBody("application/json; charset=utf-8".toMediaType())
-        val createRequest = Request.Builder()
-            .url("$DRIVE_API?fields=id")
-            .header("Authorization", "Bearer $token")
-            .post(folderBody)
-            .build()
-        client.newCall(createRequest).execute().use { response ->
-            val raw = response.body?.string().orEmpty()
-            check(response.isSuccessful) { "Google Drive folder creation failed (HTTP ${response.code})." }
-            return JSONObject(raw).getString("id")
+
+    private suspend fun probe(account: GoogleDriveAccountEntity): DriveUploadCandidate {
+        var token = tokenProvider.getAccessToken(account.email)
+        val quota = try {
+            driveApi.getStorageQuota(token)
+        } catch (unauthorized: DriveApiException) {
+            if (unauthorized.statusCode != 401) throw unauthorized
+            tokenProvider.invalidate(account.email, token)
+            token = tokenProvider.getAccessToken(account.email)
+            driveApi.getStorageQuota(token)
         }
+        accountRepository.updateQuota(account.id, quota.limitBytes, quota.usageBytes)
+        return DriveUploadCandidate(
+            account = account.copy(
+                quotaLimitBytes = quota.limitBytes,
+                quotaUsageBytes = quota.usageBytes,
+                quotaUpdatedAtMillis = System.currentTimeMillis(),
+                quotaError = null,
+            ),
+            accessToken = token,
+            quota = quota,
+        )
+    }
+
+    private fun safeFailureMessage(failure: Exception): String = when (failure) {
+        is DriveApiException -> "Google Drive returned HTTP ${failure.statusCode}."
+        else -> (failure.message ?: "Storage check failed.").take(180)
     }
 }

@@ -1,9 +1,6 @@
 package com.opendroid.ai.ui.screens
 
-import android.app.Activity
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
@@ -52,10 +49,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.auth.api.signin.GoogleSignInOptions
-import com.google.android.gms.common.api.Scope
-import com.opendroid.ai.core.drive.GoogleDriveUploader
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.opendroid.ai.core.agent.InstalledAiAppPreferences
 import com.opendroid.ai.core.agent.SmartLocalAiRouter
@@ -65,6 +59,7 @@ import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.ui.theme.AppTheme
 import com.opendroid.ai.ui.theme.AccentCyan
 import com.opendroid.ai.ui.viewmodel.BrowserUseRunState
+import com.opendroid.ai.ui.viewmodel.GoogleDriveAccountsViewModel
 import com.opendroid.ai.ui.viewmodel.WorkspaceTaskViewModel
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -81,6 +76,8 @@ fun WorkspaceTaskScreen(
     onOpenDriveSettings: () -> Unit = {},
 ) {
     val context = LocalContext.current
+    val googleDriveViewModel: GoogleDriveAccountsViewModel = hiltViewModel()
+    val driveAccounts by googleDriveViewModel.accounts.collectAsState()
     val installedAiApps = remember(context.packageManager) {
         InstalledAiAppDiscovery.scan(context.packageManager)
     }
@@ -106,35 +103,16 @@ fun WorkspaceTaskScreen(
     var settingsExpanded by remember { mutableStateOf(false) }
     var browserPrompt by remember { mutableStateOf("") }
     var useFmhy by remember { mutableStateOf(true) }
-    var taskPendingExport by remember { mutableStateOf<WorkspaceTaskEntity?>(null) }
     val scope = rememberCoroutineScope()
-    fun uploadTaskOutput(task: WorkspaceTaskEntity, account: com.google.android.gms.auth.api.signin.GoogleSignInAccount) {
+    fun uploadTaskOutput(task: WorkspaceTaskEntity) {
         scope.launch {
             runCatching {
-                GoogleDriveUploader.uploadTaskOutput(
-                    context,
-                    account,
-                    taskOutputFilename(task),
-                    taskOutput(task),
-                )
-            }.onSuccess { link ->
-                Toast.makeText(context, if (link.startsWith("http")) "Saved to Google Drive" else link, Toast.LENGTH_LONG).show()
+                googleDriveViewModel.uploadTaskOutput(taskOutputFilename(task), taskOutput(task))
+            }.onSuccess { result ->
+                Toast.makeText(context, "Saved to Google Drive (${result.accountEmail})", Toast.LENGTH_LONG).show()
             }.onFailure {
                 Toast.makeText(context, it.message ?: "Could not upload to Google Drive", Toast.LENGTH_LONG).show()
             }
-        }
-    }
-    val driveSignInLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val task = taskPendingExport
-        taskPendingExport = null
-        if (result.resultCode == Activity.RESULT_OK && task != null) {
-            GoogleSignIn.getSignedInAccountFromIntent(result.data)
-                .addOnSuccessListener { account ->
-                    uploadTaskOutput(task, account)
-                }
-                .addOnFailureListener {
-                    Toast.makeText(context, "Google Drive authorization failed", Toast.LENGTH_LONG).show()
-                }
         }
     }
     fun beginDriveUpload(task: WorkspaceTaskEntity) {
@@ -142,17 +120,12 @@ fun WorkspaceTaskScreen(
             Toast.makeText(context, "There is no completed task output to save yet.", Toast.LENGTH_SHORT).show()
             return
         }
-        val existingAccount = GoogleSignIn.getLastSignedInAccount(context)
-        if (existingAccount != null && GoogleSignIn.hasPermissions(existingAccount, Scope("https://www.googleapis.com/auth/drive.file"))) {
-            uploadTaskOutput(task, existingAccount)
+        if (driveAccounts.isEmpty()) {
+            Toast.makeText(context, "Add a Google account to the storage pool first.", Toast.LENGTH_LONG).show()
+            onOpenDriveSettings()
             return
         }
-        taskPendingExport = task
-        val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestEmail()
-            .requestScopes(Scope("https://www.googleapis.com/auth/drive.file"))
-            .build()
-        driveSignInLauncher.launch(GoogleSignIn.getClient(context, options).signInIntent)
+        uploadTaskOutput(task)
     }
 
     Scaffold(

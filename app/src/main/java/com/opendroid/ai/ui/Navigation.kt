@@ -324,7 +324,10 @@ fun OpenDroidNavigation(
         }
 
         composable(OpenDroidRoutes.GOOGLE_DRIVE) {
-            GoogleDriveSettingsScreen(onBack = { navController.popBackStack() })
+            GoogleDriveSettingsScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
+            )
         }
     }
 }
