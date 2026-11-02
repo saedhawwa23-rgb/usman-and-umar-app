@@ -72,6 +72,9 @@ class SettingsRepository internal constructor(
     private val runStartupMigration: Boolean,
     private val cloudServerDao: CloudServerDao? = null,
 ) {
+    companion object {
+        const val MAX_CLOUD_SERVERS = 10
+    }
     @Inject
     constructor(
         @ApplicationContext context: Context,
@@ -143,6 +146,9 @@ class SettingsRepository internal constructor(
     }
 
     suspend fun addCloudServer(name: String, url: String, token: String = ""): CloudServerConfig {
+        check(cloudServers.first().size < MAX_CLOUD_SERVERS) {
+            "A cluster can contain at most $MAX_CLOUD_SERVERS cloud servers."
+        }
         val server = CloudServerConfig(UUID.randomUUID().toString(), name.trim().ifBlank { "Cloud Server" }.take(80), normalizeCloudServerUrl(url))
         saveCloudServer(server, token)
         return server

@@ -250,7 +250,7 @@ fun SettingsScreen(
                                 }
                                 Text(if (pingingCloudServers) " Checking…" else " Ping All")
                             }
-                            Text("${cloudServers.size} configured", color = TextSecondary, fontSize = 12.sp)
+                            Text("${cloudServers.size}/10 configured", color = TextSecondary, fontSize = 12.sp)
                         }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Switch(checked = cloudKeepAliveEnabled, onCheckedChange = viewModel::setCloudKeepAliveEnabled)
@@ -338,14 +338,15 @@ fun SettingsScreen(
             item {
                 Card(modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = CardBackground)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("ADD CLUSTER SERVER", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
+                        Text("ADD CLUSTER SERVER · ${cloudServers.size}/10", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
+                        Text("Add up to ten Colab/OpenSwarm servers. Ping All checks every configured server in parallel.", color = TextSecondary, fontSize = 11.sp)
                         var newName by remember { mutableStateOf("") }
                         var newUrl by remember { mutableStateOf("") }
                         var newToken by remember { mutableStateOf("") }
                         OutlinedTextField(value = newName, onValueChange = { newName = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server name") })
                         OutlinedTextField(value = newUrl, onValueChange = { newUrl = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server HTTPS URL") })
                         OutlinedTextField(value = newToken, onValueChange = { newToken = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("New server token") })
-                        Button(onClick = { viewModel.addCloudServer(newName, newUrl, newToken); newName = ""; newUrl = ""; newToken = "" }, enabled = newUrl.isNotBlank()) { Text("+ Add Cloud Server") }
+                        Button(onClick = { viewModel.addCloudServer(newName, newUrl, newToken); newName = ""; newUrl = ""; newToken = "" }, enabled = newUrl.isNotBlank() && cloudServers.size < 10) { Text(if (cloudServers.size < 10) "+ Add Cloud Server" else "Cluster Full") }
                     }
                 }
             }

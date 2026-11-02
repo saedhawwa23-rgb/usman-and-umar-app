@@ -51,9 +51,8 @@ internal data class CloudSystemPluginOption(
     val description: String,
 )
 
-internal val CLOUD_SYSTEM_PLUGIN_OPTIONS = listOf(
+internal val SYSTEM_PLUGIN_OPTIONS = listOf(
     CloudSystemPluginOption("FMHY", BrowserUseRemoteProtocol.FMHY_PLUGIN_ID, "Discover free and open-source tools."),
-    CloudSystemPluginOption("GitHub Search", "github_search", "Search public repositories and source."),
     CloudSystemPluginOption("OpenSwarm Agent", "openswarm_agent", "Delegate work to your configured OpenSwarm server."),
     CloudSystemPluginOption("Web Browser", BrowserUseRemoteProtocol.GENERIC_PLUGIN_ID, "Browse websites using the remote browser."),
     CloudSystemPluginOption("Code Executor", "code_executor", "Run code through the configured cloud backend."),
@@ -79,9 +78,9 @@ internal fun PluginSelectorSheetContent(
             .fillMaxHeight(0.9f),
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 14.dp)) {
-            Text("Plugins & AI apps", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            Text("Select Plugin", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 20.sp)
             Text(
-                "Choose local AI clients and cloud tools for this chat.",
+                "Choose local AI apps or system plugins for this chat.",
                 color = TextSecondary,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(top = 3.dp),
@@ -98,7 +97,7 @@ internal fun PluginSelectorSheetContent(
         ) {
             item(key = "local-category") {
                 PluginCategoryHeading(
-                    title = "Local AI Apps",
+                    title = "Category A · Local AI Apps",
                     subtitle = "ChatGPT, Claude, Gemini, Manus, and other installed apps.",
                 )
             }
@@ -132,7 +131,7 @@ internal fun PluginSelectorSheetContent(
             if (installedApps.isEmpty()) {
                 item(key = "no-local-apps") {
                     Text(
-                        "No launchable local AI apps were found. Cloud and system plugins are still available below.",
+                        "No launchable local AI apps were found. System plugins are still available below.",
                         color = TextSecondary,
                         fontSize = 12.sp,
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 8.dp),
@@ -171,11 +170,11 @@ internal fun PluginSelectorSheetContent(
             }
             item(key = "cloud-category") {
                 PluginCategoryHeading(
-                    title = "Cloud & System Plugins",
-                    subtitle = "Select one or more tools. Cloud plugins use the configured server.",
+                    title = "Category B · System Plugins",
+                    subtitle = "FMHY, OpenSwarm Agent, Web Browser, and Code Executor.",
                 )
             }
-            items(CLOUD_SYSTEM_PLUGIN_OPTIONS, key = { "plugin-${it.pluginId}" }) { option ->
+            items(SYSTEM_PLUGIN_OPTIONS, key = { "plugin-${it.pluginId}" }) { option ->
                 ListItem(
                     headlineContent = { Text(option.label, color = TextPrimary, fontWeight = FontWeight.Medium) },
                     supportingContent = { Text(option.description, color = TextSecondary, fontSize = 11.sp) },
