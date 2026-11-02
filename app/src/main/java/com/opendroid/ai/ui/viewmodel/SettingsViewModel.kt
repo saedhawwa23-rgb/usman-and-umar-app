@@ -46,6 +46,7 @@ import com.opendroid.ai.data.models.ChatMessage
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
 
@@ -88,6 +89,18 @@ class SettingsViewModel @Inject constructor(
             try {
                 mutableCloudServerHealth.value = cloudServerClient.pingAll(includeDisabled = true)
                     .associateBy { it.serverId }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val error = failure.message ?: "Health check failed"
+                mutableCloudServerHealth.value = cloudServers.value.associate { server ->
+                    server.id to CloudServerHealth(
+                        serverId = server.id,
+                        serverName = server.name,
+                        online = false,
+                        error = error,
+                    )
+                }
             } finally {
                 mutablePingingCloudServers.value = false
             }

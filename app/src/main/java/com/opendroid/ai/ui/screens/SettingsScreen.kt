@@ -239,7 +239,15 @@ fun SettingsScreen(
                         Spacer(Modifier.height(8.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Button(onClick = viewModel::pingAllCloudServers, enabled = !pingingCloudServers && cloudServers.isNotEmpty()) {
-                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                if (pingingCloudServers) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = TextPrimary,
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = null)
+                                }
                                 Text(if (pingingCloudServers) " Checking…" else " Ping All")
                             }
                             Text("${cloudServers.size} configured", color = TextSecondary, fontSize = 12.sp)
