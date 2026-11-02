@@ -142,6 +142,7 @@ fun ChatScreen(
     var searchEnabled by remember { mutableStateOf(false) }
     var showAttachmentSheet by remember { mutableStateOf(false) }
     var showPluginSelector by remember { mutableStateOf(false) }
+    val attachmentSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedPluginIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedLocalAppPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedAttachment by remember { mutableStateOf<PendingChatAttachment?>(null) }
@@ -700,26 +701,6 @@ fun ChatScreen(
                         }
                     }
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, bottom = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Switch(
-                            checked = smartAiSelection,
-                            onCheckedChange = {
-                                smartAiSelection = it
-                                if (it) selectedLocalAppPackages = emptySet()
-                            },
-                        )
-                        Text("Smart AI Selection", color = TextPrimary, fontSize = 12.sp)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            if (smartAiSelection) "The orchestrator will rank installed apps automatically."
-                            else "Choose local apps manually from Plugins.",
-                            color = TextSecondary,
-                            fontSize = 11.sp,
-                        )
-                    }
-                    Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -915,129 +896,87 @@ fun ChatScreen(
 
     if (showAttachmentSheet) {
         ModalBottomSheet(
-            onDismissRequest = { showAttachmentSheet = false },
+            onDismissRequest = {
+                showAttachmentSheet = false
+                showPluginSelector = false
+            },
+            sheetState = attachmentSheetState,
             containerColor = DarkSurface,
         ) {
-            Text(if (showPluginSelector) "SELECT PLUGIN" else "ADD ATTACHMENT", color = TextPrimary, fontWeight = FontWeight.Bold, modifier = Modifier.padding(20.dp, 4.dp))
-                    if (showPluginSelector) {
-                Text(
-                    "LOCAL INSTALLED AI APPS",
-                    color = AccentCyan,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+            if (showPluginSelector) {
+                PluginSelectorSheetContent(
+                    installedApps = installedAiApps,
+                    smartAiSelection = smartAiSelection,
+                    onSmartAiSelectionChange = { enabled ->
+                        smartAiSelection = enabled
+                        if (enabled) selectedLocalAppPackages = emptySet()
+                    },
+                    selectedLocalAppPackages = selectedLocalAppPackages,
+                    onLocalAppCheckedChange = { packageName, checked ->
+                        selectedLocalAppPackages = if (checked) {
+                            selectedLocalAppPackages + packageName
+                        } else {
+                            selectedLocalAppPackages - packageName
+                        }
+                    },
+                    selectedPluginIds = selectedPluginIds,
+                    onPluginCheckedChange = { pluginId, checked ->
+                        selectedPluginIds = if (checked) {
+                            selectedPluginIds + pluginId
+                        } else {
+                            selectedPluginIds - pluginId
+                        }
+                        if (checked) chatTarget = ChatTarget.CLOUD_OPENSWARM
+                    },
+                    onBack = { showPluginSelector = false },
+                    onConfirm = {
+                        scope.launch {
+                            attachmentSheetState.hide()
+                            showAttachmentSheet = false
+                            showPluginSelector = false
+                        }
+                    },
                 )
-                Text(
-                    "Select one or more installed AI apps. The main agent can call USE_LOCAL_APP; Android Accessibility Service must be enabled.",
-                    color = TextSecondary,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Switch(
-                        checked = smartAiSelection,
-                        onCheckedChange = {
-                            smartAiSelection = it
-                            if (it) selectedLocalAppPackages = emptySet()
-                        },
+            } else {
+                Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                    Text(
+                        "Add an attachment",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
                     )
-                    Column(Modifier.padding(start = 8.dp)) {
-                        Text("Smart AI Selection", color = TextPrimary, fontWeight = FontWeight.SemiBold)
-                        Text("Automatically rank installed apps for this task", color = TextSecondary, fontSize = 11.sp)
+                    AttachmentOption("Camera", Icons.Default.CameraAlt) {
+                        scope.launch {
+                            attachmentSheetState.hide()
+                            showAttachmentSheet = false
+                            cameraLauncher.launch(null)
+                        }
                     }
-                }
-                if (installedAiApps.isEmpty()) {
-                    Text("No launchable installed apps were discovered.", color = TextSecondary, modifier = Modifier.padding(20.dp, 10.dp))
-                } else {
-                    installedAiApps.forEach { app ->
-                        ListItem(
-                            headlineContent = { Text(app.displayName, color = TextPrimary) },
-                            supportingContent = { Text(app.packageName, color = TextSecondary, fontSize = 11.sp) },
-                            leadingContent = { Icon(Icons.Default.Extension, contentDescription = null, tint = AccentPurple) },
-                            trailingContent = {
-                                Checkbox(
-                                    checked = app.packageName in selectedLocalAppPackages,
-                                    enabled = !smartAiSelection,
-                                    onCheckedChange = { checked ->
-                                        selectedLocalAppPackages = if (checked) selectedLocalAppPackages + app.packageName else selectedLocalAppPackages - app.packageName
-                                    },
-                                    colors = CheckboxDefaults.colors(checkedColor = AccentPurple),
-                                )
-                            },
-                            modifier = Modifier.fillMaxWidth().clickable(enabled = !smartAiSelection) {
-                                selectedLocalAppPackages = if (app.packageName in selectedLocalAppPackages) selectedLocalAppPackages - app.packageName else selectedLocalAppPackages + app.packageName
-                            },
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                        )
+                    AttachmentOption("Photos", Icons.Default.PhotoLibrary) {
+                        scope.launch {
+                            attachmentSheetState.hide()
+                            showAttachmentSheet = false
+                            galleryLauncher.launch("image/*")
+                        }
                     }
-                }
-                Text(
-                    "CLOUD PLUGINS",
-                    color = AccentCyan,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                )
-                listOf(
-                    "FMHY" to "fmhy_browser",
-                    "GitHub" to "github_search",
-                    "OpenSwarm" to "openswarm_agent",
-                    "Web Browser" to "browser_use",
-                    "Code Executor" to "code_executor",
-                ).forEach { (label, pluginId) ->
+                    AttachmentOption("Files", Icons.Default.Description) {
+                        scope.launch {
+                            attachmentSheetState.hide()
+                            showAttachmentSheet = false
+                            documentLauncher.launch(arrayOf("text/*", "application/json", "application/xml", "application/csv", "application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+                        }
+                    }
+                    AttachmentOption("Plugins & AI apps", Icons.Default.Extension) { showPluginSelector = true }
                     ListItem(
-                        headlineContent = { Text(label, color = TextPrimary) },
-                        leadingContent = { Icon(Icons.Default.Extension, contentDescription = null, tint = AccentCyan) },
-                        trailingContent = {
-                            Checkbox(
-                                checked = pluginId in selectedPluginIds,
-                                onCheckedChange = { checked ->
-                                    selectedPluginIds = if (checked) selectedPluginIds + pluginId else selectedPluginIds - pluginId
-                                    if (checked) chatTarget = ChatTarget.CLOUD_OPENSWARM
-                                },
-                                colors = CheckboxDefaults.colors(checkedColor = AccentCyan),
-                            )
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                selectedPluginIds = if (pluginId in selectedPluginIds) selectedPluginIds - pluginId else selectedPluginIds + pluginId
-                                chatTarget = ChatTarget.CLOUD_OPENSWARM
-                            },
+                        headlineContent = { Text("Think Harder", color = TextPrimary) },
+                        supportingContent = { Text("Use the selected provider for up to 30 agent steps", color = TextSecondary, fontSize = 12.sp) },
+                        trailingContent = { Switch(checked = thinkEnabled, onCheckedChange = { thinkEnabled = it }) },
+                        leadingContent = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = AccentCyan) },
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     )
                 }
-                Button(
-                    onClick = { showPluginSelector = false },
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                ) { Text("Confirm Selection${if (selectedPluginIds.size + selectedLocalAppPackages.size == 0) "" else " · ${selectedPluginIds.size + selectedLocalAppPackages.size}"}") }
-                AttachmentOption("Back to attachments", Icons.Default.ArrowBack) { showPluginSelector = false }
-            } else {
-                AttachmentOption("Camera", Icons.Default.CameraAlt) {
-                    showAttachmentSheet = false
-                    cameraLauncher.launch(null)
-                }
-                AttachmentOption("Photos", Icons.Default.PhotoLibrary) {
-                    showAttachmentSheet = false
-                    galleryLauncher.launch("image/*")
-                }
-                AttachmentOption("Files", Icons.Default.Description) {
-                    showAttachmentSheet = false
-                    documentLauncher.launch(arrayOf("text/*", "application/json", "application/xml", "application/csv", "application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
-                }
-                AttachmentOption("Plugins", Icons.Default.Extension) { showPluginSelector = true }
-                ListItem(
-                    headlineContent = { Text("Think Harder", color = TextPrimary) },
-                    supportingContent = { Text("Use the selected provider for up to 30 agent steps", color = TextSecondary, fontSize = 12.sp) },
-                    trailingContent = { Switch(checked = thinkEnabled, onCheckedChange = { thinkEnabled = it }) },
-                    leadingContent = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = AccentCyan) },
-                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                )
             }
-            Spacer(Modifier.height(24.dp))
         }
     }
 
