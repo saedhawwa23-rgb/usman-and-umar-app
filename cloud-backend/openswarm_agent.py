@@ -6,9 +6,11 @@ from agent_registry import build_default_registry
 from browser_scraper import run_playwright_task
 from model_provider import NVIDIA_DEFAULT_MODEL, select_provider
 from task_state import TaskStateStore
+from tool_registry import build_default_capability_registry
 
 AGENTS = build_default_registry()
 TASKS = TaskStateStore()
+CAPABILITIES = build_default_capability_registry()
 
 class CapabilityUnavailableError(RuntimeError):
     pass
@@ -68,9 +70,12 @@ async def _run_specialist(agent_id: str, objective: str, state: dict[str, Any]) 
             url = "https://fmhy.net"
         if not url:
             raise RuntimeError("Browser specialist needs a public http(s) URL.")
-        output = await run_playwright_task(url, action="scrape", allowed_domains=state["allowed_domains"] or None)
-        if not output.strip():
-            raise RuntimeError("Browser specialist returned empty content.")
+        execution = await CAPABILITIES.execute("browser.extract", {
+            "url": url, "allowed_domains": state["allowed_domains"] or [],
+        })
+        output = str(execution.get("text") or "")
+        if not output.strip() or execution.get("verified") is not True:
+            raise RuntimeError("Browser specialist returned empty or unverified content.")
         return {"agent_id": agent_id, "status": "EXECUTED", "verified": True, "source_url": url, "output": output[:20000]}
     if agent_id in {"coder", "planner", "research"}:
         shared_context = json.dumps(state.get("shared_context", []), ensure_ascii=False)[:12000]
