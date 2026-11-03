@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 
 from agent_registry import build_default_registry
 from task_state import TaskStateStore
+from tool_registry import build_default_capability_registry
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="USMAN AND UMAR OpenSwarm Task Backend", version="3.0.0")
@@ -39,6 +40,7 @@ run_openswarm_task: Any = None
 run_playwright_task: Any = None
 _agent_registry = build_default_registry()
 _task_store = TaskStateStore()
+_capability_registry = build_default_capability_registry()
 
 
 def _load_ai_execution_functions(openswarm_requested: bool) -> None:
@@ -65,6 +67,11 @@ class ExecuteRequest(BaseModel):
     plugins: list[str] = Field(default_factory=list, max_length=8)
     browser_max_steps: int = Field(default=15, ge=1, le=30)
     think_harder: bool = False
+
+
+class ToolExecuteRequest(BaseModel):
+    payload: dict[str, Any] = Field(default_factory=dict)
+    approved: bool = False
 
 
 
@@ -284,6 +291,33 @@ def get_task_logs(task_id: str, authorization: str | None = Header(default=None,
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+
+
+@app.get("/tools")
+def tools(authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
+    _require_bearer_token(authorization)
+    return {"tools": _capability_registry.describe()}
+
+
+@app.post("/tools/{capability_id}/execute")
+async def execute_tool(
+    capability_id: str,
+    request: ToolExecuteRequest,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> dict[str, Any]:
+    _require_bearer_token(authorization)
+    try:
+        result = await _capability_registry.execute(capability_id, request.payload, approved=request.approved)
+        return {"status": "executed", "capability_id": capability_id, "result": result}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Capability execution failed: %s", capability_id)
+        raise HTTPException(status_code=500, detail=_safe_exception_detail(exc)) from exc
 
 @app.post("/execute", response_model=None)
 async def execute(request: ExecuteRequest, http_request: Request, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any] | JSONResponse:
