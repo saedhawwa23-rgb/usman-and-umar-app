@@ -46,8 +46,10 @@ def _manager_plan(prompt: str, plugin_ids: list[str], max_steps: int) -> dict[st
 
 async def _run_specialist(agent_id: str, objective: str, state: dict[str, Any]) -> dict[str, Any]:
     if agent_id == "browser":
-        match = re.search(r"https?://[^\\s<>\\\"']+", objective, re.IGNORECASE) or re.search(r"https?://[^\\s<>\\\"']+", state["prompt"], re.IGNORECASE)
+        match = re.search(r"https?://\\S+", objective, re.IGNORECASE) or re.search(r"https?://\\S+", state["prompt"], re.IGNORECASE)
         url = match.group(0).rstrip(".,;:!?)]}") if match else ""
+        if not url and "fmhy_browser" in state.get("plugins", []):
+            url = "https://fmhy.net"
         if not url:
             raise RuntimeError("Browser specialist needs a public http(s) URL.")
         output = await run_playwright_task(url, action="scrape", allowed_domains=state["allowed_domains"] or None)
@@ -81,7 +83,7 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
             if agent_id == "security":
                 results.append({"agent_id": agent_id, "status": "EXECUTED", "verified": True, "output": "Basic prompt policy checks passed."})
                 continue
-            results.append(await _run_specialist(agent_id, step["objective"], {"prompt": prompt, "allowed_domains": allowed_domains}))
+            results.append(await _run_specialist(agent_id, step["objective"], {"prompt": prompt, "allowed_domains": allowed_domains, "plugins": plugins}))
         if not results:
             raise CapabilityUnavailableError("Manager plan contained no executable specialist.")
         TASKS.transition(task_id, "VERIFYING", "independent_result_check_started")
