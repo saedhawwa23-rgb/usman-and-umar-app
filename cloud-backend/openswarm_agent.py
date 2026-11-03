@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio, json, os, re
 from typing import Any
 from agent_registry import build_default_registry
-from browser_scraper import run_playwright_task
 from model_provider import NVIDIA_DEFAULT_MODEL, select_provider
 from task_state import TaskStateStore
 from tool_registry import build_default_capability_registry
