@@ -15,6 +15,9 @@ from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+
+from agent_registry import build_default_registry
+from task_state import TaskStateStore
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="USMAN AND UMAR OpenSwarm Task Backend", version="3.0.0")
@@ -34,6 +37,8 @@ AI_PACKAGES_WAITING_MESSAGE = "Playwright dependencies are still downloading. Pl
 # here: /health and the FastAPI/Cloudflare startup path must work without them.
 run_openswarm_task: Any = None
 run_playwright_task: Any = None
+_agent_registry = build_default_registry()
+_task_store = TaskStateStore()
 
 
 def _load_ai_execution_functions(openswarm_requested: bool) -> None:
@@ -230,6 +235,38 @@ def root() -> dict[str, str]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+@app.get("/agents")
+def agents() -> dict[str, Any]:
+    return {"agents": _agent_registry.all()}
+
+
+@app.get("/capabilities")
+def capabilities() -> dict[str, Any]:
+    configured = {"browser", "coder", "planner", "research"}
+    return {"capabilities": [
+        {"id": agent["id"], "name": agent["name"], "capabilities": agent["capabilities"],
+         "registered": True, "adapter_configured": agent["id"] in configured}
+        for agent in _agent_registry.all()
+    ]}
+
+
+@app.get("/tasks/{task_id}")
+def get_task(task_id: str) -> dict[str, Any]:
+    try:
+        return _task_store.get(task_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/tasks/{task_id}/logs")
+def get_task_logs(task_id: str) -> dict[str, Any]:
+    try:
+        _task_store.get(task_id)
+        return {"events": _task_store.events(task_id)}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
 
 
 @app.post("/execute", response_model=None)
