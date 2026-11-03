@@ -255,10 +255,12 @@ def agents(authorization: str | None = Header(default=None, alias="Authorization
 @app.get("/capabilities")
 def capabilities(authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
     _require_bearer_token(authorization)
-    configured = {"browser", "coder", "planner"}
+    model_configured = bool(os.getenv("NVIDIA_API_KEY", "").strip() or os.getenv("OPENROUTER_API_KEY", "").strip())
+    configured = {"browser"} | ({"coder", "planner"} if model_configured else set())
     return {"capabilities": [
         {"id": agent["id"], "name": agent["name"], "capabilities": agent["capabilities"],
-         "registered": True, "adapter_configured": agent["id"] in configured}
+         "registered": True, "requires_model": agent["requires_model"],
+         "model_configured": model_configured, "adapter_configured": agent["id"] in configured}
         for agent in _agent_registry.all()
     ]}
 
