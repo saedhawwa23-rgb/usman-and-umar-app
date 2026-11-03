@@ -42,6 +42,8 @@ from typing import Iterable
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
+os.environ["BROWSER_USE_CLOUD_SYNC"] = "false"
+
 DEFAULT_LOCAL_MODEL = "llama3.1:8b"
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 NVIDIA_DEFAULT_MODEL = "nvidia/nemotron-3.5-bolt-e4b"
@@ -302,6 +304,7 @@ async def run_browser_task(
     print(f"Using Chromium executable: {executable_path}")
     browser_profile = BrowserProfile(
         headless=True,
+        is_local=True,
         user_data_dir=None,
         executable_path=executable_path,
         use_cloud=False,
