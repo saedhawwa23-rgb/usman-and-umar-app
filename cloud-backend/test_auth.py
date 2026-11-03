@@ -5,11 +5,11 @@ from unittest.mock import AsyncMock, patch
 import httpx
 
 from main import app
-from browser_use_interactive import (
+from model_provider import (
     NVIDIA_BASE_URL,
     NVIDIA_DEFAULT_MODEL,
     OPENROUTER_BASE_URL,
-    _select_provider,
+    select_provider,
 )
 
 
@@ -57,23 +57,39 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
             response = await self.post_execute("Basic test-secret")
         self.assertEqual(response.status_code, 401)
 
-    async def test_upstream_url_is_ignored_and_browser_use_runs_directly(self) -> None:
+    async def test_prompt_url_is_passed_directly_to_playwright(self) -> None:
         environment = {
             "APP_CLIENT_TOKEN": "test-secret",
             "OPEN_SWARM_EXECUTE_URL": "https://unused.example/execute",
         }
         with patch.dict(os.environ, environment, clear=False):
-            with patch("main.run_browser_task", new_callable=AsyncMock) as browser_task:
+            with patch("main.run_playwright_task", new_callable=AsyncMock) as browser_task:
                 browser_task.return_value = "Extracted actual page content."
                 response = await self.post_execute("Bearer test-secret")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"result": "Extracted actual page content."})
         browser_task.assert_awaited_once_with(
-            "Read https://example.com and summarize the page.",
+            "https://example.com",
             allowed_domains=["example.com"],
-            model=None,
-            max_steps=15,
-            allow_fmhy_external=False,
+            action="scrape",
+            link_text=None,
+        )
+
+    async def test_browser_plugin_uses_raw_playwright_directly(self) -> None:
+        with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            with patch("main.run_playwright_task", new_callable=AsyncMock) as browser_task:
+                browser_task.return_value = "Page text"
+                response = await self.client.post(
+                    "/execute",
+                    headers={"Authorization": "Bearer test-secret"},
+                    json={"task_id": "browser-1", "prompt": "https://example.com", "plugin_id": "browser_use"},
+                )
+        self.assertEqual(response.status_code, 200)
+        browser_task.assert_awaited_once_with(
+            "https://example.com",
+            allowed_domains=["example.com"],
+            action="scrape",
+            link_text=None,
         )
 
     async def test_openswarm_plugin_runs_manager_graph_without_fabricating_output(self) -> None:
@@ -126,36 +142,35 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(swarm.await_args.kwargs["max_steps"], 30)
 
-    async def test_nvidia_key_forces_the_provisioned_model_in_execute(self) -> None:
+    async def test_browser_scraping_does_not_require_or_use_inference_keys(self) -> None:
         environment = {
             "APP_CLIENT_TOKEN": "test-secret",
             "NVIDIA_API_KEY": "nvidia-test-key",
             "NVIDIA_MODEL": "nvidia/stale-model-from-colab",
         }
         with patch.dict(os.environ, environment, clear=False):
-            with patch("main.run_browser_task", new_callable=AsyncMock) as browser_task:
-                browser_task.return_value = "Actual Browser Use output."
+            with patch("main.run_playwright_task", new_callable=AsyncMock) as browser_task:
+                browser_task.return_value = "Actual page text."
                 response = await self.post_execute("Bearer test-secret")
         self.assertEqual(response.status_code, 200)
         browser_task.assert_awaited_once_with(
-            "Read https://example.com and summarize the page.",
+            "https://example.com",
             allowed_domains=["example.com"],
-            model=NVIDIA_DEFAULT_MODEL,
-            max_steps=15,
-            allow_fmhy_external=False,
+            action="scrape",
+            link_text=None,
         )
 
     async def test_missing_public_url_is_rejected_before_browser_starts(self) -> None:
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
-            with patch("main.run_browser_task", new_callable=AsyncMock) as browser_task:
+            with patch("main.run_playwright_task", new_callable=AsyncMock) as browser_task:
                 response = await self.post_execute("Bearer test-secret", "Summarize this page.")
         self.assertEqual(response.status_code, 400)
         self.assertIn("Include at least one public http(s) URL", response.json()["error"])
         browser_task.assert_not_awaited()
 
-    async def test_fmhy_plugin_adds_fmhy_and_dynamic_external_trust(self) -> None:
+    async def test_fmhy_plugin_clicks_the_matching_link_text(self) -> None:
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
-            with patch("main.run_browser_task", new_callable=AsyncMock) as browser_task:
+            with patch("main.run_playwright_task", new_callable=AsyncMock) as browser_task:
                 browser_task.return_value = "FMHY tool result"
                 response = await self.client.post(
                     "/execute",
@@ -168,16 +183,15 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.assertEqual(response.status_code, 200)
         browser_task.assert_awaited_once_with(
-            "Find a public image generator on FMHY and generate a cat.",
+            "https://fmhy.net",
             allowed_domains=["fmhy.net"],
-            model=None,
-            max_steps=15,
-            allow_fmhy_external=True,
+            action="click",
+            link_text="image generator",
         )
 
     async def test_private_hostname_is_rejected(self) -> None:
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
-            with patch("main.run_browser_task", new_callable=AsyncMock) as browser_task:
+            with patch("main.run_playwright_task", new_callable=AsyncMock) as browser_task:
                 response = await self.post_execute(
                     "Bearer test-secret", "Read http://localhost:7860/health"
                 )
@@ -188,14 +202,14 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_browser_exception_is_logged_and_returned_as_json_500(self) -> None:
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
             with patch(
-                "main.run_browser_task",
+                "main.run_playwright_task",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("provider unavailable"),
             ):
                 response = await self.post_execute("Bearer test-secret")
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.headers["content-type"].split(";")[0], "application/json")
-        self.assertIn("Browser Use failed (RuntimeError)", response.json()["error"])
+        self.assertIn("Playwright browser execution failed (RuntimeError)", response.json()["error"])
         self.assertIn("full traceback is in the colab backend log", response.json()["error"].lower())
         self.assertNotIn("Traceback", response.text)
 
@@ -203,7 +217,7 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
 class InferenceProviderSelectionTests(unittest.TestCase):
     def test_nvidia_takes_priority_and_ignores_stale_model_overrides(self) -> None:
         with patch.dict(os.environ, {"NVIDIA_MODEL": "nvidia/stale-model-from-colab"}, clear=True):
-            provider = _select_provider("nvidia/custom-model", "nvidia-key", "openrouter-key")
+            provider = select_provider("nvidia/custom-model", "nvidia-key", "openrouter-key")
         self.assertEqual(
             provider,
             ("NVIDIA", "nvidia-key", NVIDIA_DEFAULT_MODEL, NVIDIA_BASE_URL),
@@ -215,18 +229,18 @@ class InferenceProviderSelectionTests(unittest.TestCase):
 
     def test_openrouter_is_fallback_when_nvidia_key_is_missing(self) -> None:
         with patch.dict(os.environ, {"OPENROUTER_MODEL": "openrouter/custom-model"}, clear=True):
-            provider = _select_provider(None, None, "openrouter-key")
+            provider = select_provider(None, None, "openrouter-key")
         self.assertEqual(provider, ("OpenRouter", "openrouter-key", "openrouter/custom-model", OPENROUTER_BASE_URL))
 
     def test_requested_model_overrides_openrouter_default(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            provider = _select_provider("openrouter/requested-model", None, "openrouter-key")
+            provider = select_provider("openrouter/requested-model", None, "openrouter-key")
         self.assertEqual(provider[0], "OpenRouter")
         self.assertEqual(provider[2], "openrouter/requested-model")
 
     def test_local_ollama_remains_last_fallback(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
-            provider = _select_provider(None, None, None)
+            provider = select_provider(None, None, None)
         self.assertEqual(provider[0], "Ollama")
         self.assertIsNone(provider[1])
 

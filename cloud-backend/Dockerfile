@@ -16,7 +16,7 @@ RUN mkdir -p /ms-playwright \
     && python -m playwright install --with-deps chromium \
     && chmod -R a+rX /ms-playwright
 
-COPY --chown=user:user main.py browser_use_interactive.py ./
+COPY --chown=user:user main.py browser_scraper.py model_provider.py openswarm_agent.py ./
 
 EXPOSE 7860
 USER user

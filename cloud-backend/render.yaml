@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: usman-umar-browser-use-executor
+    name: usman-umar-playwright-executor
     runtime: python
     plan: free
     rootDir: cloud-backend

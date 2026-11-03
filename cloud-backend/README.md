@@ -9,21 +9,21 @@ app_port: 7860
 
 # USMAN AND UMAR OpenSwarm Multi-Agent Backend
 
-This FastAPI service runs a real Python OpenSwarm team. The Manager Agent plans each `openswarm_agent` task and delegates to the Browser Agent (real Browser Use) or Coder Agent (real OpenAI-compatible reasoning), then returns the final answer from the graph. There is no mock-success path.
+This FastAPI service uses raw Playwright for public-page scraping and optional named-link clicks. The optional Python OpenSwarm route keeps its Manager/Browser/Coder graph; its browser specialist also uses raw Playwright.
 
-The helper is intentionally bounded to scoped public-web interaction. Ordinary tasks require one or more explicit public `http(s)` URLs in the prompt. An FMHY task may start with `https://fmhy.net`; the backend discovers one matching external tool link and adds only that host to the allowlist. Browser Use runs at most 15 steps and may click, type, or submit only the exact action requested. It will not sign in, handle credentials or payments, bypass CAPTCHAs, change accounts, delete data, or follow unrelated page instructions.
+The browser helper accepts a public `http(s)` URL and returns the page's body text. For a click action, it finds the requested link by text, follows it, and returns the destination page text. Private/local hostnames and credential-bearing URLs are rejected. The scraper does not sign in, submit forms, handle payments, bypass CAPTCHAs, or change account settings.
 
 ## Run in Google Colab
 
-Use `USMAN_COLAB_BACKEND.ipynb` from the repository. It installs the FastAPI and Browser Use dependencies, installs Chromium and `cloudflared`, starts the server on port 7860, then launches a Cloudflare Quick Tunnel.
+Use `USMAN_COLAB_BACKEND.ipynb` from the repository. It installs FastAPI, Playwright and the optional OpenSwarm dependencies, installs Playwright-managed Chromium, starts the server on port 7860, then launches a Cloudflare Quick Tunnel.
 
 Add these values in Colab **Secrets** and grant notebook access:
 
 - `APP_CLIENT_TOKEN`: a strong random Bearer token. Configure the same value in the Android app.
-- `NVIDIA_API_KEY`: preferred inference provider. When present, every browser task uses `nvidia/nemotron-3.5-bolt-e4b` at `https://integrate.api.nvidia.com/v1/chat/completions`. The model is pinned; stale `NVIDIA_MODEL` values and request overrides are ignored.
-- `OPENROUTER_API_KEY`: fallback inference provider when `NVIDIA_API_KEY` is unset. The default model is `openrouter/free`; override it with optional `OPENROUTER_MODEL`.
+- `NVIDIA_API_KEY`: preferred provider for OpenSwarm reasoning.
+- `OPENROUTER_API_KEY`: fallback provider for OpenSwarm reasoning when `NVIDIA_API_KEY` is unset. The default model is `openrouter/free`; override it with optional `OPENROUTER_MODEL`.
 
-The notebook requires `APP_CLIENT_TOKEN` and at least one inference API key. It can use local Ollama as a final fallback when run outside the notebook without provider keys.
+Raw browser scraping does not require an inference API key. The optional OpenSwarm route requires `NVIDIA_API_KEY` or `OPENROUTER_API_KEY`.
 
 The Quick Tunnel cell prints a temporary `https://….trycloudflare.com` URL. Copy that base URL—without `/execute`—into the Android app's **Task Manager → Cloud Browser Use settings → Cloud Backend URL**. The app appends `/execute` automatically. Quick Tunnel URLs are not reserved and may change after the tunnel or Colab runtime restarts; update the Android setting when a new URL is printed. Keep the Colab runtime and tunnel process running while using the API. Protect the Android Bearer token because the tunnel URL is publicly reachable.
 
@@ -31,12 +31,12 @@ The Quick Tunnel cell prints a temporary `https://….trycloudflare.com` URL. Co
 
 `GET /health` returns `{"status":"ok"}` and only confirms the server is running.
 
-`POST /execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and JSON with `task_id` plus `prompt`. Ordinary browser tasks include the URL(s) the agent may visit in the prompt. FMHY tasks may additionally send `plugin_id: "fmhy_browser"` for direct FMHY Browser Use, or `plugin_id: "openswarm_agent"` for the Manager Agent swarm; the backend starts at FMHY, discovers one matching external tool, and adds only that host to the allowlist. `browser_max_steps` is optional and capped at 15 by default. Set `think_harder: true` to keep the selected provider and raise the agent budget to 30 steps; no model override is performed.
+`POST /execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and JSON with `task_id` plus `prompt`. Browser plugin requests pass the URL in the prompt directly to Playwright. An explicit link phrase can trigger a click, for example `Open "About" on https://example.com`. An FMHY request without a URL starts at `https://fmhy.net`; requests such as `Find an image generator on FMHY` use the matching link text. `openswarm_agent` continues to use the optional Manager Agent graph.
 
 ```json
 {
   "task_id": "task-123",
-  "prompt": "Read https://docs.python.org/3/tutorial/ and summarize the installation guidance."
+  "prompt": "https://docs.python.org/3/tutorial/"
 }
 ```
 
@@ -45,13 +45,12 @@ FMHY example:
 ```json
 {
   "task_id": "task-fmhy-123",
-  "prompt": "Find an image generator on FMHY and generate the prompt \"a friendly cat\".",
-  "plugin_id": "fmhy_browser",
-  "browser_max_steps": 15
+  "prompt": "Find an image generator on FMHY",
+  "plugin_id": "fmhy_browser"
 }
 ```
 
-A successful response is `{"result":"<actual agent result>"}`. The Manager Agent route is bounded by a server-side timeout and all failures remain JSON errors. Configuration, validation, rate-limit, and agent failures return JSON errors with appropriate HTTP status codes; errors do not become fake successful task output. The endpoint allows up to 20 requests per source IP per minute and runs one browser task at a time, with a 55-second execution timeout.
+A successful response is `{"result":"<extracted page text>"}`. Execution is bounded by a server-side timeout and all failures remain JSON errors. Configuration, validation, rate-limit, and execution failures return JSON errors with appropriate HTTP status codes. The endpoint allows up to 20 requests per source IP per minute and runs one browser task at a time.
 
 Full Python tracebacks are written to the backend server log for diagnosis and are not sent over the public API, where they could expose credentials or runtime internals. In the supplied Colab notebook the log is `/tmp/usman-fastapi.log`; inspect it with:
 
@@ -61,11 +60,11 @@ Full Python tracebacks are written to the backend server log for diagnosis and a
 
 ## Docker or Render deployment
 
-The Dockerfile installs Browser Use and Chromium and copies both `main.py` and `browser_use_interactive.py`. For Hugging Face Spaces or another Docker host, place the contents of `cloud-backend/` at the deployment repository root and set `APP_CLIENT_TOKEN` plus at least one of `NVIDIA_API_KEY` or `OPENROUTER_API_KEY` as secrets. For Render, the included manifest installs Chromium during the build; provide those secrets in the dashboard.
+The Dockerfile installs the dependencies in `requirements.txt` and Playwright-managed Chromium, then copies the FastAPI, scraper, provider, and OpenSwarm modules. For Hugging Face Spaces or another Docker host, place the contents of `cloud-backend/` at the deployment repository root and set `APP_CLIENT_TOKEN`. Configure an inference key only when using OpenSwarm. For Render, the included manifest installs Chromium during the build.
 
 ## Local development
 
-From `cloud-backend/`, install `requirements.txt`, install Browser Use and Chromium using the setup instructions in the Colab notebook, then run:
+From `cloud-backend/`, install `requirements.txt`, install Playwright Chromium with `python -m playwright install chromium`, then run:
 
 ```sh
 APP_CLIENT_TOKEN=local-test-token \
@@ -73,7 +72,7 @@ NVIDIA_API_KEY=your-nvidia-key \
 python -m uvicorn main:app --host 0.0.0.0 --port 7860
 ```
 
-If NVIDIA is not configured, set `OPENROUTER_API_KEY` instead. Run the backend contract and provider-selection tests with:
+Set an inference key only if you plan to use OpenSwarm. Run the backend contract and provider-selection tests with:
 
 ```sh
 python -m unittest -v test_auth.py

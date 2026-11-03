@@ -2,20 +2,18 @@
 
 The public VRSEN OpenSwarm launcher is Node/Agency-Swarm based.  This module keeps
 our Colab deployment Python-native while using the same specialist/orchestrator
-shape: a Manager plans and delegates, Browser performs real Browser Use work,
+shape: a Manager plans and delegates, Browser performs raw Playwright work,
 and Coder handles non-browser reasoning with an OpenAI-compatible model.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Literal, TypedDict
 
-from browser_use_interactive import (
-    NVIDIA_DEFAULT_MODEL,
-    _select_provider,
-    run_browser_task,
-)
+from browser_scraper import run_playwright_task
+from model_provider import NVIDIA_DEFAULT_MODEL, select_provider
 
 
 class SwarmState(TypedDict, total=False):
@@ -36,7 +34,7 @@ def _model():
     """Create the configured real OpenAI-compatible model lazily."""
     from langchain_openai import ChatOpenAI
 
-    provider, api_key, model, base_url = _select_provider(
+    provider, api_key, model, base_url = select_provider(
         os.getenv("OPENROUTER_MODEL"),
         os.getenv("NVIDIA_API_KEY"),
         os.getenv("OPENROUTER_API_KEY"),
@@ -84,12 +82,19 @@ def _manager_decision(state: SwarmState) -> dict[str, Any]:
 
 
 async def _browser_agent(state: SwarmState) -> dict[str, str]:
-    result = await run_browser_task(
-        state["prompt"],
-        allowed_domains=state["allowed_domains"],
-        model=NVIDIA_DEFAULT_MODEL if os.getenv("NVIDIA_API_KEY", "").strip() else None,
-        max_steps=state["max_steps"],
-        allow_fmhy_external=bool(set(state.get("plugin_ids", [])) & {"fmhy_browser", "github_search"}),
+    match = re.search(r"https?://[^\s<>\"']+", state["prompt"], re.IGNORECASE)
+    url = match.group(0).rstrip(".,;:!?)]}") if match else ""
+    plugins = set(state.get("plugin_ids", []))
+    if not url and "github_search" in plugins:
+        url = "https://github.com"
+    if not url and "fmhy_browser" in plugins:
+        url = "https://fmhy.net"
+    if not url:
+        raise RuntimeError("OpenSwarm browser tasks require a public http(s) URL in the prompt.")
+    result = await run_playwright_task(
+        url,
+        action="scrape",
+        allowed_domains=state["allowed_domains"] or ["github.com", "fmhy.net"],
     )
     return {"specialist_result": result}
 

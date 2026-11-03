@@ -1,4 +1,4 @@
-"""Authenticated FastAPI entrypoint for direct Playwright and OpenSwarm execution."""
+"""Authenticated FastAPI entrypoint for raw Playwright and OpenSwarm execution."""
 from __future__ import annotations
 
 import asyncio
@@ -28,37 +28,27 @@ _execution_semaphore = asyncio.Semaphore(1)
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _BLOCKED_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".test", ".invalid")
 _BLOCKED_HOSTS = {"localhost", "metadata.google.internal", "metadata"}
-AI_PACKAGES_WAITING_MESSAGE = "AI packages are still downloading. Please wait."
+AI_PACKAGES_WAITING_MESSAGE = "Playwright dependencies are still downloading. Please wait."
 
 # Test seams and optional caches. The heavy modules are intentionally not imported
 # here: /health and the FastAPI/Cloudflare startup path must work without them.
-run_browser_task: Any = None
 run_openswarm_task: Any = None
-NVIDIA_DEFAULT_MODEL = "nvidia/nemotron-3.5-bolt-e4b"
+run_playwright_task: Any = None
 
 
 def _load_ai_execution_functions(openswarm_requested: bool) -> None:
-    """Load heavy AI/browser modules only when an /execute task needs them."""
-    global run_browser_task, run_openswarm_task, NVIDIA_DEFAULT_MODEL
+    """Load browser and optional OpenSwarm modules only when /execute needs them."""
+    global run_playwright_task, run_openswarm_task
     try:
+        import playwright  # noqa: F401
         if openswarm_requested and run_openswarm_task is None:
-            import langchain_openai  # noqa: F401
-            import langgraph  # noqa: F401
-            import playwright  # noqa: F401
             from openswarm_agent import run_openswarm_task as loaded_swarm
-
             run_openswarm_task = loaded_swarm
-        if not openswarm_requested and run_browser_task is None:
-            import playwright  # noqa: F401
-            from browser_use_interactive import (
-                NVIDIA_DEFAULT_MODEL as loaded_model,
-                run_browser_task as loaded_browser,
-            )
-
-            NVIDIA_DEFAULT_MODEL = loaded_model
-            run_browser_task = loaded_browser
+        if not openswarm_requested and run_playwright_task is None:
+            from browser_scraper import run_playwright_task as loaded_browser
+            run_playwright_task = loaded_browser
     except ModuleNotFoundError as exc:
-        logger.info("AI dependency is not ready: %s", exc)
+        logger.info("Browser dependency is not ready: %s", exc)
         raise RuntimeError(AI_PACKAGES_WAITING_MESSAGE) from exc
 
 
@@ -89,7 +79,35 @@ def _fmhy_plugin_requested(request: ExecuteRequest) -> bool:
 
 
 def _openswarm_plugin_requested(request: ExecuteRequest) -> bool:
-    return bool(_requested_plugins(request) & {"openswarm_agent", "github_search", "browser_use", "code_executor"})
+    return bool(_requested_plugins(request) & {"openswarm_agent", "github_search", "code_executor"})
+
+
+def _browser_url_from_prompt(prompt: str, fmhy_requested: bool) -> str:
+    for match in _URL_PATTERN.findall(prompt):
+        candidate = match.rstrip(".,;:!?)]}")
+        if urlsplit(candidate).scheme.lower() in {"http", "https"}:
+            return candidate
+    if fmhy_requested:
+        return "https://fmhy.net"
+    raise HTTPException(status_code=400, detail="Include a public http(s) URL in the prompt.")
+
+
+def _click_target_from_prompt(prompt: str) -> str | None:
+    action_requested = re.search(r"\b(?:click|follow|open|visit)\b", prompt, re.IGNORECASE)
+    quoted = re.search(r"[\"']([^\"']{2,100})[\"']", prompt)
+    if action_requested and quoted:
+        return quoted.group(1).strip()
+    patterns = (
+        r"\b(?:click|follow|open|visit)\s+(?:the\s+)?(.+?)(?:\s+link)?(?=[.!?]|$)",
+        r"\b(?:find|locate|search for)\s+(?:a\s+|an\s+|the\s+)?(.+?)\s+on\s+(?:the\s+)?fmhy(?:\.net)?\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, prompt, re.IGNORECASE)
+        if match:
+            target = re.split(r"\s+(?:and|then)\s+", match.group(1), maxsplit=1, flags=re.IGNORECASE)[0]
+            target = re.sub(r"^(?:public|free|online|best)\s+", "", target.strip(), flags=re.IGNORECASE)
+            return target.strip(" .,:;!?\"") or None
+    return None
 
 
 def _allowed_domains_from_prompt(prompt: str, include_fmhy: bool = False, include_github: bool = False, require_url: bool = True) -> list[str]:
@@ -178,13 +196,13 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
                     max_steps=max_steps,
                 ), timeout=_EXECUTION_TIMEOUT_SECONDS)
             else:
-                model = NVIDIA_DEFAULT_MODEL if os.getenv("NVIDIA_API_KEY", "").strip() else None
-                result = await asyncio.wait_for(run_browser_task(
-                    request.prompt,
+                url = _browser_url_from_prompt(request.prompt, fmhy_requested)
+                link_text = _click_target_from_prompt(request.prompt)
+                result = await asyncio.wait_for(run_playwright_task(
+                    url,
                     allowed_domains=allowed_domains,
-                    model=model,
-                    max_steps=max_steps,
-                    allow_fmhy_external=fmhy_requested,
+                    action="click" if link_text else "scrape",
+                    link_text=link_text,
                 ), timeout=_EXECUTION_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         logger.exception("Agent execution timed out for task_id=%s", request.task_id)
@@ -193,11 +211,11 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
         if str(exc) == AI_PACKAGES_WAITING_MESSAGE:
             return _error_response(503, AI_PACKAGES_WAITING_MESSAGE)
         logger.exception("Agent execution failed for task_id=%s", request.task_id)
-        label = "OpenSwarm execution" if openswarm_requested else "Browser Use"
+        label = "OpenSwarm execution" if openswarm_requested else "Playwright browser execution"
         return _error_response(500, f"{label} failed (RuntimeError): {_safe_exception_detail(exc)} Full traceback is in the Colab backend log.")
     except Exception as exc:
         logger.exception("Agent execution failed for task_id=%s", request.task_id)
-        label = "OpenSwarm execution" if openswarm_requested else "Browser Use"
+        label = "OpenSwarm execution" if openswarm_requested else "Playwright browser execution"
         return _error_response(500, f"{label} failed ({type(exc).__name__}): {_safe_exception_detail(exc)} Full traceback is in the Colab backend log.")
     if not isinstance(result, str) or not result.strip():
         return _error_response(502, "Agent returned no result; no success was recorded.")
