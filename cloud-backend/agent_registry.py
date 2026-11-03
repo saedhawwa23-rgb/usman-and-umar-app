@@ -39,7 +39,7 @@ def build_default_registry() -> AgentRegistry:
     agents = (
         ("manager", "Manager / Orchestrator", "Plans work, delegates specialists, tracks execution and assembles results.", ("planning", "delegation", "coordination"), True),
         ("planner", "Planner", "Decomposes objectives into ordered, dependency-aware steps.", ("planning", "dependencies"), True),
-        ("research", "Research", "Collects evidence from approved sources and records source URLs.", ("web_research", "source_analysis"), True),
+        ("research", "Research", "Synthesizes supplied source extracts and compares evidence; retrieval is delegated to the browser adapter.", ("source_synthesis", "source_analysis"), True),
         ("browser", "Browser", "Uses bounded Playwright navigation and page extraction.", ("browser.navigate", "browser.extract", "browser.click"), False),
         ("coder", "Coding", "Produces code and patches; execution is only claimed when a runner verifies it.", ("code.generate", "code.review"), True),
         ("terminal", "Terminal", "Runs approved commands in a configured isolated execution adapter.", ("terminal.execute",), False),
