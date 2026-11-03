@@ -28,7 +28,7 @@ def _text(message: Any) -> str:
 
 def _manager_plan(prompt: str, plugin_ids: list[str], max_steps: int) -> dict[str, Any]:
     response = _text(_model().invoke([
-        ("system", "You are OpenSwarm Manager. Return JSON only: {summary:string,steps:[{agent_id:string,objective:string,requires_approval:boolean}]}. Available IDs: manager,planner,research,browser,coder,terminal,github,files,automation,android,data,documents,drive,security,verification,delivery. Browser can inspect public pages. Coder/planner/research generate reasoning only. Do not claim terminal/GitHub/Drive/Android/files/data/documents/automation execution; those adapters may be unavailable. Respect step limit."),
+        ("system", "You are OpenSwarm Manager. Return JSON only: {summary:string,steps:[{id:string,agent_id:string,objective:string,depends_on:string[],requires_approval:boolean}]}. Use unique step IDs; depends_on lists earlier step IDs. Independent steps may run in parallel. Available IDs: manager,planner,research,browser,coder,terminal,github,files,automation,android,data,documents,drive,security,verification,delivery. Browser can inspect public pages. Coder/planner/research generate reasoning only. Do not claim terminal/GitHub/Drive/Android/files/data/documents/automation execution; those adapters may be unavailable. Respect step limit."),
         ("user", json.dumps({"objective": prompt, "plugins": plugin_ids, "step_limit": max_steps}))
     ]))
     try:
@@ -60,7 +60,9 @@ def _manager_plan(prompt: str, plugin_ids: list[str], max_steps: int) -> dict[st
 
 async def _run_specialist(agent_id: str, objective: str, state: dict[str, Any]) -> dict[str, Any]:
     if agent_id == "browser":
-        match = re.search(r"https?://\S+", objective, re.IGNORECASE) or re.search(r"https?://\S+", state["prompt"], re.IGNORECASE)
+        context_text = json.dumps(state.get("shared_context", []), ensure_ascii=False)
+        search_text = objective + " " + context_text + " " + state["prompt"]
+        match = re.search(r"https?://\S+", search_text, re.IGNORECASE)
         url = match.group(0).rstrip(".,;:!?)]}") if match else ""
         if not url and "fmhy_browser" in state.get("plugins", []):
             url = "https://fmhy.net"
