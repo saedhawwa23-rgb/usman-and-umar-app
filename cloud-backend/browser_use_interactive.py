@@ -304,6 +304,7 @@ async def run_browser_task(
         headless=True,
         user_data_dir=None,
         executable_path=executable_path,
+        use_cloud=False,
         timeout=120.0,
         args=[
             "--no-sandbox",
