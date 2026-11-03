@@ -89,6 +89,8 @@ fun WorkspaceTaskScreen(
     val autoRunCode by viewModel.autoRunGeneratedCode.collectAsState()
     val message by viewModel.message.collectAsState()
     val browserState by viewModel.browserUseState.collectAsState()
+    val openSwarmAgents by viewModel.openSwarmAgents.collectAsState()
+    val openSwarmRosterLoading by viewModel.openSwarmRosterLoading.collectAsState()
     var rawText by remember { mutableStateOf("") }
     var mode by remember { mutableStateOf(TaskExecutionMode.LOCAL_AI_APP) }
     var cloudTarget by remember { mutableStateOf("auto") }
@@ -216,6 +218,37 @@ fun WorkspaceTaskScreen(
                     color = AppTheme.colors.textSecondary,
                     fontSize = 12.sp,
                 )
+            }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("OPEN SWARM AGENT TEAM", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
+                        Text(
+                            if (openSwarmAgents.isEmpty()) "Load the real agent roster from a healthy configured cloud server."
+                            else "${openSwarmAgents.size} registered specialist agents",
+                            color = AppTheme.colors.textPrimary,
+                            fontSize = 14.sp,
+                        )
+                        Button(
+                            onClick = { viewModel.refreshOpenSwarmAgents() },
+                            enabled = !openSwarmRosterLoading && cloudServers.any { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(if (openSwarmRosterLoading) "Checking agent team..." else "Refresh OpenSwarm agents") }
+                        openSwarmAgents.forEach { agent ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(agent.name, color = AppTheme.colors.textPrimary, fontSize = 13.sp)
+                                    Text(agent.description, color = AppTheme.colors.textSecondary, fontSize = 11.sp)
+                                }
+                                Text(
+                                    if (agent.adapterConfigured) "Adapter ready" else "Not connected",
+                                    color = if (agent.adapterConfigured) AccentCyan else AppTheme.colors.textSecondary,
+                                    fontSize = 10.sp,
+                                )
+                            }
+                        }
+                    }
+                }
             }
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
