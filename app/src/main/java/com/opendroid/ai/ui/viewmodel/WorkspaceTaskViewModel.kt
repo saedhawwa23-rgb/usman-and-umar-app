@@ -14,6 +14,7 @@ import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.opendroid.ai.core.agent.SmartLocalAiRouter
 import com.opendroid.ai.core.browser.BrowserUseRemoteProtocol
 import com.opendroid.ai.core.browser.CloudServerClient
+import com.opendroid.ai.core.browser.RemoteOpenSwarmAgent
 import com.opendroid.ai.core.termux.TermuxIntegration
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.data.repository.SettingsRepository
@@ -78,11 +79,31 @@ class WorkspaceTaskViewModel @Inject constructor(
         .callTimeout(65, TimeUnit.SECONDS)
         .build()
 
+    private val _openSwarmAgents = kotlinx.coroutines.flow.MutableStateFlow<List<RemoteOpenSwarmAgent>>(emptyList())
+    val openSwarmAgents: StateFlow<List<RemoteOpenSwarmAgent>> = _openSwarmAgents
+    private val _openSwarmRosterLoading = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val openSwarmRosterLoading: StateFlow<Boolean> = _openSwarmRosterLoading
+
     private val _message = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message
     private val _browserUseState = kotlinx.coroutines.flow.MutableStateFlow(BrowserUseRunState())
     val browserUseState: StateFlow<BrowserUseRunState> = _browserUseState
     @Volatile private var browserCall: okhttp3.Call? = null
+
+
+    fun refreshOpenSwarmAgents() {
+        if (_openSwarmRosterLoading.value) return
+        viewModelScope.launch {
+            _openSwarmRosterLoading.value = true
+            runCatching { withContext(Dispatchers.IO) { cloudServerClient.fetchOpenSwarmAgents() } }
+                .onSuccess {
+                    _openSwarmAgents.value = it
+                    _message.value = "Loaded ${it.size} agents from the connected OpenSwarm server."
+                }
+                .onFailure { _message.value = it.message ?: "Unable to load the OpenSwarm agent roster." }
+            _openSwarmRosterLoading.value = false
+        }
+    }
 
     fun saveOpenSwarmServerUrl(url: String) {
         viewModelScope.launch {
