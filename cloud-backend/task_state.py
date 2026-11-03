@@ -99,6 +99,18 @@ class TaskStateStore:
                        (task_id, event, old, state, json.dumps(detail or {}), now))
         return self.get(task_id)
 
+
+    def append_event(self, task_id: str, event: str, detail: dict[str, Any] | None = None) -> None:
+        now = time.time()
+        with self._lock, self._db() as db:
+            exists = db.execute("SELECT 1 FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+            if exists is None:
+                raise KeyError(f"Unknown task: {task_id}")
+            db.execute(
+                "INSERT INTO task_events(task_id,event,detail_json,created_at) VALUES(?,?,?,?)",
+                (task_id, event, json.dumps(detail or {}), now),
+            )
+
     def save_plan(self, task_id: str, plan: list[dict[str, Any]]) -> None:
         now = time.time()
         with self._lock, self._connect() as db:
