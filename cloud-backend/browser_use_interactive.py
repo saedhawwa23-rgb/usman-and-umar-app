@@ -264,6 +264,13 @@ async def run_browser_task(
         user_data_dir=None,
         allowed_domains=domains,
         enable_default_extensions=False,
+        extra_chromium_args=[
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--headless=new",
+            "--single-process",
+        ],
     )
     agent = Agent(
         task=task.strip(),
