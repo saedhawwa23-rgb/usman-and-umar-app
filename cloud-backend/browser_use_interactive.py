@@ -34,6 +34,7 @@ import re
 import shutil
 import subprocess
 import time
+from inspect import signature
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
@@ -290,10 +291,13 @@ async def run_browser_task(
         print(f"Using local Ollama model: {selected_model}")
 
     # Incognito profile and no default extensions keep this browser session isolated.
+    os.environ["BROWSER_USE_ACTION_TIMEOUT_S"] = "120"
+    executable_path = _playwright_chromium_executable()
+    print(f"Using Chromium executable: {executable_path}")
     browser_profile = BrowserProfile(
         headless=True,
         user_data_dir=None,
-        executable_path=_playwright_chromium_executable(),
+        executable_path=executable_path,
         timeout=120.0,
         args=[
             "--no-sandbox",
@@ -304,16 +308,22 @@ async def run_browser_task(
         ],
         enable_default_extensions=False,
     )
-    browser = BrowserSession(browser_profile=browser_profile)
-    agent = Agent(
-        task=task.strip(),
-        llm=llm,
-        browser=browser,
-        max_actions_per_step=2,
-        max_failures=1,
-        use_vision=False,
-        extend_system_message=INTERACTIVE_POLICY,
-    )
+    browser_session_kwargs: dict[str, object] = {"browser_profile": browser_profile}
+    if "timeout" in signature(BrowserSession).parameters:
+        browser_session_kwargs["timeout"] = 120.0
+    browser = BrowserSession(**browser_session_kwargs)
+    agent_kwargs: dict[str, object] = {
+        "task": task.strip(),
+        "llm": llm,
+        "browser": browser,
+        "max_actions_per_step": 2,
+        "max_failures": 1,
+        "use_vision": False,
+        "extend_system_message": INTERACTIVE_POLICY,
+    }
+    if "action_timeout" in signature(Agent).parameters:
+        agent_kwargs["action_timeout"] = 120.0
+    agent = Agent(**agent_kwargs)
     try:
         history = await agent.run(max_steps=int(max_steps))
         result = history.final_result()
