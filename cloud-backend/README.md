@@ -34,13 +34,13 @@ The backend now has an extensible specialist registry with these agent identitie
 
 Registration is not a claim that every adapter is connected. The `GET /capabilities` endpoint explicitly distinguishes registered agents from configured adapters. In this backend revision, the manager/planner/research/coder reasoning paths use the configured OpenAI-compatible provider, and Browser uses Playwright. Terminal, GitHub write, Drive, Android phone, general filesystem, document, data and automation adapters are not yet wired into the cloud runtime; those operations must be executed by an authorized connected adapter or are reported unavailable. The Android app already has separate local connectors and action-dispatch systems; they are not silently simulated by this backend.
 
-The Manager requests a bounded structured plan and dispatches specialist steps. Specialist output is stored with explicit verification metadata. Generated code or model reasoning is not reported as executed code. Browser output is verified only to the extent that a real Playwright navigation and non-empty page extraction succeeded.
+The Manager requests a bounded structured dependency graph and dispatches independent specialist steps in parallel. Agent handoffs and results are recorded as structured task events, and dependent specialists receive prior result context. Specialist output is stored with explicit verification metadata. Generated code or model reasoning is not reported as executed code. Browser output is verified only to the extent that a real Playwright navigation and non-empty page extraction succeeded.
 
 ## Task state and API
 
 - `GET /health` — lightweight service health.
 - `GET /agents` — registered specialist agents.
-- `GET /capabilities` — registered capabilities and adapter availability.
+- `GET /capabilities` — registered agents and adapter readiness.\n- `GET /tools` — shared capability registry with adapter availability and risk levels.\n- `POST /tools/{capability_id}/execute` — authenticated capability execution with approval gates.
 - `POST /execute` — authenticated execution; retains the Android client's existing request/response contract.
 - `GET /tasks/{task_id}` — persisted task state, plan and result.
 - `GET /tasks/{task_id}/logs` — task event journal.
