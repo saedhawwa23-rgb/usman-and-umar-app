@@ -67,6 +67,16 @@ class ExecuteRequest(BaseModel):
     think_harder: bool = False
 
 
+
+def _require_bearer_token(authorization: str | None) -> None:
+    expected_token = os.getenv("APP_CLIENT_TOKEN", "").strip()
+    if not expected_token:
+        raise HTTPException(status_code=503, detail="APP_CLIENT_TOKEN is not configured on this backend.")
+    scheme, separator, supplied = (authorization or "").partition(" ")
+    if not separator or scheme.lower() != "bearer" or not supplied.strip() or not hmac.compare_digest(supplied.strip(), expected_token):
+        raise HTTPException(status_code=401, detail="Invalid application token.")
+
+
 def _error_response(status_code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"status": "error", "error": message})
 
@@ -237,13 +247,15 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 @app.get("/agents")
-def agents() -> dict[str, Any]:
+def agents(authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
+    _require_bearer_token(authorization)
     return {"agents": _agent_registry.all()}
 
 
 @app.get("/capabilities")
-def capabilities() -> dict[str, Any]:
-    configured = {"browser", "coder", "planner", "research"}
+def capabilities(authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
+    _require_bearer_token(authorization)
+    configured = {"browser", "coder", "planner"}
     return {"capabilities": [
         {"id": agent["id"], "name": agent["name"], "capabilities": agent["capabilities"],
          "registered": True, "adapter_configured": agent["id"] in configured}
@@ -252,7 +264,8 @@ def capabilities() -> dict[str, Any]:
 
 
 @app.get("/tasks/{task_id}")
-def get_task(task_id: str) -> dict[str, Any]:
+def get_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
+    _require_bearer_token(authorization)
     try:
         return _task_store.get(task_id)
     except KeyError as exc:
@@ -260,7 +273,8 @@ def get_task(task_id: str) -> dict[str, Any]:
 
 
 @app.get("/tasks/{task_id}/logs")
-def get_task_logs(task_id: str) -> dict[str, Any]:
+def get_task_logs(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
+    _require_bearer_token(authorization)
     try:
         _task_store.get(task_id)
         return {"events": _task_store.events(task_id)}
