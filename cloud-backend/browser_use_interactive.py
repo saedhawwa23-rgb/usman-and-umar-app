@@ -34,6 +34,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from inspect import signature
@@ -184,15 +185,6 @@ def _ensure_model(model: str) -> None:
         subprocess.run([executable, "pull", model], check=True)
 
 
-def _kill_existing_chrome_processes() -> None:
-    """Best-effort cleanup for stale Colab browser processes before each task."""
-    try:
-        subprocess.run(["pkill", "-f", "chrome"], check=False)
-    except OSError:
-        # Minimal containers may not provide pkill; Browser Use can still try a clean launch.
-        pass
-
-
 def _playwright_chromium_executable() -> str:
     """Prefer Colab's system Chromium, then use configured/Playwright binaries."""
     for system_path in ("/usr/bin/chromium-browser", "/usr/bin/chromium"):
@@ -214,6 +206,48 @@ def _playwright_chromium_executable() -> str:
     raise RuntimeError(
         "Playwright Chromium executable was not found. Run `/content/venv/bin/playwright install chromium` first."
     )
+
+
+def _start_local_chromium() -> tuple[subprocess.Popen[bytes], str]:
+    """Start an isolated Chromium process and wait for its local CDP endpoint."""
+    executable = _playwright_chromium_executable()
+    user_data_dir = tempfile.mkdtemp(prefix="browser-use-chromium-")
+    process = subprocess.Popen(
+        [
+            executable,
+            "--headless=new",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--remote-debugging-port=9222",
+            f"--user-data-dir={user_data_dir}",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        cdp_version_url = "http://127.0.0.1:9222/json/version"
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError(f"Chromium exited during startup (exit code {process.returncode}).")
+            try:
+                with urlopen(cdp_version_url, timeout=1) as response:
+                    if response.status == 200:
+                        return process, user_data_dir
+            except Exception:
+                time.sleep(0.25)
+        raise RuntimeError("Chromium did not expose its CDP endpoint within 15 seconds.")
+    except Exception:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        shutil.rmtree(user_data_dir, ignore_errors=True)
+        raise
 
 
 def _select_provider(
@@ -251,7 +285,6 @@ async def run_browser_task(
     OPENROUTER_API_KEY is used and
     model overrides OPENROUTER_MODEL. Without either key, Ollama is used.
     """
-    _kill_existing_chrome_processes()
     if not isinstance(task, str) or not task.strip():
         raise ValueError("Provide a non-empty browser task.")
     domains = _validate_domains(allowed_domains)
@@ -297,33 +330,16 @@ async def run_browser_task(
         llm = ChatOllama(model=selected_model)
         print(f"Using local Ollama model: {selected_model}")
 
-    # Incognito profile and no default extensions keep this browser session isolated.
+    # Connect Browser Use to the isolated local Chromium process over CDP.
     os.environ["BROWSER_USE_ACTION_TIMEOUT_S"] = "120"
     os.environ["BROWSER_USE_CDP_TIMEOUT_S"] = "60"
-    executable_path = _playwright_chromium_executable()
-    print(f"Using Chromium executable: {executable_path}")
-    browser_profile = BrowserProfile(
-        headless=True,
-        is_local=True,
-        user_data_dir=None,
-        executable_path=executable_path,
-        use_cloud=False,
-        timeout=120.0,
-        args=[
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-            "--headless=new",
-            "--single-process",
-        ],
-        enable_default_extensions=False,
-    )
     browser = None
+    chromium_process = None
+    chromium_user_data_dir = None
     try:
-        browser_session_kwargs: dict[str, object] = {"browser_profile": browser_profile}
-        if "timeout" in signature(BrowserSession).parameters:
-            browser_session_kwargs["timeout"] = 120.0
-        browser = BrowserSession(**browser_session_kwargs)
+        chromium_process, chromium_user_data_dir = _start_local_chromium()
+        print("Using local Chromium CDP endpoint: http://127.0.0.1:9222")
+        browser = BrowserSession(cdp_url="http://127.0.0.1:9222", use_cloud=False)
         agent_kwargs: dict[str, object] = {
             "task": task.strip(),
             "llm": llm,
@@ -346,8 +362,19 @@ async def run_browser_task(
         traceback.print_exc(file=sys.stderr)
         raise
     finally:
-        if browser is not None:
-            await browser.stop()
+        try:
+            if browser is not None:
+                await browser.stop()
+        finally:
+            if chromium_process is not None and chromium_process.poll() is None:
+                chromium_process.terminate()
+                try:
+                    chromium_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    chromium_process.kill()
+                    chromium_process.wait()
+            if chromium_user_data_dir is not None:
+                shutil.rmtree(chromium_user_data_dir, ignore_errors=True)
 
 
 async def interactive_prompt(
