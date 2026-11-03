@@ -33,7 +33,9 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
+import traceback
 from inspect import signature
 from pathlib import Path
 from typing import Iterable
@@ -190,7 +192,10 @@ def _kill_existing_chrome_processes() -> None:
 
 
 def _playwright_chromium_executable() -> str:
-    """Resolve the Chromium binary installed by `playwright install chromium`."""
+    """Prefer Colab's system Chromium, then use configured/Playwright binaries."""
+    for system_path in ("/usr/bin/chromium-browser", "/usr/bin/chromium"):
+        if os.path.isfile(system_path):
+            return system_path
     configured = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE", "").strip()
     if configured and os.path.isfile(configured):
         return configured
@@ -292,6 +297,7 @@ async def run_browser_task(
 
     # Incognito profile and no default extensions keep this browser session isolated.
     os.environ["BROWSER_USE_ACTION_TIMEOUT_S"] = "120"
+    os.environ["BROWSER_USE_CDP_TIMEOUT_S"] = "60"
     executable_path = _playwright_chromium_executable()
     print(f"Using Chromium executable: {executable_path}")
     browser_profile = BrowserProfile(
@@ -308,30 +314,36 @@ async def run_browser_task(
         ],
         enable_default_extensions=False,
     )
-    browser_session_kwargs: dict[str, object] = {"browser_profile": browser_profile}
-    if "timeout" in signature(BrowserSession).parameters:
-        browser_session_kwargs["timeout"] = 120.0
-    browser = BrowserSession(**browser_session_kwargs)
-    agent_kwargs: dict[str, object] = {
-        "task": task.strip(),
-        "llm": llm,
-        "browser": browser,
-        "max_actions_per_step": 2,
-        "max_failures": 1,
-        "use_vision": False,
-        "extend_system_message": INTERACTIVE_POLICY,
-    }
-    if "action_timeout" in signature(Agent).parameters:
-        agent_kwargs["action_timeout"] = 120.0
-    agent = Agent(**agent_kwargs)
+    browser = None
     try:
+        browser_session_kwargs: dict[str, object] = {"browser_profile": browser_profile}
+        if "timeout" in signature(BrowserSession).parameters:
+            browser_session_kwargs["timeout"] = 120.0
+        browser = BrowserSession(**browser_session_kwargs)
+        agent_kwargs: dict[str, object] = {
+            "task": task.strip(),
+            "llm": llm,
+            "browser": browser,
+            "max_actions_per_step": 2,
+            "max_failures": 1,
+            "use_vision": False,
+            "extend_system_message": INTERACTIVE_POLICY,
+        }
+        if "action_timeout" in signature(Agent).parameters:
+            agent_kwargs["action_timeout"] = 120.0
+        agent = Agent(**agent_kwargs)
         history = await agent.run(max_steps=int(max_steps))
         result = history.final_result()
         if not result:
             return "Browser Use finished without a final result. Review the run history before retrying."
         return str(result)
+    except Exception:
+        print("BrowserSession startup or execution failed; full traceback follows:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        raise
     finally:
-        await browser.stop()
+        if browser is not None:
+            await browser.stop()
 
 
 async def interactive_prompt(
