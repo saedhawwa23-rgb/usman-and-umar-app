@@ -186,25 +186,25 @@ def _ensure_model(model: str) -> None:
 
 
 def _playwright_chromium_executable() -> str:
-    """Prefer Colab's system Chromium, then use configured/Playwright binaries."""
-    for system_path in ("/usr/bin/chromium-browser", "/usr/bin/chromium"):
-        if os.path.isfile(system_path):
-            return system_path
-    configured = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE", "").strip()
-    if configured and os.path.isfile(configured):
-        return configured
-    browser_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
-    if browser_root:
-        candidates = sorted(
-            path for path in Path(browser_root).glob("**/chrome") if path.is_file()
+    """Find an installed Playwright Chromium binary, never a system wrapper."""
+    browser_root = Path(
+        os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/content/.cache/ms-playwright")
+    )
+    candidates = [
+        path
+        for pattern in (
+            "chromium-*/chrome-linux/chrome",
+            "chromium-*/chrome-linux64/chrome",
         )
-        if candidates:
-            return str(candidates[-1])
-    fallback = shutil.which("chromium-browser") or shutil.which("chromium")
-    if fallback:
-        return fallback
+        for path in browser_root.glob(pattern)
+        if path.is_file() and os.access(path, os.X_OK)
+    ]
+    if candidates:
+        candidates.sort(key=lambda path: path.stat().st_mtime)
+        return str(candidates[-1])
     raise RuntimeError(
-        "Playwright Chromium executable was not found. Run `/content/venv/bin/playwright install chromium` first."
+        f"Playwright Chromium was not found under {browser_root}. "
+        "Run `/content/venv/bin/playwright install chromium` first."
     )
 
 
