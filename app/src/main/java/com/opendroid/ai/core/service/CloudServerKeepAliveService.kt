@@ -30,6 +30,7 @@ class CloudServerKeepAliveService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var keepAliveJob: Job? = null
+    private var offlineNotificationShown = false
 
     override fun onCreate() {
         super.onCreate()
@@ -46,11 +47,18 @@ class CloudServerKeepAliveService : Service() {
             keepAliveJob = serviceScope.launch {
                 while (true) {
                     try {
-                        cloudServerClient.pingAll()
+                        val health = cloudServerClient.pingAll()
+                        if (health.isNotEmpty() && health.none { it.online }) {
+                            showOfflineNotification()
+                        } else if (health.any { it.online }) {
+                            clearOfflineNotification()
+                        }
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
-                        // A transient network error must not stop later health checks.
+                        // A failed request means the Colab server is unavailable. Keep the
+                        // loop alive so a later health check can clear the notification.
+                        showOfflineNotification()
                     }
                     delay(INTERVAL_MS)
                 }
@@ -81,6 +89,30 @@ class CloudServerKeepAliveService : Service() {
             NotificationChannel(CHANNEL_ID, "Cluster keep-alive", NotificationManager.IMPORTANCE_LOW)
                 .apply { description = "Periodic health checks for enabled OpenSwarm servers" },
         )
+        manager.createNotificationChannel(
+            NotificationChannel(OFFLINE_CHANNEL_ID, "Colab server alerts", NotificationManager.IMPORTANCE_DEFAULT)
+                .apply { description = "Alerts when every configured Colab server is offline" },
+        )
+    }
+
+    private fun showOfflineNotification() {
+        if (offlineNotificationShown) return
+        offlineNotificationShown = true
+        val notification = NotificationCompat.Builder(this, OFFLINE_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentTitle("Colab Server Offline")
+            .setContentText("Colab Server Offline. Please restart your Colab notebook.")
+            .setStyle(NotificationCompat.BigTextStyle().bigText("Colab Server Offline. Please restart your Colab notebook."))
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(OFFLINE_NOTIFICATION_ID, notification)
+    }
+
+    private fun clearOfflineNotification() {
+        if (!offlineNotificationShown) return
+        offlineNotificationShown = false
+        getSystemService(NotificationManager::class.java).cancel(OFFLINE_NOTIFICATION_ID)
     }
 
     override fun onDestroy() {
@@ -94,7 +126,9 @@ class CloudServerKeepAliveService : Service() {
         const val ACTION_START = "com.opendroid.ai.action.START_CLOUD_KEEP_ALIVE"
         const val ACTION_STOP = "com.opendroid.ai.action.STOP_CLOUD_KEEP_ALIVE"
         private const val CHANNEL_ID = "openswarm_cluster_keep_alive"
+        private const val OFFLINE_CHANNEL_ID = "openswarm_colab_offline"
         private const val NOTIFICATION_ID = 3041
+        private const val OFFLINE_NOTIFICATION_ID = 3042
         private const val INTERVAL_MS = 5 * 60 * 1000L
 
         fun start(context: Context) {
