@@ -40,7 +40,9 @@ The Manager requests a bounded structured dependency graph and dispatches indepe
 
 - `GET /health` — lightweight service health.
 - `GET /agents` — registered specialist agents.
-- `GET /capabilities` — registered agents and adapter readiness.\n- `GET /tools` — shared capability registry with adapter availability and risk levels.\n- `POST /tools/{capability_id}/execute` — authenticated capability execution with approval gates.
+- `GET /capabilities` — registered agents and adapter readiness.
+- `GET /tools` — shared capability registry with adapter availability and risk levels.
+- `POST /tools/{capability_id}/execute` — authenticated capability execution with approval gates.
 - `POST /execute` — authenticated execution; retains the Android client's existing request/response contract.
 - `GET /tasks/{task_id}` — persisted task state, plan and result.
 - `GET /tasks/{task_id}/logs` — task event journal.
