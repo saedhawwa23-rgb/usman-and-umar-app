@@ -6,6 +6,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from typing import Any
 
 TASK_STATES = {"PENDING", "PLANNING", "READY", "RUNNING", "VERIFYING", "COMPLETED",
@@ -28,6 +29,8 @@ _ALLOWED = {
 class TaskStateStore:
     def __init__(self, path: str | None = None) -> None:
         self.path = path or os.getenv("OPENSWARM_DB_PATH", "/tmp/usman-openswarm.sqlite3")
+        if self.path != ":memory:":
+            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         self._lock = threading.RLock()
         self._initialize()
 
@@ -36,8 +39,20 @@ class TaskStateStore:
         connection.row_factory = sqlite3.Row
         return connection
 
+    @contextmanager
+    def _db(self):
+        db = self._connect()
+        try:
+            yield db
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     def _initialize(self) -> None:
-        with self._lock, self._connect() as db:
+        with self._lock, self._db() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS tasks (
                 task_id TEXT PRIMARY KEY, prompt TEXT NOT NULL, state TEXT NOT NULL,
                 plan_json TEXT NOT NULL DEFAULT '[]', result_json TEXT,
@@ -50,7 +65,7 @@ class TaskStateStore:
 
     def create(self, task_id: str, prompt: str) -> dict[str, Any]:
         now = time.time()
-        with self._lock, self._connect() as db:
+        with self._lock, self._db() as db:
             db.execute("INSERT INTO tasks(task_id,prompt,state,created_at,updated_at) VALUES(?,?,?,?,?)",
                        (task_id, prompt, "PENDING", now, now))
             db.execute("INSERT INTO task_events(task_id,event,to_state,created_at) VALUES(?,?,?,?)",
@@ -64,7 +79,8 @@ class TaskStateStore:
             raise KeyError(f"Unknown task: {task_id}")
         value = dict(row)
         value["plan"] = json.loads(value.pop("plan_json"))
-        value["result"] = json.loads(value.pop("result_json")) if value.get("result_json") else None
+        result_json = value.pop("result_json")
+        value["result"] = json.loads(result_json) if result_json else None
         return value
 
     def transition(self, task_id: str, state: str, event: str, detail: dict[str, Any] | None = None) -> dict[str, Any]:
