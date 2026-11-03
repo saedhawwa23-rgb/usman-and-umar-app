@@ -1,4 +1,4 @@
-"""Authenticated FastAPI entrypoint for direct Browser Use and OpenSwarm execution."""
+"""Authenticated FastAPI entrypoint for direct Playwright and OpenSwarm execution."""
 from __future__ import annotations
 
 import asyncio
@@ -42,16 +42,13 @@ def _load_ai_execution_functions(openswarm_requested: bool) -> None:
     global run_browser_task, run_openswarm_task, NVIDIA_DEFAULT_MODEL
     try:
         if openswarm_requested and run_openswarm_task is None:
-            import browser_use  # noqa: F401  # installed by the background Colab cell
-            import langchain  # noqa: F401
+            import langchain_openai  # noqa: F401
             import langgraph  # noqa: F401
             import playwright  # noqa: F401
             from openswarm_agent import run_openswarm_task as loaded_swarm
 
             run_openswarm_task = loaded_swarm
         if not openswarm_requested and run_browser_task is None:
-            import browser_use  # noqa: F401  # installed by the background Colab cell
-            import langchain  # noqa: F401
             import playwright  # noqa: F401
             from browser_use_interactive import (
                 NVIDIA_DEFAULT_MODEL as loaded_model,
