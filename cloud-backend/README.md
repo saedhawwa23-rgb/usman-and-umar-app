@@ -7,73 +7,81 @@ sdk: docker
 app_port: 7860
 ---
 
-# USMAN AND UMAR OpenSwarm Multi-Agent Backend
+# USMAN AND UMAR — OpenSwarm backend
 
-This FastAPI service uses raw Playwright for public-page scraping and optional named-link clicks. The optional Python OpenSwarm route keeps its Manager/Browser/Coder graph; its browser specialist also uses raw Playwright.
+FastAPI backend for the Android workspace. Browser execution uses direct Playwright; the Python backend does not require the `browser-use` package.
 
-The browser helper accepts a public `http(s)` URL and returns the page's body text. For a click action, it finds the requested link by text, follows it, and returns the destination page text. Private/local hostnames and credential-bearing URLs are rejected. The scraper does not sign in, submit forms, handle payments, bypass CAPTCHAs, or change account settings.
+## Current OpenSwarm architecture
+
+The backend now has an extensible specialist registry with these agent identities:
+
+- Manager / Orchestrator
+- Planner
+- Research
+- Browser
+- Coding
+- Terminal
+- GitHub
+- File Manager
+- Automation
+- Android Phone
+- Data Analysis
+- Document
+- Drive
+- Security
+- Verification
+- Delivery
+
+Registration is not a claim that every adapter is connected. The `GET /capabilities` endpoint explicitly distinguishes registered agents from configured adapters. In this backend revision, the manager/planner/research/coder reasoning paths use the configured OpenAI-compatible provider, and Browser uses Playwright. Terminal, GitHub write, Drive, Android phone, general filesystem, document, data and automation adapters are not yet wired into the cloud runtime; those operations must be executed by an authorized connected adapter or are reported unavailable. The Android app already has separate local connectors and action-dispatch systems; they are not silently simulated by this backend.
+
+The Manager requests a bounded structured plan and dispatches specialist steps. Specialist output is stored with explicit verification metadata. Generated code or model reasoning is not reported as executed code. Browser output is verified only to the extent that a real Playwright navigation and non-empty page extraction succeeded.
+
+## Task state and API
+
+- `GET /health` — lightweight service health.
+- `GET /agents` — registered specialist agents.
+- `GET /capabilities` — registered capabilities and adapter availability.
+- `POST /execute` — authenticated execution; retains the Android client's existing request/response contract.
+- `GET /tasks/{task_id}` — persisted task state, plan and result.
+- `GET /tasks/{task_id}/logs` — task event journal.
+
+Task states include `PENDING`, `PLANNING`, `READY`, `RUNNING`, `VERIFYING`, `COMPLETED`, `WAITING_FOR_USER`, `PAUSED`, `FAILED`, `RETRYING`, and `CANCELLED`. The SQLite store defaults to `/tmp/usman-openswarm.sqlite3` and can be redirected with `OPENSWARM_DB_PATH`. Colab's local filesystem is ephemeral: this database survives process restarts only while the underlying runtime storage remains available. It is not a cross-runtime durable store.
+
+`POST /execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and JSON with `task_id` and `prompt`. It returns the result string in the existing `{"result":"..." }` envelope. OpenSwarm results contain a JSON report with specialist outputs and verification state. The endpoint is request/response execution, not a background job queue; the app's existing persistent Task Manager remains the client-side task history.
 
 ## Run in Google Colab
 
-Use `USMAN_COLAB_BACKEND.ipynb` from the repository. It installs FastAPI, Playwright and the optional OpenSwarm dependencies, installs Playwright-managed Chromium, starts the server on port 7860, then launches a Cloudflare Quick Tunnel.
+Use `USMAN_COLAB_BACKEND.ipynb`. Add these values in Colab **Secrets** and grant notebook access:
 
-Add these values in Colab **Secrets** and grant notebook access:
+- `APP_CLIENT_TOKEN`: strong random Bearer token; configure the same value in the Android app.
+- `NVIDIA_API_KEY`: preferred OpenAI-compatible reasoning provider.
+- `OPENROUTER_API_KEY`: alternative provider; the default model is `openrouter/free`, optionally overridden by `OPENROUTER_MODEL`.
 
-- `APP_CLIENT_TOKEN`: a strong random Bearer token. Configure the same value in the Android app.
-- `NVIDIA_API_KEY`: preferred provider for OpenSwarm reasoning.
-- `OPENROUTER_API_KEY`: fallback provider for OpenSwarm reasoning when `NVIDIA_API_KEY` is unset. The default model is `openrouter/free`; override it with optional `OPENROUTER_MODEL`.
+Public-page Playwright scraping does not need an inference key. OpenSwarm planning/reasoning does need a configured provider key. A model advertised as free can still have availability, rate, quota or routing limits; no paid API is mandatory for ordinary local Android actions.
 
-Raw browser scraping does not require an inference API key. The optional OpenSwarm route requires `NVIDIA_API_KEY` or `OPENROUTER_API_KEY`.
+The notebook installs Playwright-managed Chromium and starts FastAPI. Tunnel URLs are temporary unless the selected tunnel provider explicitly guarantees a reserved domain. Colab sessions can disconnect or expire; periodic pings cannot override Google's runtime and quota limits. Treat a tunnel or Colab server as available only after a real health check.
 
-The Quick Tunnel cell prints a temporary `https://….trycloudflare.com` URL. Copy that base URL—without `/execute`—into the Android app's **Task Manager → Cloud Browser Use settings → Cloud Backend URL**. The app appends `/execute` automatically. Quick Tunnel URLs are not reserved and may change after the tunnel or Colab runtime restarts; update the Android setting when a new URL is printed. Keep the Colab runtime and tunnel process running while using the API. Protect the Android Bearer token because the tunnel URL is publicly reachable.
+## Security boundaries
 
-## API
+- API requests require a Bearer token.
+- Browser navigation is limited to public HTTP(S) hostnames and the request's allowlist.
+- Private/local hostnames and credential-bearing URLs are rejected.
+- Browser execution is bounded by a server timeout and one execution slot.
+- High-impact capabilities require explicit approval in the capability registry.
+- Unconfigured adapters fail explicitly; they do not return fabricated success.
+- Secrets must remain in Colab Secrets or the Android protected credential store, never in source control or task logs.
 
-`GET /health` returns `{"status":"ok"}` and only confirms the server is running.
+Browser automation does not bypass CAPTCHAs, logins, paywalls or access controls. Browser form submission, purchasing and account changes are not enabled by this scraper.
 
-`POST /execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and JSON with `task_id` plus `prompt`. Browser plugin requests pass the URL in the prompt directly to Playwright. An explicit link phrase can trigger a click, for example `Open "About" on https://example.com`. An FMHY request without a URL starts at `https://fmhy.net`; requests such as `Find an image generator on FMHY` use the matching link text. `openswarm_agent` continues to use the optional Manager Agent graph.
+## Tests
 
-```json
-{
-  "task_id": "task-123",
-  "prompt": "https://docs.python.org/3/tutorial/"
-}
-```
-
-FMHY example:
-
-```json
-{
-  "task_id": "task-fmhy-123",
-  "prompt": "Find an image generator on FMHY",
-  "plugin_id": "fmhy_browser"
-}
-```
-
-A successful response is `{"result":"<extracted page text>"}`. Execution is bounded by a server-side timeout and all failures remain JSON errors. Configuration, validation, rate-limit, and execution failures return JSON errors with appropriate HTTP status codes. The endpoint allows up to 20 requests per source IP per minute and runs one browser task at a time.
-
-Full Python tracebacks are written to the backend server log for diagnosis and are not sent over the public API, where they could expose credentials or runtime internals. In the supplied Colab notebook the log is `/tmp/usman-fastapi.log`; inspect it with:
-
-```bash
-!tail -n 100 /tmp/usman-fastapi.log
-```
-
-## Docker or Render deployment
-
-The Dockerfile installs the dependencies in `requirements.txt` and Playwright-managed Chromium, then copies the FastAPI, scraper, provider, and OpenSwarm modules. For Hugging Face Spaces or another Docker host, place the contents of `cloud-backend/` at the deployment repository root and set `APP_CLIENT_TOKEN`. Configure an inference key only when using OpenSwarm. For Render, the included manifest installs Chromium during the build.
-
-## Local development
-
-From `cloud-backend/`, install `requirements.txt`, install Playwright Chromium with `python -m playwright install chromium`, then run:
+From `cloud-backend/`:
 
 ```sh
-APP_CLIENT_TOKEN=local-test-token \
-NVIDIA_API_KEY=your-nvidia-key \
-python -m uvicorn main:app --host 0.0.0.0 --port 7860
+python -m pip install -r requirements.txt
+python -m playwright install chromium
+python -m compileall -q .
+python -m unittest discover -v
 ```
 
-Set an inference key only if you plan to use OpenSwarm. Run the backend contract and provider-selection tests with:
-
-```sh
-python -m unittest -v test_auth.py
-```
+GitHub Actions runs backend syntax and unit/contract tests on changes to this directory.
