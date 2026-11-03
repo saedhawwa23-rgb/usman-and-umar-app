@@ -18,7 +18,7 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_agent_and_capability_endpoints_require_bearer_auth(self):
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
-            for path in ("/agents", "/capabilities", "/tasks/missing", "/tasks/missing/logs"):
+            for path in ("/agents", "/capabilities", "/tools", "/tasks/missing", "/tasks/missing/logs"):
                 response = await self.client.get(path)
                 self.assertEqual(response.status_code, 401, path)
 
@@ -36,6 +36,17 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
         github = next(item for item in capabilities.json()["capabilities"] if item["id"] == "github")
         self.assertTrue(browser["adapter_configured"])
         self.assertFalse(github["adapter_configured"])
+
+
+    async def test_unconfigured_tool_fails_closed_even_when_approved(self):
+        with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            response = await self.client.post(
+                "/tools/terminal.execute",
+                headers={"Authorization": "Bearer test-secret"},
+                json={"payload": {"command": "echo unsafe"}, "approved": True},
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("no configured execution adapter", response.json()["detail"])
 
     async def test_task_inspection_returns_not_found_for_unknown_task(self):
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
