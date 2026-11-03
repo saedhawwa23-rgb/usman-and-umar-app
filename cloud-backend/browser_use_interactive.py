@@ -238,7 +238,7 @@ async def run_browser_task(
     )
 
     try:
-        from browser_use import Agent, Browser, ChatOllama, ChatOpenAI
+        from browser_use import Agent, BrowserProfile, BrowserSession, ChatOllama, ChatOpenAI
     except ImportError as exc:
         raise RuntimeError(
             "Browser Use is not installed. In a Colab cell run: %pip install -U browser-use"
@@ -259,19 +259,19 @@ async def run_browser_task(
         print(f"Using local Ollama model: {selected_model}")
 
     # Incognito profile and no default extensions keep this browser session isolated.
-    browser = Browser(
+    browser_profile = BrowserProfile(
         headless=True,
         user_data_dir=None,
-        allowed_domains=domains,
-        enable_default_extensions=False,
-        extra_chromium_args=[
+        args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--disable-gpu",
             "--headless=new",
             "--single-process",
         ],
+        enable_default_extensions=False,
     )
+    browser = BrowserSession(browser_profile=browser_profile)
     agent = Agent(
         task=task.strip(),
         llm=llm,
