@@ -41,7 +41,7 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_unconfigured_tool_fails_closed_even_when_approved(self):
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
             response = await self.client.post(
-                "/tools/terminal.execute",
+                "/tools/terminal.execute/execute",
                 headers={"Authorization": "Bearer test-secret"},
                 json={"payload": {"command": "echo unsafe"}, "approved": True},
             )
