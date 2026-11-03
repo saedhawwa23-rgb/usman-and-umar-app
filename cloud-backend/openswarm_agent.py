@@ -46,7 +46,7 @@ def _manager_plan(prompt: str, plugin_ids: list[str], max_steps: int) -> dict[st
 
 async def _run_specialist(agent_id: str, objective: str, state: dict[str, Any]) -> dict[str, Any]:
     if agent_id == "browser":
-        match = re.search(r"https?://\\S+", objective, re.IGNORECASE) or re.search(r"https?://\\S+", state["prompt"], re.IGNORECASE)
+        match = re.search(r"https?://\S+", objective, re.IGNORECASE) or re.search(r"https?://\S+", state["prompt"], re.IGNORECASE)
         url = match.group(0).rstrip(".,;:!?)]}") if match else ""
         if not url and "fmhy_browser" in state.get("plugins", []):
             url = "https://fmhy.net"
