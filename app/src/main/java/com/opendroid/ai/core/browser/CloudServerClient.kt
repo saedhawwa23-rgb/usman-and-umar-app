@@ -29,6 +29,17 @@ data class CloudServerHealth(
     val error: String? = null,
 )
 
+
+/** Agent metadata returned by a live OpenSwarm backend. */
+data class RemoteOpenSwarmAgent(
+    val id: String,
+    val name: String,
+    val description: String,
+    val capabilities: List<String>,
+    val requiresModel: Boolean,
+    val adapterConfigured: Boolean,
+)
+
 /** Shared network path for cluster health checks, chat, and workspace cloud tasks. */
 @Singleton
 class CloudServerClient @Inject constructor(
@@ -124,6 +135,49 @@ class CloudServerClient @Inject constructor(
             }
         }
         throw lastError ?: IOException("All configured healthy cloud servers failed.")
+    }
+
+
+    /** Reads the real agent roster and adapter readiness from the fastest healthy configured backend. */
+    suspend fun fetchOpenSwarmAgents(): List<RemoteOpenSwarmAgent> {
+        val configured = settingsRepository.cloudServers.first()
+            .filter { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
+        check(configured.isNotEmpty()) { "Enable and configure a cloud server first." }
+        val healthy = probeServers(configured).filter { it.online }
+        check(healthy.isNotEmpty()) { "No configured OpenSwarm server is healthy." }
+        val server = configured.first { candidate -> candidate.id == healthy.first().serverId }
+        val baseUrl = normalizeServerBase(server.url)
+        fun getJson(path: String): JSONObject {
+            val request = Request.Builder().url("$baseUrl$path")
+                .header("Authorization", "Bearer ${server.token}").get().build()
+            client.newCall(request).execute().use { response ->
+                val body = response.body?.string().orEmpty()
+                if (!response.isSuccessful) error("OpenSwarm $path returned HTTP ${response.code}: ${body.take(300)}")
+                return JSONObject(body)
+            }
+        }
+        val capabilityItems = getJson("/capabilities").optJSONArray("capabilities") ?: JSONArray()
+        val readiness = buildMap<String, Boolean> {
+            for (index in 0 until capabilityItems.length()) {
+                val item = capabilityItems.optJSONObject(index) ?: continue
+                put(item.optString("id"), item.optBoolean("adapter_configured", false))
+            }
+        }
+        val agentItems = getJson("/agents").optJSONArray("agents") ?: JSONArray()
+        return buildList {
+            for (index in 0 until agentItems.length()) {
+                val item = agentItems.optJSONObject(index) ?: continue
+                val caps = item.optJSONArray("capabilities") ?: JSONArray()
+                add(RemoteOpenSwarmAgent(
+                    id = item.optString("id"),
+                    name = item.optString("name"),
+                    description = item.optString("description"),
+                    capabilities = (0 until caps.length()).map { caps.optString(it) },
+                    requiresModel = item.optBoolean("requires_model", false),
+                    adapterConfigured = readiness[item.optString("id")] == true,
+                ))
+            }
+        }
     }
 
     private suspend fun probeServers(servers: List<CloudServerConfig>): List<CloudServerHealth> = coroutineScope {
