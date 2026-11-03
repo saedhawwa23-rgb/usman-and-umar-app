@@ -34,6 +34,7 @@ import re
 import shutil
 import subprocess
 import time
+from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 from urllib.request import urlopen
@@ -178,6 +179,35 @@ def _ensure_model(model: str) -> None:
         subprocess.run([executable, "pull", model], check=True)
 
 
+def _kill_existing_chrome_processes() -> None:
+    """Best-effort cleanup for stale Colab browser processes before each task."""
+    try:
+        subprocess.run(["pkill", "-f", "chrome"], check=False)
+    except OSError:
+        # Minimal containers may not provide pkill; Browser Use can still try a clean launch.
+        pass
+
+
+def _playwright_chromium_executable() -> str:
+    """Resolve the Chromium binary installed by `playwright install chromium`."""
+    configured = os.environ.get("PLAYWRIGHT_CHROMIUM_EXECUTABLE", "").strip()
+    if configured and os.path.isfile(configured):
+        return configured
+    browser_root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+    if browser_root:
+        candidates = sorted(
+            path for path in Path(browser_root).glob("**/chrome") if path.is_file()
+        )
+        if candidates:
+            return str(candidates[-1])
+    fallback = shutil.which("chromium-browser") or shutil.which("chromium")
+    if fallback:
+        return fallback
+    raise RuntimeError(
+        "Playwright Chromium executable was not found. Run `/content/venv/bin/playwright install chromium` first."
+    )
+
+
 def _select_provider(
     requested_model: str | None,
     nvidia_key: str | None,
@@ -213,6 +243,7 @@ async def run_browser_task(
     OPENROUTER_API_KEY is used and
     model overrides OPENROUTER_MODEL. Without either key, Ollama is used.
     """
+    _kill_existing_chrome_processes()
     if not isinstance(task, str) or not task.strip():
         raise ValueError("Provide a non-empty browser task.")
     domains = _validate_domains(allowed_domains)
@@ -262,6 +293,8 @@ async def run_browser_task(
     browser_profile = BrowserProfile(
         headless=True,
         user_data_dir=None,
+        executable_path=_playwright_chromium_executable(),
+        timeout=120.0,
         args=[
             "--no-sandbox",
             "--disable-dev-shm-usage",
