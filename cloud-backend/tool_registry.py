@@ -38,8 +38,13 @@ class CapabilityRegistry:
         else:
             self._executors[capability.id] = executor
 
+    def get(self, capability_id: str) -> Capability | None:
+        return self._capabilities.get(capability_id)
+
     def describe(self) -> list[dict[str, Any]]:
-        return [{**asdict(item), "available": item.id in self._executors} for item in self._capabilities.values()]
+        return [{**asdict(item), "available": item.id in self._executors,
+                 "adapter_configured": item.id in self._executors}
+                for item in self._capabilities.values()]
 
     async def execute(self, capability_id: str, payload: dict[str, Any], approved: bool = False) -> dict[str, Any]:
         capability = self._capabilities.get(capability_id)
@@ -51,3 +56,41 @@ class CapabilityRegistry:
         if executor is None:
             raise RuntimeError(f"Capability {capability_id} is registered but has no configured execution adapter")
         return await asyncio.wait_for(executor(payload), timeout=60)
+
+
+def build_default_capability_registry() -> CapabilityRegistry:
+    registry = CapabilityRegistry()
+
+    async def browser_extract(payload: dict[str, Any]) -> dict[str, Any]:
+        from browser_scraper import run_playwright_task
+        url = str(payload.get("url") or "").strip()
+        if not url:
+            raise ValueError("browser.extract requires a URL.")
+        allowed = payload.get("allowed_domains") or []
+        if not isinstance(allowed, list) or any(not isinstance(item, str) for item in allowed):
+            raise ValueError("allowed_domains must be a list of hostnames.")
+        text = await run_playwright_task(url, action="scrape", allowed_domains=allowed or None)
+        return {"url": url, "text": text, "verified": bool(text.strip())}
+
+    entries = (
+        Capability("browser.extract", "Navigate to an approved public URL and extract page text.", "cloud", ("network",), "low"),
+        Capability("research.search", "Search the web and collect cited sources.", "cloud", ("network",), "low"),
+        Capability("code.generate", "Generate or review source code using the configured reasoning provider.", "cloud", ("model",), "low"),
+        Capability("terminal.execute", "Run a command in an isolated, policy-controlled execution environment.", "cloud", ("terminal",), "critical"),
+        Capability("github.read", "Read authorized GitHub repository resources.", "cloud", ("github.read",), "low"),
+        Capability("github.write", "Create branches, commits, pushes and pull requests.", "cloud", ("github.write",), "high"),
+        Capability("files.read", "Read files from an authorized workspace.", "cloud", ("files",), "low"),
+        Capability("files.write", "Create or modify files in an authorized workspace.", "cloud", ("files",), "high"),
+        Capability("automation.execute", "Execute an approved registered workflow.", "cloud", ("automation",), "high"),
+        Capability("android.intent", "Request an approved Android intent through the connected app.", "android", ("android",), "high"),
+        Capability("android.accessibility", "Execute an explicitly approved Accessibility workflow.", "android", ("accessibility",), "critical"),
+        Capability("data.analyze", "Analyze structured data in a configured runtime.", "cloud", ("files",), "low"),
+        Capability("documents.create", "Generate a document using a configured document adapter.", "cloud", ("files",), "low"),
+        Capability("drive.search", "Search files in an authorized Google Drive account.", "cloud", ("drive.read",), "low"),
+        Capability("drive.upload", "Upload a file to an authorized Google Drive account.", "cloud", ("drive.write",), "high"),
+        Capability("verification.check", "Verify an operation using independent execution evidence.", "cloud", (), "low"),
+        Capability("delivery.package", "Package and report verified task artifacts.", "cloud", ("files",), "low"),
+    )
+    for item in entries:
+        registry.register(item, browser_extract if item.id == "browser.extract" else None)
+    return registry
