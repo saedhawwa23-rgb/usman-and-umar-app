@@ -3,7 +3,7 @@ import unittest
 
 from agent_registry import build_default_registry
 from task_state import TaskStateStore
-from tool_registry import Capability, CapabilityRegistry
+from tool_registry import Capability, CapabilityRegistry, build_default_capability_registry
 
 
 class AgentRegistryTests(unittest.TestCase):
@@ -32,6 +32,13 @@ class TaskStateTests(unittest.TestCase):
 
 
 class CapabilityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_default_registry_exposes_real_and_unconfigured_adapters_separately(self):
+        registry = build_default_capability_registry()
+        descriptions = {item["id"]: item for item in registry.describe()}
+        self.assertTrue(descriptions["browser.extract"]["adapter_configured"])
+        self.assertFalse(descriptions["github.write"]["adapter_configured"])
+        self.assertFalse(descriptions["drive.upload"]["adapter_configured"])
+
     async def test_high_risk_capability_requires_approval(self):
         registry = CapabilityRegistry()
         async def run(_payload):
