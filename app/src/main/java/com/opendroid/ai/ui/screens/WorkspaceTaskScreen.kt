@@ -528,7 +528,10 @@ private fun TaskCard(
                     color = AppTheme.colors.textSecondary,
                     fontSize = 10.sp,
                 )
-                Button(onClick = { onRun(task) }) { Text("Approve & Resume") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onRun(task) }) { Text("Approve & Resume") }
+                    Button(onClick = { onCancel(task) }) { Text("Cancel") }
+                }
             }
             if (task.state == TaskState.WAITING_USER.name && task.notes.contains("AI code blocks were NOT executed")) {
                 Text("Code awaits review. Nothing from the model response was executed.", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
