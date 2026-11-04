@@ -236,6 +236,10 @@ class WorkspaceTaskViewModel @Inject constructor(
                 approveCloudTask(task)
                 return@launch
             }
+            if (task.state == TaskState.PAUSED.name) {
+                resumeCloudTask(task)
+                return@launch
+            }
             val mode = modeOf(task) ?: run {
                 _message.value = "This task has no supported execution mode."
                 return@launch
@@ -345,6 +349,122 @@ class WorkspaceTaskViewModel @Inject constructor(
                 _message.value = "OpenSwarm completed with a verified execution result."
             }
             else -> error("Cloud backend returned no verifiable OpenSwarm result; task was not marked successful.")
+        }
+    }
+
+
+    fun pauseCloudTask(task: WorkspaceTaskEntity) {
+        viewModelScope.launch {
+            try {
+                check(task.toolId?.startsWith("hybrid:CLOUD_OPENSWARM") == true) {
+                    "Only a cloud OpenSwarm task can be paused remotely."
+                }
+                check(task.state == TaskState.RUNNING.name) { "Only a running task can be paused." }
+                val response = withContext(Dispatchers.IO) {
+                    cloudServerClient.controlTask(task.id, "pause")
+                }
+                val serverId = runCatching { JSONObject(response).optString("_cloud_server_id") }
+                    .getOrNull()?.takeIf { it.isNotBlank() }
+                repository.recordPauseCheckpoint(task.id, response, serverId)
+                _message.value = "OpenSwarm paused at a safe specialist boundary. Completed steps are preserved."
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                _message.value = failure.message ?: "Could not pause the cloud task."
+            }
+        }
+    }
+
+    fun cancelCloudTask(task: WorkspaceTaskEntity) {
+        viewModelScope.launch {
+            try {
+                check(task.toolId?.startsWith("hybrid:CLOUD_OPENSWARM") == true) {
+                    "Only a cloud OpenSwarm task can be cancelled remotely."
+                }
+                check(task.state in setOf(
+                    TaskState.RUNNING.name, TaskState.PAUSED.name,
+                    TaskState.WAITING_APPROVAL.name, TaskState.WAITING_USER.name,
+                )) { "This task cannot be cancelled from its current state." }
+                val savedServerId = task.notes.substringAfter("OpenSwarm paused:\\n", "")
+                    .takeIf { it != task.notes }
+                    ?.let { runCatching { JSONObject(it).optString("_cloud_server_id") }.getOrNull() }
+                    ?.takeIf { it.isNotBlank() }
+                    ?: runCatching {
+                        val approval = task.notes.substringAfter("OpenSwarm approval request:\\n", "")
+                        if (approval == task.notes) "" else JSONObject(approval).optString("_cloud_server_id")
+                    }.getOrNull()?.takeIf { it.isNotBlank() }
+                withContext(Dispatchers.IO) {
+                    cloudServerClient.controlTask(task.id, "cancel", savedServerId)
+                }
+                repository.transition(task.id, TaskState.CANCELLED, "openswarm_user_cancelled")
+                _message.value = "OpenSwarm task cancelled."
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                _message.value = failure.message ?: "Could not cancel the cloud task."
+            }
+        }
+    }
+
+    fun resumeCloudTask(task: WorkspaceTaskEntity) {
+        viewModelScope.launch {
+            try {
+                check(task.toolId?.startsWith("hybrid:CLOUD_OPENSWARM") == true) {
+                    "Only a cloud OpenSwarm task can be resumed remotely."
+                }
+                check(task.state == TaskState.PAUSED.name) { "Only a paused task can be resumed." }
+                val checkpoint = task.notes.substringAfter("OpenSwarm paused:\\n", "")
+                val savedServerId = checkpoint.takeIf { it != task.notes }
+                    ?.let { runCatching { JSONObject(it).optString("_cloud_server_id") }.getOrNull() }
+                    ?.takeIf { it.isNotBlank() }
+                var current = repository.transition(task.id, TaskState.READY, "openswarm_resume_requested")
+                current = repository.transition(task.id, TaskState.QUEUED, "openswarm_resume_queued")
+                current = repository.transition(task.id, TaskState.RUNNING, "openswarm_resume_started")
+                val response = withContext(Dispatchers.IO) {
+                    cloudServerClient.controlTask(task.id, "resume", savedServerId)
+                }
+                val envelope = runCatching { JSONObject(response) }.getOrNull()
+                val result = envelope?.optString("result")?.takeIf { it.isNotBlank() } ?: response
+                val serverId = envelope?.optString("_cloud_server_id")?.takeIf { it.isNotBlank() } ?: savedServerId
+                val report = runCatching { JSONObject(result) }.getOrNull()
+                    ?: error("Cloud resume returned no structured task report; it was not marked successful.")
+                when {
+                    report.optString("status") == "PAUSED" -> {
+                        repository.recordPauseCheckpoint(task.id, result, serverId)
+                        _message.value = "OpenSwarm remains paused. The latest checkpoint is saved."
+                    }
+                    report.optString("status") == "CANCELLED" -> {
+                        repository.transition(task.id, TaskState.CANCELLED, "openswarm_remote_cancelled")
+                        _message.value = "OpenSwarm task was cancelled remotely."
+                    }
+                    report.optString("status") == "WAITING_FOR_USER" -> {
+                        repository.recordApprovalRequest(task.id, result, cloudServerId = serverId)
+                        _message.value = "OpenSwarm needs approval before its next high-impact action."
+                    }
+                    report.optBoolean("verified", false) -> {
+                        repository.recordOutcome(task.id, true, outputRedacted = result.take(20_000), event = "openswarm_resumed")
+                        _message.value = "OpenSwarm resumed and completed with verified execution evidence."
+                    }
+                    else -> {
+                        repository.recordPendingUserReview(task.id, result, event = "openswarm_resume_requires_review")
+                        _message.value = "OpenSwarm resumed but returned an unverified result. It is saved for review."
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val fresh = tasks.value.firstOrNull { it.id == task.id } ?: task
+                if (fresh.state == TaskState.RUNNING.name) {
+                    runCatching {
+                        repository.recordOutcome(
+                            taskId = task.id, success = false, errorCode = "CLOUD_RESUME_FAILED",
+                            errorMessageRedacted = failure.message?.take(500) ?: "Cloud resume failed.",
+                            event = "openswarm_resume",
+                        )
+                    }
+                }
+                _message.value = failure.message ?: "Could not resume the cloud task."
+            }
         }
     }
 
