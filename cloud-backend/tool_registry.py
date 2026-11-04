@@ -218,7 +218,7 @@ def build_default_capability_registry(memory_store: Any | None = None) -> Capabi
             response.raise_for_status()
         parser = _DuckDuckGoResultParser()
         parser.feed(response.text)
-        sources = []
+        candidates = []
         for item in parser.results:
             raw_href = item["href"].strip()
             if not raw_href:
@@ -231,11 +231,39 @@ def build_default_capability_registry(memory_store: Any | None = None) -> Capabi
                 _public_http_url(target)
             except (ValueError, ImportError):
                 continue
-            sources.append({"title": re.sub(r"\\s+", " ", item["title"]).strip(),
-                            "url": target})
-            if len(sources) >= limit:
+            candidates.append({"title": re.sub(r"\\s+", " ", item["title"]).strip(),
+                               "url": target})
+            if len(candidates) >= limit:
                 break
-        return {"query": query, "sources": sources, "verified": bool(sources)}
+
+        semaphore = asyncio.Semaphore(3)
+
+        async def retrieve_source(source: dict[str, str]) -> dict[str, Any]:
+            hostname = urlsplit(source["url"]).hostname
+            if not hostname:
+                return {**source, "retrieved": False, "retrieval_error": "invalid_hostname"}
+            async with semaphore:
+                try:
+                    page = await registry.execute("browser.extract", {
+                        "url": source["url"], "allowed_domains": [hostname],
+                    })
+                    content = str(page.get("text") or "").strip()
+                    if page.get("verified") is not True or not content:
+                        return {**source, "retrieved": False, "retrieval_error": "empty_or_unverified_page"}
+                    return {**source, "content": content[:5000], "retrieved": True}
+                except Exception as exc:
+                    return {**source, "retrieved": False, "retrieval_error": type(exc).__name__}
+
+        fetched = await asyncio.gather(*(retrieve_source(source) for source in candidates[:5]))
+        evidence = [source for source in fetched if source.get("retrieved") is True]
+        unavailable = [{"title": source["title"], "url": source["url"],
+                        "error": source.get("retrieval_error", "unavailable")}
+                       for source in fetched if source.get("retrieved") is not True]
+        return {
+            "query": query, "sources": evidence, "unavailable_sources": unavailable,
+            "retrieved_count": len(evidence), "verified": bool(evidence),
+            "verification": "Source-page text was retrieved through Playwright; citations identify retrieved pages but do not independently certify factual claims.",
+        }
 
 
     async def file_read(payload: dict[str, Any]) -> dict[str, Any]:
