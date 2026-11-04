@@ -304,9 +304,11 @@ def pause_task(task_id: str, authorization: str | None = Header(default=None, al
     _require_bearer_token(authorization)
     try:
         task = _task_store.get(task_id)
+        if task["state"] == "PAUSE_REQUESTED":
+            return task
         if task["state"] != "RUNNING":
             raise HTTPException(status_code=409, detail=f"Only a RUNNING task can be paused; current state is {task['state']}.")
-        return _task_store.transition(task_id, "PAUSED", "user_requested_pause")
+        return _task_store.transition(task_id, "PAUSE_REQUESTED", "user_requested_pause")
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -315,7 +317,7 @@ def pause_task(task_id: str, authorization: str | None = Header(default=None, al
 def cancel_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
     _require_bearer_token(authorization)
     cancellable = {"PENDING", "PLANNING", "READY", "RUNNING", "VERIFYING",
-                   "WAITING_FOR_USER", "PAUSED", "RETRYING"}
+                   "WAITING_FOR_USER", "PAUSE_REQUESTED", "PAUSED", "RETRYING"}
     try:
         task = _task_store.get(task_id)
         if task["state"] not in cancellable:
