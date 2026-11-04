@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
-import android.net.Uri
+import androidx.core.net.toUri
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
@@ -381,7 +381,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private suspend fun openUrl(context: Context, rawUrl: String): String {
-        val uri = Uri.parse(rawUrl.trim())
+        val uri = rawUrl.trim().toUri()
         require(uri.scheme.equals("https", true) || uri.scheme.equals("http", true)) {
             "Only HTTP and HTTPS URLs can be opened."
         }
