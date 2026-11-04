@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import re
+from html.parser import HTMLParser
+from urllib.parse import parse_qs, urljoin, urlsplit
+
+import httpx
 from dataclasses import asdict, dataclass
 from typing import Any, Awaitable, Callable
 
@@ -58,6 +63,30 @@ class CapabilityRegistry:
         return await asyncio.wait_for(executor(payload), timeout=60)
 
 
+
+class _DuckDuckGoResultParser(HTMLParser):
+    """Extract result title links from DuckDuckGo's lightweight HTML endpoint."""
+    def __init__(self) -> None:
+        super().__init__()
+        self.results: list[dict[str, str]] = []
+        self._capture_title = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        classes = set((values.get("class") or "").split())
+        if tag == "a" and "result__a" in classes:
+            self.results.append({"href": values.get("href") or "", "title": ""})
+            self._capture_title = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._capture_title:
+            self._capture_title = False
+
+    def handle_data(self, data: str) -> None:
+        if self._capture_title and self.results:
+            self.results[-1]["title"] += data
+
+
 def build_default_capability_registry() -> CapabilityRegistry:
     registry = CapabilityRegistry()
 
@@ -72,9 +101,40 @@ def build_default_capability_registry() -> CapabilityRegistry:
         text = await run_playwright_task(url, action="scrape", allowed_domains=allowed or None)
         return {"url": url, "text": text, "verified": bool(text.strip())}
 
+    async def research_search(payload: dict[str, Any]) -> dict[str, Any]:
+        query = str(payload.get("query") or "").strip()
+        if not query:
+            raise ValueError("research.search requires a non-empty query.")
+        limit = max(1, min(int(payload.get("limit", 5)), 10))
+        async with httpx.AsyncClient(timeout=20, follow_redirects=False, headers={
+            "User-Agent": "USMAN-AND-UMAR-OpenSwarm/1.0 (public web research)"
+        }) as client:
+            response = await client.get("https://html.duckduckgo.com/html/", params={"q": query})
+            response.raise_for_status()
+        parser = _DuckDuckGoResultParser()
+        parser.feed(response.text)
+        sources = []
+        for item in parser.results:
+            raw_href = item["href"].strip()
+            if not raw_href:
+                continue
+            candidate = urljoin("https://html.duckduckgo.com", raw_href)
+            redirect_query = parse_qs(urlsplit(candidate).query)
+            target = (redirect_query.get("uddg") or [candidate])[0]
+            try:
+                from browser_scraper import _public_http_url
+                _public_http_url(target)
+            except (ValueError, ImportError):
+                continue
+            sources.append({"title": re.sub(r"\\s+", " ", item["title"]).strip(),
+                            "url": target})
+            if len(sources) >= limit:
+                break
+        return {"query": query, "sources": sources, "verified": bool(sources)}
+
     entries = (
         Capability("browser.extract", "Navigate to an approved public URL and extract page text.", "cloud", ("network",), "low"),
-        Capability("research.search", "Search the web and collect cited sources.", "cloud", ("network",), "low"),
+        Capability("research.search", "Search public web results and return source titles and URLs.", "cloud", ("network",), "low"),
         Capability("code.generate", "Generate or review source code using the configured reasoning provider.", "cloud", ("model",), "low"),
         Capability("terminal.execute", "Run a command in an isolated, policy-controlled execution environment.", "cloud", ("terminal",), "critical"),
         Capability("github.read", "Read authorized GitHub repository resources.", "cloud", ("github.read",), "low"),
@@ -92,5 +152,6 @@ def build_default_capability_registry() -> CapabilityRegistry:
         Capability("delivery.package", "Package and report verified task artifacts.", "cloud", ("files",), "low"),
     )
     for item in entries:
-        registry.register(item, browser_extract if item.id == "browser.extract" else None)
+        executor = browser_extract if item.id == "browser.extract" else research_search if item.id == "research.search" else None
+        registry.register(item, executor)
     return registry
