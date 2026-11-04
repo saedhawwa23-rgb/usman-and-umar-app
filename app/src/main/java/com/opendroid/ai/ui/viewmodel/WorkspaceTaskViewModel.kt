@@ -232,6 +232,10 @@ class WorkspaceTaskViewModel @Inject constructor(
 
     fun runTask(task: WorkspaceTaskEntity) {
         viewModelScope.launch {
+            if (task.state == TaskState.WAITING_APPROVAL.name) {
+                approveCloudTask(task)
+                return@launch
+            }
             val mode = modeOf(task) ?: run {
                 _message.value = "This task has no supported execution mode."
                 return@launch
@@ -313,15 +317,76 @@ class WorkspaceTaskViewModel @Inject constructor(
         _message.value = "Offline — this task is WAITING_FOR_NETWORK. No AI app was opened and no cloud request was sent."
     }
 
-    private suspend fun executeCloud(task: WorkspaceTaskEntity) = withContext(Dispatchers.IO) {
+    private suspend fun executeCloud(
+        task: WorkspaceTaskEntity,
+        approvedStepIds: List<String> = emptyList(),
+    ) = withContext(Dispatchers.IO) {
         val target = task.toolId.orEmpty().substringAfterLast(':', "auto")
-        val body = postToCloudServers(task.id, promptOf(task), "openswarm_agent", target, 15, thinkHarder = false)
-        val result = runCatching { JSONObject(body).optString("result").takeIf { it.isNotBlank() } ?: body }.getOrDefault(body)
-        repository.recordOutcome(task.id, true, outputRedacted = result.take(20_000), event = "openswarm_cloud")
-        _message.value = "OpenSwarm completed with an actual result."
+        val body = postToCloudServers(
+            task.id, promptOf(task), "openswarm_agent", target, 15,
+            thinkHarder = false, approvedStepIds = approvedStepIds,
+        )
+        val result = runCatching {
+            JSONObject(body).optString("result").takeIf { it.isNotBlank() } ?: body
+        }.getOrDefault(body)
+        val report = runCatching { JSONObject(result) }.getOrNull()
+        when {
+            report?.optString("status") == "WAITING_FOR_USER" -> {
+                repository.recordApprovalRequest(task.id, result)
+                _message.value = "OpenSwarm paused safely. Review the requested high-impact steps, then approve to resume."
+            }
+            report != null && !report.optBoolean("verified", false) -> {
+                repository.recordPendingUserReview(task.id, result, event = "openswarm_result_requires_review")
+                _message.value = "OpenSwarm returned an unverified result. It is saved for review and is not marked complete."
+            }
+            report?.optBoolean("verified", false) == true -> {
+                repository.recordOutcome(task.id, true, outputRedacted = result.take(20_000), event = "openswarm_cloud")
+                _message.value = "OpenSwarm completed with a verified execution result."
+            }
+            else -> error("Cloud backend returned no verifiable OpenSwarm result; task was not marked successful.")
+        }
     }
 
-    private suspend fun postToCloudServers(taskId: String, prompt: String, pluginId: String, target: String, maxSteps: Int, thinkHarder: Boolean = false): String {
+    fun approveCloudTask(task: WorkspaceTaskEntity) {
+        viewModelScope.launch {
+            try {
+                check(hasValidatedInternet()) { "Internet is required to resume this cloud approval." }
+                val approvalJson = task.notes.substringAfter("OpenSwarm approval request:\\n", "")
+                check(approvalJson.isNotBlank()) { "The saved approval request is missing. Refresh the task result before approving." }
+                val approvalItems = JSONObject(approvalJson).optJSONArray("approval_required")
+                    ?: error("The approval request has no step list.")
+                val approvedIds = (0 until approvalItems.length()).mapNotNull { index ->
+                    approvalItems.optJSONObject(index)?.optString("step_id")?.takeIf { it.isNotBlank() }
+                }.distinct()
+                check(approvedIds.isNotEmpty()) { "There are no pending approval steps to approve." }
+
+                var current = repository.transition(task.id, TaskState.READY, "openswarm_user_approved")
+                current = repository.transition(task.id, TaskState.QUEUED, "openswarm_approval_queued")
+                current = repository.transition(task.id, TaskState.RUNNING, "openswarm_approval_resumed")
+                _message.value = "Approval recorded. Resuming OpenSwarm with the approved steps..."
+                executeCloud(current, approvedIds)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val fresh = tasks.value.firstOrNull { it.id == task.id } ?: task
+                if (fresh.state == TaskState.RUNNING.name) {
+                    runCatching {
+                        repository.recordOutcome(
+                            taskId = task.id, success = false, errorCode = "APPROVAL_RESUME_FAILED",
+                            errorMessageRedacted = failure.message?.take(500) ?: "Approval resume failed.",
+                            event = "openswarm_approval_resume",
+                        )
+                    }
+                }
+                _message.value = failure.message ?: "Could not resume the approved OpenSwarm task."
+            }
+        }
+    }
+
+    private suspend fun postToCloudServers(
+        taskId: String, prompt: String, pluginId: String, target: String, maxSteps: Int,
+        thinkHarder: Boolean = false, approvedStepIds: List<String> = emptyList(),
+    ): String {
         val targetId = when (target.lowercase()) {
             "auto" -> null
             "server1", "server 1" -> "legacy-1"
@@ -335,6 +400,7 @@ class WorkspaceTaskViewModel @Inject constructor(
             pluginId = pluginId,
             targetId = targetId,
             thinkHarder = thinkHarder,
+            approvedStepIds = approvedStepIds,
             onLog = { log -> _message.value = log },
         )
     }
