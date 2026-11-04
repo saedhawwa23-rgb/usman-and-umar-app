@@ -186,6 +186,19 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(store.get("approval-task")["state"], "COMPLETED")
                 self.assertEqual(executor.await_count, 1)
 
+
+    async def test_stale_approval_cannot_execute_without_saved_task_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(os.path.join(directory, "approval.sqlite"))
+            with patch.object(openswarm_agent, "TASKS", store):
+                with self.assertRaisesRegex(RuntimeError, "No saved pending-approval record"):
+                    await openswarm_agent.run_openswarm_task(
+                        task_id="lost-task", prompt="Push an old change", plugin_id=None,
+                        allowed_domains=[], max_steps=5, approved_step_ids=["step-1"],
+                    )
+                with self.assertRaises(KeyError):
+                    store.get("lost-task")
+
     async def test_unknown_approval_does_not_advance_waiting_task(self):
         with tempfile.TemporaryDirectory() as directory:
             store = TaskStateStore(directory + "/approval.sqlite")
