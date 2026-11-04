@@ -366,7 +366,7 @@ class WorkspaceTaskViewModel @Inject constructor(
                 val serverId = runCatching { JSONObject(response).optString("_cloud_server_id") }
                     .getOrNull()?.takeIf { it.isNotBlank() }
                 repository.recordPauseCheckpoint(task.id, response, serverId)
-                _message.value = "OpenSwarm paused at a safe specialist boundary. Completed steps are preserved."
+                _message.value = "Pause requested. The current specialist operation may finish before OpenSwarm stops at its next checkpoint."
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
@@ -397,7 +397,7 @@ class WorkspaceTaskViewModel @Inject constructor(
                     cloudServerClient.controlTask(task.id, "cancel", savedServerId)
                 }
                 repository.transition(task.id, TaskState.CANCELLED, "openswarm_user_cancelled")
-                _message.value = "OpenSwarm task cancelled."
+                _message.value = "Cancellation recorded. Any in-flight specialist operation may finish before the next step is stopped."
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
