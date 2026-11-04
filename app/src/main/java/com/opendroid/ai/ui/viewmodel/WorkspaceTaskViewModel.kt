@@ -336,6 +336,14 @@ class WorkspaceTaskViewModel @Inject constructor(
         val originatingServerId = envelope?.optString("_cloud_server_id")?.takeIf { it.isNotBlank() }
         val report = runCatching { JSONObject(result) }.getOrNull()
         when {
+            report?.optString("status") == "PAUSED" -> {
+                repository.recordPauseCheckpoint(task.id, result, originatingServerId)
+                _message.value = "OpenSwarm reached its pause checkpoint. Completed steps are preserved."
+            }
+            report?.optString("status") == "CANCELLED" -> {
+                runCatching { repository.transition(task.id, TaskState.CANCELLED, "openswarm_remote_cancelled") }
+                _message.value = "OpenSwarm task was cancelled at its next checkpoint."
+            }
             report?.optString("status") == "WAITING_FOR_USER" -> {
                 repository.recordApprovalRequest(task.id, result, cloudServerId = originatingServerId)
                 _message.value = "OpenSwarm paused safely. Review the requested high-impact steps, then approve to resume."
