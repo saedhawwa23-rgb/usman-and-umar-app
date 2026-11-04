@@ -456,11 +456,7 @@ class WorkspaceTaskViewModel @Inject constructor(
                 val fresh = tasks.value.firstOrNull { it.id == task.id } ?: task
                 if (fresh.state == TaskState.RUNNING.name) {
                     runCatching {
-                        repository.recordOutcome(
-                            taskId = task.id, success = false, errorCode = "CLOUD_RESUME_FAILED",
-                            errorMessageRedacted = failure.message?.take(500) ?: "Cloud resume failed.",
-                            event = "openswarm_resume",
-                        )
+                        repository.transition(task.id, TaskState.PAUSED, "openswarm_resume_failed")
                     }
                 }
                 _message.value = failure.message ?: "Could not resume the cloud task."
