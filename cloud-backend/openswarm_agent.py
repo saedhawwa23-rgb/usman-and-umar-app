@@ -52,7 +52,11 @@ def _manager_plan(prompt: str, plugin_ids: list[str], max_steps: int) -> dict[st
         dependencies = step.get("depends_on", [])
         if not isinstance(dependencies, list) or any(not isinstance(item, str) for item in dependencies):
             raise RuntimeError(f"Invalid dependencies for {step_id}.")
-        normalized.append({**step, "id": step_id, "depends_on": dependencies})
+        requires_approval = step.get("requires_approval", False)
+        if not isinstance(requires_approval, bool):
+            raise RuntimeError(f"Invalid approval flag for {step_id}.")
+        normalized.append({**step, "id": step_id, "depends_on": dependencies,
+                           "requires_approval": requires_approval})
     known_steps = {step["id"] for step in normalized}
     for step in normalized:
         if any(dep not in known_steps or dep == step["id"] for dep in step["depends_on"]):
