@@ -7,6 +7,7 @@ from agent_registry import build_default_registry
 from task_state import TaskStateStore
 from tool_registry import Capability, CapabilityRegistry, build_default_capability_registry
 import openswarm_agent
+from tool_registry import _DuckDuckGoResultParser
 
 
 class AgentRegistryTests(unittest.TestCase):
@@ -39,6 +40,7 @@ class CapabilityTests(unittest.IsolatedAsyncioTestCase):
         registry = build_default_capability_registry()
         descriptions = {item["id"]: item for item in registry.describe()}
         self.assertTrue(descriptions["browser.extract"]["adapter_configured"])
+        self.assertTrue(descriptions["research.search"]["adapter_configured"])
         self.assertFalse(descriptions["github.write"]["adapter_configured"])
         self.assertFalse(descriptions["drive.upload"]["adapter_configured"])
 
@@ -58,6 +60,18 @@ class CapabilityTests(unittest.IsolatedAsyncioTestCase):
             await registry.execute("drive.upload", {"path": "file.bin"})
 
 
+
+
+class ResearchParserTests(unittest.TestCase):
+    def test_extracts_search_result_title_and_redirect_url(self):
+        parser = _DuckDuckGoResultParser()
+        parser.feed('<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Farticle">Example Article</a>')
+        self.assertEqual(len(parser.results), 1)
+        self.assertEqual(parser.results[0]["title"], "Example Article")
+        from urllib.parse import parse_qs, urljoin, urlsplit
+        candidate = urljoin("https://html.duckduckgo.com", parser.results[0]["href"])
+        target = parse_qs(urlsplit(candidate).query)["uddg"][0]
+        self.assertEqual(target, "https://example.com/article")
 
 class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
     async def test_high_impact_agent_waits_for_explicit_approval_then_resumes_same_task(self):
