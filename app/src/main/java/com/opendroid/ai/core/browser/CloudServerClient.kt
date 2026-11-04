@@ -241,7 +241,6 @@ class CloudServerClient @Inject constructor(
                 // server. Only explicit pre-connect failures are safe to retry.
                 break
             }
-            if (shouldTryNextServer && targetId != null) break
         }
         throw lastError ?: IOException("No configured server owns cloud task $taskId.")
     }
