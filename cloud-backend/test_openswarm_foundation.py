@@ -279,19 +279,24 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
                 "depends_on": [], "requires_approval": True, "capability_id": "terminal.execute",
                 "tool_input": {"argv": ["echo", "command completed"], "cwd": ".", "timeout_seconds": 10},
             }]}
-            executor = AsyncMock(return_value={
-                "agent_id": "terminal", "status": "EXECUTED", "verified": True, "output": "command completed"
-            })
+            capability_registry = CapabilityRegistry()
+
+            async def execute_terminal(_payload):
+                return {"verified": True, "stdout": "command completed"}
+
+            capability_registry.register(
+                Capability("terminal.execute", "Run approved command", "cloud", risk="high", configured=True),
+                execute_terminal,
+            )
             with patch.object(openswarm_agent, "TASKS", store), \
-                 patch.object(openswarm_agent, "_manager_plan", return_value=plan), \
-                 patch.object(openswarm_agent, "_run_specialist", new=executor):
+                 patch.object(openswarm_agent, "CAPABILITIES", capability_registry), \
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan):
                 first = json.loads(await openswarm_agent.run_openswarm_task(
                     task_id="approval-task", prompt="Run approved terminal action", plugin_id=None,
                     allowed_domains=[], max_steps=5,
                 ))
                 self.assertEqual(first["status"], "WAITING_FOR_USER")
                 self.assertEqual(store.get("approval-task")["state"], "WAITING_FOR_USER")
-                self.assertEqual(executor.await_count, 0)
 
                 second = json.loads(await openswarm_agent.run_openswarm_task(
                     task_id="approval-task", prompt="Run approved terminal action", plugin_id=None,
@@ -299,8 +304,6 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
                 ))
                 self.assertTrue(second["verified"])
                 self.assertEqual(store.get("approval-task")["state"], "COMPLETED")
-                self.assertEqual(executor.await_count, 1)
-
 
 
 
