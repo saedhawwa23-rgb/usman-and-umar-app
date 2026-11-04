@@ -249,8 +249,8 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
                 store.transition("pause-task", "PAUSED", "test_pause_requested")
                 return {"agent_id": agent_id, "status": "EXECUTED", "verified": True, "output": "sources"}
             first_executor = AsyncMock(side_effect=pause_after_research)
-            with patch.object(openswarm_agent, "TASKS", store), \\
-                 patch.object(openswarm_agent, "_manager_plan", return_value=plan), \\
+            with patch.object(openswarm_agent, "TASKS", store), \
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan), \
                  patch.object(openswarm_agent, "_run_specialist", new=first_executor):
                 paused = json.loads(await openswarm_agent.run_openswarm_task(
                     task_id="pause-task", prompt="Research then code", plugin_id=None,
@@ -262,7 +262,7 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
             second_executor = AsyncMock(return_value={
                 "agent_id": "coder", "status": "EXECUTED", "verified": True, "output": "code reviewed"
             })
-            with patch.object(openswarm_agent, "TASKS", store), \\
+            with patch.object(openswarm_agent, "TASKS", store), \
                  patch.object(openswarm_agent, "_run_specialist", new=second_executor):
                 completed = json.loads(await openswarm_agent.run_openswarm_task(
                     task_id="pause-task", prompt="Research then code", plugin_id=None,
