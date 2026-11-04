@@ -186,6 +186,39 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+    async def test_coder_writes_generated_workspace_file_only_after_explicit_approval(self):
+        class FakeModel:
+            def invoke(self, _messages):
+                return type("Response", (), {"content": "print('hello from OpenSwarm')\\n"})()
+
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.dict(os.environ, {"OPENSWARM_WORKSPACE": directory}):
+            store = TaskStateStore(os.path.join(directory, "tasks.sqlite"))
+            plan = {"summary": "Create a Python script", "steps": [{
+                "id": "coder-write", "agent_id": "coder", "objective": "Write a hello-world Python script",
+                "depends_on": [], "requires_approval": False,
+                "tool_input": {"output_path": "src/hello.py"},
+            }]}
+            with patch.object(openswarm_agent, "TASKS", store), \
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan), \
+                 patch.object(openswarm_agent, "_model", return_value=FakeModel()):
+                first = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="coder-write-task", prompt="Create a Python script", plugin_id=None,
+                    allowed_domains=[], max_steps=5,
+                ))
+                self.assertEqual(first["status"], "WAITING_FOR_USER")
+                self.assertFalse(os.path.exists(os.path.join(directory, "src", "hello.py")))
+                second = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="coder-write-task", prompt="Create a Python script", plugin_id=None,
+                    allowed_domains=[], max_steps=5, approved_step_ids=["coder-write"],
+                ))
+            artifact = os.path.join(directory, "src", "hello.py")
+            self.assertTrue(os.path.isfile(artifact))
+            self.assertEqual(open(artifact, encoding="utf-8").read(), "print('hello from OpenSwarm')\\n")
+            self.assertTrue(second["verified"])
+            self.assertEqual(second["results"][0]["status"], "GENERATED_AND_WRITTEN")
+            self.assertEqual(second["results"][0]["artifact_path"], "src/hello.py")
+
     async def test_verification_and_delivery_require_verified_dependencies(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"OPENSWARM_WORKSPACE": directory}):
             with open(os.path.join(directory, "evidence.txt"), "w", encoding="utf-8") as handle:
