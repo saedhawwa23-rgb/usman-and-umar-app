@@ -320,19 +320,20 @@ class WorkspaceTaskViewModel @Inject constructor(
     private suspend fun executeCloud(
         task: WorkspaceTaskEntity,
         approvedStepIds: List<String> = emptyList(),
+        targetServerId: String? = null,
     ) = withContext(Dispatchers.IO) {
         val target = task.toolId.orEmpty().substringAfterLast(':', "auto")
         val body = postToCloudServers(
-            task.id, promptOf(task), "openswarm_agent", target, 15,
+            task.id, promptOf(task), "openswarm_agent", targetServerId ?: target, 15,
             thinkHarder = false, approvedStepIds = approvedStepIds,
         )
-        val result = runCatching {
-            JSONObject(body).optString("result").takeIf { it.isNotBlank() } ?: body
-        }.getOrDefault(body)
+        val envelope = runCatching { JSONObject(body) }.getOrNull()
+        val result = envelope?.optString("result")?.takeIf { it.isNotBlank() } ?: body
+        val originatingServerId = envelope?.optString("_cloud_server_id")?.takeIf { it.isNotBlank() }
         val report = runCatching { JSONObject(result) }.getOrNull()
         when {
             report?.optString("status") == "WAITING_FOR_USER" -> {
-                repository.recordApprovalRequest(task.id, result)
+                repository.recordApprovalRequest(task.id, result, cloudServerId = originatingServerId)
                 _message.value = "OpenSwarm paused safely. Review the requested high-impact steps, then approve to resume."
             }
             report != null && !report.optBoolean("verified", false) -> {
@@ -359,12 +360,17 @@ class WorkspaceTaskViewModel @Inject constructor(
                     approvalItems.optJSONObject(index)?.optString("step_id")?.takeIf { it.isNotBlank() }
                 }.distinct()
                 check(approvedIds.isNotEmpty()) { "There are no pending approval steps to approve." }
+                val originatingServerId = JSONObject(approvalJson).optString("_cloud_server_id")
+                    .takeIf { it.isNotBlank() }
+                check(originatingServerId != null) {
+                    "The original cloud server is not recorded. This approval cannot safely resume on a different server."
+                }
 
                 var current = repository.transition(task.id, TaskState.READY, "openswarm_user_approved")
                 current = repository.transition(task.id, TaskState.QUEUED, "openswarm_approval_queued")
                 current = repository.transition(task.id, TaskState.RUNNING, "openswarm_approval_resumed")
                 _message.value = "Approval recorded. Resuming OpenSwarm with the approved steps..."
-                executeCloud(current, approvedIds)
+                executeCloud(current, approvedIds, originatingServerId)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
