@@ -103,7 +103,7 @@ class GitHubAdapterTests(unittest.IsolatedAsyncioTestCase):
         def client_factory(*args, **kwargs):
             return original_client(transport=transport, **kwargs)
 
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}), \\
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}), \
              patch("tool_registry.httpx.AsyncClient", side_effect=client_factory):
             registry = build_default_capability_registry()
             payload = {"repo": "example/repo", "path": "src/demo.py", "content": "print('hello')",
