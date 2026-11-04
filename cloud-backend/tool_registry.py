@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import csv
 import hashlib
 import json
@@ -10,7 +11,7 @@ import re
 from html.parser import HTMLParser
 from pathlib import Path
 from statistics import mean, median
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 import httpx
 from dataclasses import asdict, dataclass
@@ -223,13 +224,112 @@ def build_default_capability_registry() -> CapabilityRegistry:
             raise ValueError("documents.create requires non-empty Markdown content.")
         return await file_write({"path": str(path.relative_to(_workspace_root())), "content": content})
 
+
+    def github_headers() -> dict[str, str]:
+        token = os.getenv("GITHUB_TOKEN", "").strip()
+        if not token:
+            raise RuntimeError("GitHub adapter is not configured. Add GITHUB_TOKEN to Colab Secrets and restart the backend.")
+        return {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "USMAN-AND-UMAR-OpenSwarm"}
+
+    def github_repo_path(payload: dict[str, Any]) -> tuple[str, str]:
+        repo = str(payload.get("repo") or "").strip()
+        path = str(payload.get("path") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+            raise ValueError("GitHub repo must be owner/repository.")
+        if not path or path.startswith("/") or any(part in {"", ".", ".."} for part in path.split("/")):
+            raise ValueError("GitHub path must be a safe repository-relative file path.")
+        return repo, path
+
+    async def github_read(payload: dict[str, Any]) -> dict[str, Any]:
+        repo, path = github_repo_path(payload)
+        ref = str(payload.get("ref") or "HEAD")
+        url = f"https://api.github.com/repos/{repo}/contents/{quote(path, safe='/')}"
+        async with httpx.AsyncClient(timeout=25, headers=github_headers()) as client:
+            response = await client.get(url, params={"ref": ref})
+            response.raise_for_status()
+        item = response.json()
+        if item.get("type") != "file":
+            raise ValueError("github.read only reads a single file, not a directory.")
+        encoded = str(item.get("content") or "").replace("\n", "")
+        content = base64.b64decode(encoded).decode("utf-8")
+        if len(content.encode("utf-8")) > 1_000_000:
+            raise ValueError("GitHub file exceeds the 1 MB text-read limit.")
+        return {"repo": repo, "path": path, "ref": ref, "sha": item.get("sha"),
+                "content": content, "verified": True}
+
+    async def github_write(payload: dict[str, Any]) -> dict[str, Any]:
+        repo, path = github_repo_path(payload)
+        content = payload.get("content")
+        message = str(payload.get("message") or "").strip()
+        if not isinstance(content, str) or not message:
+            raise ValueError("github.write requires text content and a commit message.")
+        encoded = content.encode("utf-8")
+        if len(encoded) > 1_000_000:
+            raise ValueError("GitHub file exceeds the 1 MB write limit.")
+        branch = str(payload.get("branch") or "main").strip()
+        if not re.fullmatch(r"[A-Za-z0-9._/-]+", branch) or ".." in branch or branch.startswith("/"):
+            raise ValueError("Invalid GitHub branch name.")
+        headers = github_headers()
+        base_url = f"https://api.github.com/repos/{repo}"
+        async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+            if payload.get("create_branch") is True:
+                metadata = await client.get(base_url)
+                metadata.raise_for_status()
+                default_branch = metadata.json()["default_branch"]
+                source_ref = await client.get(f"{base_url}/git/ref/heads/{quote(default_branch, safe='/')}")
+                source_ref.raise_for_status()
+                source_sha = source_ref.json()["object"]["sha"]
+                created = await client.post(f"{base_url}/git/refs", json={
+                    "ref": f"refs/heads/{branch}", "sha": source_sha,
+                })
+                created.raise_for_status()
+            file_url = f"{base_url}/contents/{quote(path, safe='/')}"
+            current = await client.get(file_url, params={"ref": branch})
+            sha = None
+            if current.status_code == 200:
+                sha = current.json().get("sha")
+            elif current.status_code != 404:
+                current.raise_for_status()
+            request_body = {"message": message, "content": base64.b64encode(encoded).decode("ascii"),
+                            "branch": branch}
+            if sha:
+                request_body["sha"] = sha
+            updated = await client.put(file_url, json=request_body)
+            updated.raise_for_status()
+            commit = updated.json().get("commit") or {}
+            file_info = updated.json().get("content") or {}
+            check = await client.get(file_url, params={"ref": branch})
+            check.raise_for_status()
+            observed = base64.b64decode(str(check.json().get("content") or "").replace("\n", ""))
+        return {"repo": repo, "path": path, "branch": branch, "commit_sha": commit.get("sha"),
+                "file_sha": file_info.get("sha"), "url": file_info.get("html_url"),
+                "verified": observed == encoded}
+
+    async def github_pull_request(payload: dict[str, Any]) -> dict[str, Any]:
+        repo = str(payload.get("repo") or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+            raise ValueError("GitHub repo must be owner/repository.")
+        head, base = str(payload.get("head") or "").strip(), str(payload.get("base") or "").strip()
+        title, body = str(payload.get("title") or "").strip(), str(payload.get("body") or "")
+        if not head or not base or not title:
+            raise ValueError("github.pull_request requires head, base and title.")
+        async with httpx.AsyncClient(timeout=25, headers=github_headers()) as client:
+            response = await client.post(f"https://api.github.com/repos/{repo}/pulls",
+                                         json={"head": head, "base": base, "title": title, "body": body})
+            response.raise_for_status()
+        result = response.json()
+        return {"repo": repo, "number": result.get("number"), "url": result.get("html_url"),
+                "state": result.get("state"), "verified": bool(result.get("html_url"))}
+
     entries = (
         Capability("browser.extract", "Navigate to an approved public URL and extract page text.", "cloud", ("network",), "low"),
         Capability("research.search", "Search public web results and return source titles and URLs.", "cloud", ("network",), "low"),
         Capability("code.generate", "Generate or review source code using the configured reasoning provider.", "cloud", ("model",), "low"),
         Capability("terminal.execute", "Run a command in an isolated, policy-controlled execution environment.", "cloud", ("terminal",), "critical"),
-        Capability("github.read", "Read authorized GitHub repository resources.", "cloud", ("github.read",), "low"),
-        Capability("github.write", "Create branches, commits, pushes and pull requests.", "cloud", ("github.write",), "high"),
+        Capability("github.read", "Read a file from an authorized GitHub repository.", "cloud", ("github.read",), "low"),
+        Capability("github.write", "Create or update a repository file and optionally create a branch.", "cloud", ("github.write",), "high"),
+        Capability("github.pull_request", "Open a pull request between authorized repository branches.", "cloud", ("github.write",), "high"),
         Capability("files.read", "Read UTF-8 text files inside the configured workspace.", "cloud", ("files",), "low"),
         Capability("files.write", "Create or replace UTF-8 text files inside the configured workspace.", "cloud", ("files",), "high"),
         Capability("files.list", "List entries inside the configured workspace.", "cloud", ("files",), "low"),
@@ -243,11 +343,17 @@ def build_default_capability_registry() -> CapabilityRegistry:
         Capability("verification.check", "Verify an operation using independent execution evidence.", "cloud", (), "low"),
         Capability("delivery.package", "Package and report verified task artifacts.", "cloud", ("files",), "low"),
     )
+    github_configured = bool(os.getenv("GITHUB_TOKEN", "").strip())
     for item in entries:
         executors = {
             "browser.extract": browser_extract, "research.search": research_search,
             "files.read": file_read, "files.write": file_write, "files.list": file_list,
             "data.analyze": data_analyze, "documents.create": document_create,
+            "github.read": github_read, "github.write": github_write,
+            "github.pull_request": github_pull_request,
         }
-        registry.register(item, executors.get(item.id))
+        executor = executors.get(item.id)
+        if item.id.startswith("github.") and not github_configured:
+            executor = None
+        registry.register(item, executor)
     return registry
