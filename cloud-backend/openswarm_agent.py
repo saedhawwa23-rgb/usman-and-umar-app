@@ -87,14 +87,55 @@ async def _run_specialist(agent_id: str, objective: str, state: dict[str, Any]) 
         return {"agent_id": agent_id, "status": "GENERATED", "verified": False, "output": output[:20000]}
     raise CapabilityUnavailableError(f"{agent_id} agent is registered, but its execution adapter is not configured. No operation was attempted.")
 
-async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None, plugin_ids: list[str] | None = None, allowed_domains: list[str], max_steps: int) -> str:
+async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None, plugin_ids: list[str] | None = None, allowed_domains: list[str], max_steps: int, approved_step_ids: list[str] | None = None) -> str:
     plugins = sorted(set(plugin_ids or []) | ({plugin_id} if plugin_id else set()))
-    TASKS.create(task_id, prompt)
+    approved = set(approved_step_ids or [])
     try:
-        TASKS.transition(task_id, "PLANNING", "manager_planning_started")
-        plan = _manager_plan(prompt, plugins, max_steps)
-        TASKS.save_plan(task_id, plan["steps"])
-        TASKS.transition(task_id, "READY", "manager_plan_ready", {"step_count": len(plan["steps"])})
+        existing = TASKS.get(task_id)
+    except KeyError:
+        existing = None
+
+    if existing is None:
+        TASKS.create(task_id, prompt)
+        try:
+            TASKS.transition(task_id, "PLANNING", "manager_planning_started")
+            plan = _manager_plan(prompt, plugins, max_steps)
+            TASKS.save_plan(task_id, plan["steps"])
+            TASKS.transition(task_id, "READY", "manager_plan_ready", {"step_count": len(plan["steps"])})
+        except Exception as exc:
+            try:
+                TASKS.transition(task_id, "FAILED", "planning_failed", {"error_type": type(exc).__name__, "message": str(exc)[:500]})
+            except Exception:
+                pass
+            raise
+    elif existing["state"] == "WAITING_FOR_USER":
+        plan = {"summary": (existing.get("result") or {}).get("summary") or prompt, "steps": existing["plan"]}
+        TASKS.transition(task_id, "READY", "user_approval_received", {"approved_step_ids": sorted(approved)})
+    else:
+        raise RuntimeError(f"Task {task_id} already exists in state {existing['state']}; use a new task ID or resume only a task waiting for approval.")
+
+    # High-impact agent classes always require explicit approval, even if the
+    # planner omitted the flag. This keeps future adapters safe by default.
+    high_impact_agents = {"terminal", "github", "files", "automation", "android", "drive"}
+    approval_steps = {
+        step["id"] for step in plan["steps"]
+        if step.get("requires_approval") is True or step["agent_id"] in high_impact_agents
+    }
+    unknown_approvals = approved - approval_steps
+    if unknown_approvals:
+        raise RuntimeError("Approval contains unknown or non-approval step IDs: " + ", ".join(sorted(unknown_approvals)))
+    awaiting = approval_steps - approved
+    if awaiting:
+        details = [{"step_id": step["id"], "agent_id": step["agent_id"], "objective": step["objective"]}
+                   for step in plan["steps"] if step["id"] in awaiting]
+        report = {"task_id": task_id, "status": "WAITING_FOR_USER", "summary": plan["summary"],
+                  "approval_required": details, "verified": False}
+        TASKS.save_result(task_id, report)
+        TASKS.transition(task_id, "WAITING_FOR_USER", "explicit_approval_required",
+                         {"step_ids": sorted(awaiting)})
+        return json.dumps(report, ensure_ascii=False)
+
+    try:
         TASKS.transition(task_id, "RUNNING", "specialists_started")
         results = []
         pending = {step["id"]: step for step in plan["steps"]}
@@ -110,6 +151,7 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                     "step_id": step["id"], "from_agent": "manager",
                     "to_agent": agent_id, "objective": step["objective"],
                     "depends_on": step["depends_on"],
+                    "approval_granted": step["id"] in approved,
                 })
                 if agent_id in {"manager", "verification", "delivery"}:
                     return {"agent_id": agent_id, "status": "CONTROL_ONLY", "verified": False,
