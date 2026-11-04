@@ -339,7 +339,7 @@ fun WorkspaceTaskScreen(
             when (page) {
                 TaskuaryPage.INBOX -> {
                     item { SectionTitle("INBOX") }
-                    val inbox = tasks.filter { it.state in setOf(TaskState.DRAFT.name, TaskState.WAITING_FOR_NETWORK.name, TaskState.FAILED.name, TaskState.WAITING_USER.name) }
+                    val inbox = tasks.filter { it.state in setOf(TaskState.DRAFT.name, TaskState.WAITING_FOR_NETWORK.name, TaskState.FAILED.name, TaskState.WAITING_USER.name, TaskState.WAITING_APPROVAL.name) }
                     if (inbox.isEmpty()) item { Text("Inbox is clear.", color = AppTheme.colors.textSecondary) }
                     items(inbox, key = { "inbox-${it.id}" }) { task -> TaskCard(task, viewModel::runTask, ::beginDriveUpload) }
                 }
@@ -505,6 +505,10 @@ private fun TaskCard(
             }
             if (task.state == TaskState.WAITING_FOR_NETWORK.name) {
                 Text("Offline — this task will wait. No AI app or server was contacted.", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+            }
+            if (task.state == TaskState.WAITING_APPROVAL.name) {
+                Text("OpenSwarm is paused before a high-impact action. Review the saved approval request before resuming.", color = AccentCyan, fontSize = 12.sp)
+                Button(onClick = { onRun(task) }) { Text("Approve & Resume") }
             }
             if (task.state == TaskState.WAITING_USER.name && task.notes.contains("AI code blocks were NOT executed")) {
                 Text("Code awaits review. Nothing from the model response was executed.", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
