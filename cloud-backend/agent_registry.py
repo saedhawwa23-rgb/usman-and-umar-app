@@ -41,7 +41,7 @@ def build_default_registry() -> AgentRegistry:
         ("planner", "Planner", "Decomposes objectives into ordered, dependency-aware steps.", ("planning", "dependencies"), True),
         ("research", "Research", "Searches public web results, synthesizes source evidence and compares claims.", ("source_synthesis", "source_analysis"), True),
         ("browser", "Browser", "Uses bounded Playwright navigation and page extraction.", ("browser.navigate", "browser.extract", "browser.click"), False),
-        ("coder", "Coding", "Produces code and patches; execution is only claimed when a runner verifies it.", ("code.generate", "code.review"), True),
+        ("coder", "Coding", "Produces code and patches; execution is only claimed when a runner verifies it.", ("code.generate", "code.review", "files.write"), True),
         ("terminal", "Terminal", "Runs approved commands in a configured isolated execution adapter.", ("terminal.execute",), False),
         ("github", "GitHub", "Reads repository files, creates approved commits and opens pull requests through a configured token.", ("github.read", "github.write", "github.pull_request"), False),
         ("files", "File Manager", "Lists, reads and writes files inside the configured workspace.", ("files.list", "files.read", "files.write"), False),
