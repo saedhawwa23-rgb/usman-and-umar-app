@@ -507,7 +507,12 @@ private fun TaskCard(
                 Text("Offline — this task will wait. No AI app or server was contacted.", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
             }
             if (task.state == TaskState.WAITING_APPROVAL.name) {
-                Text("OpenSwarm is paused before a high-impact action. Review the saved approval request before resuming.", color = AccentCyan, fontSize = 12.sp)
+                Text("OpenSwarm is paused before a high-impact action. Review the requested steps before resuming.", color = AccentCyan, fontSize = 12.sp)
+                Text(
+                    task.notes.removePrefix("OpenSwarm approval request:\\n").take(1_200),
+                    color = AppTheme.colors.textSecondary,
+                    fontSize = 10.sp,
+                )
                 Button(onClick = { onRun(task) }) { Text("Approve & Resume") }
             }
             if (task.state == TaskState.WAITING_USER.name && task.notes.contains("AI code blocks were NOT executed")) {
