@@ -200,7 +200,9 @@ class WorkspaceTaskRepository @Inject constructor(
         now: Long = System.currentTimeMillis(),
     ) {
         val task = dao.get(taskId) ?: error("Task not found: $taskId")
-        TaskStateMachine.transition(TaskState.valueOf(task.state), TaskState.PAUSED)
+        if (task.state != TaskState.PAUSED.name) {
+            TaskStateMachine.transition(TaskState.valueOf(task.state), TaskState.PAUSED)
+        }
         val checkpoint = runCatching {
             org.json.JSONObject(output).apply {
                 cloudServerId?.takeIf { it.isNotBlank() }?.let { put("_cloud_server_id", it) }
