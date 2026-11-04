@@ -40,7 +40,7 @@ run_openswarm_task: Any = None
 run_playwright_task: Any = None
 _agent_registry = build_default_registry()
 _task_store = TaskStateStore()
-_capability_registry = build_default_capability_registry()
+_capability_registry = build_default_capability_registry(_task_store)
 
 
 def _load_ai_execution_functions(openswarm_requested: bool) -> None:
