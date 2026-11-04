@@ -235,6 +235,45 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(executor.await_count, 1)
 
 
+
+    async def test_paused_task_resumes_from_last_completed_step(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(os.path.join(directory, "pause.sqlite"))
+            plan = {"summary": "Research then code", "steps": [
+                {"id": "research-1", "agent_id": "research", "objective": "Collect sources",
+                 "depends_on": [], "requires_approval": False},
+                {"id": "coder-1", "agent_id": "coder", "objective": "Draft code from sources",
+                 "depends_on": ["research-1"], "requires_approval": False},
+            ]}
+            async def pause_after_research(agent_id, objective, state):
+                store.transition("pause-task", "PAUSED", "test_pause_requested")
+                return {"agent_id": agent_id, "status": "EXECUTED", "verified": True, "output": "sources"}
+            first_executor = AsyncMock(side_effect=pause_after_research)
+            with patch.object(openswarm_agent, "TASKS", store), \\
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan), \\
+                 patch.object(openswarm_agent, "_run_specialist", new=first_executor):
+                paused = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="pause-task", prompt="Research then code", plugin_id=None,
+                    allowed_domains=[], max_steps=5,
+                ))
+            self.assertEqual(paused["status"], "PAUSED")
+            self.assertEqual(len(paused["results"]), 1)
+
+            second_executor = AsyncMock(return_value={
+                "agent_id": "coder", "status": "EXECUTED", "verified": True, "output": "code reviewed"
+            })
+            with patch.object(openswarm_agent, "TASKS", store), \\
+                 patch.object(openswarm_agent, "_run_specialist", new=second_executor):
+                completed = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="pause-task", prompt="Research then code", plugin_id=None,
+                    allowed_domains=[], max_steps=5,
+                ))
+            self.assertEqual(store.get("pause-task")["state"], "COMPLETED")
+            self.assertTrue(completed["verified"])
+            self.assertEqual([item["step_id"] for item in completed["results"]], ["research-1", "coder-1"])
+            self.assertEqual(first_executor.await_count, 1)
+            self.assertEqual(second_executor.await_count, 1)
+
     async def test_stale_approval_cannot_execute_without_saved_task_record(self):
         with tempfile.TemporaryDirectory() as directory:
             store = TaskStateStore(os.path.join(directory, "approval.sqlite"))
