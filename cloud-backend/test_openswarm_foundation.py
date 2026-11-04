@@ -1,6 +1,7 @@
 import base64
 import os
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import AsyncMock, patch
 import json
@@ -9,6 +10,7 @@ from agent_registry import build_default_registry
 from task_state import TaskStateStore
 from tool_registry import Capability, CapabilityRegistry, build_default_capability_registry
 import openswarm_agent
+import tool_registry
 import httpx
 from tool_registry import _DuckDuckGoResultParser
 
@@ -51,6 +53,7 @@ class CapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(descriptions["github.write"]["adapter_configured"])
         self.assertFalse(descriptions["drive.upload"]["adapter_configured"])
         self.assertFalse(descriptions["memory.read"]["adapter_configured"])
+        self.assertFalse(descriptions["terminal.execute"]["adapter_configured"])
 
     async def test_github_adapters_are_enabled_only_when_colab_token_is_present(self):
         with patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}):
@@ -58,6 +61,26 @@ class CapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(descriptions["github.read"]["adapter_configured"])
         self.assertTrue(descriptions["github.write"]["adapter_configured"])
         self.assertTrue(descriptions["github.pull_request"]["adapter_configured"])
+
+
+    async def test_terminal_requires_approval_and_runs_only_inside_bubblewrap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            command_paths = {"bwrap": "/usr/bin/bwrap", "prlimit": "/usr/bin/prlimit", "echo": "/usr/bin/echo"}
+            with patch.dict(os.environ, {"OPENSWARM_ENABLE_SANDBOX": "1", "OPENSWARM_WORKSPACE": directory}):
+                with patch.object(tool_registry.shutil, "which", side_effect=lambda command: command_paths.get(command)):
+                    with patch.object(tool_registry.subprocess, "run",
+                                      return_value=subprocess.CompletedProcess(["bwrap"], 0, "hello\n", "")) as run:
+                        registry = build_default_capability_registry()
+                        payload = {"argv": ["echo", "hello"], "cwd": ".", "timeout_seconds": 10}
+                        with self.assertRaises(PermissionError):
+                            await registry.execute("terminal.execute", payload)
+                        result = await registry.execute("terminal.execute", payload, approved=True)
+            self.assertTrue(result["verified"])
+            self.assertEqual(result["stdout"], "hello\n")
+            sandbox_argv = run.call_args.args[0]
+            self.assertIn("--unshare-all", sandbox_argv)
+            self.assertIn("--clearenv", sandbox_argv)
+            self.assertFalse(run.call_args.kwargs["shell"])
 
     async def test_high_risk_capability_requires_approval(self):
         registry = CapabilityRegistry()
