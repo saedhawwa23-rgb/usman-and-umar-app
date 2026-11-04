@@ -1,6 +1,8 @@
 """Multi-agent OpenSwarm orchestrator with durable task state and honest capability routing."""
 from __future__ import annotations
 import asyncio, json, os, re
+
+import httpx
 from typing import Any
 from agent_registry import build_default_registry
 from model_provider import NVIDIA_DEFAULT_MODEL, select_provider
@@ -233,7 +235,29 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                     "plugins": plugins, "shared_context": prior, "step": step,
                     "persistent_memory": TASKS.memory_recent(8),
                 })
-            dispatched = await asyncio.gather(*(dispatch(step) for step in ready), return_exceptions=True)
+            async def dispatch_with_retry(step):
+                capability_id = step.get("capability_id") or ""
+                safe_retry = (
+                    step["agent_id"] in {"browser", "research", "coder", "planner", "data"} or
+                    (step["agent_id"] == "files" and capability_id in {"files.read", "files.list"}) or
+                    (step["agent_id"] == "github" and capability_id == "github.read") or
+                    (step["agent_id"] == "memory" and capability_id in {"memory.read", "memory.search"})
+                )
+                for attempt in range(3):
+                    try:
+                        return await dispatch(step)
+                    except Exception as exc:
+                        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                        retryable = isinstance(exc, (TimeoutError, ConnectionError, httpx.TimeoutException, httpx.TransportError)) or status_code in {429, 500, 502, 503, 504}
+                        if not safe_retry or not retryable or attempt == 2:
+                            raise
+                        TASKS.append_event(task_id, "agent_retry", {
+                            "step_id": step["id"], "agent_id": step["agent_id"],
+                            "attempt": attempt + 1, "error_type": type(exc).__name__,
+                            "message": str(exc)[:300],
+                        })
+                        await asyncio.sleep(0.5 * (2 ** attempt))
+            dispatched = await asyncio.gather(*(dispatch_with_retry(step) for step in ready), return_exceptions=True)
             for step, outcome in zip(ready, dispatched):
                 pending.pop(step["id"], None)
                 if isinstance(outcome, BaseException):
