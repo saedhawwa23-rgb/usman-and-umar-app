@@ -67,6 +67,7 @@ class ExecuteRequest(BaseModel):
     plugins: list[str] = Field(default_factory=list, max_length=8)
     browser_max_steps: int = Field(default=15, ge=1, le=30)
     think_harder: bool = False
+    approved_step_ids: list[str] = Field(default_factory=list, max_length=30)
 
 
 class ToolExecuteRequest(BaseModel):
@@ -216,6 +217,7 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
                     plugin_ids=sorted(_requested_plugins(request)),
                     allowed_domains=allowed_domains,
                     max_steps=max_steps,
+                    approved_step_ids=request.approved_step_ids,
                 ), timeout=_EXECUTION_TIMEOUT_SECONDS)
             else:
                 url = _browser_url_from_prompt(request.prompt, fmhy_requested)
