@@ -16,6 +16,16 @@ class WorkspaceTaskRepositoryTest {
     }
 
     @Test
+    fun cloudTaskCanPauseResumeAndCancelSafely() {
+        assertTrue(TaskStateMachine.canTransition(TaskState.RUNNING, TaskState.PAUSED))
+        assertTrue(TaskStateMachine.canTransition(TaskState.PAUSED, TaskState.READY))
+        assertTrue(TaskStateMachine.canTransition(TaskState.PAUSED, TaskState.CANCELLED))
+        assertThrows(InvalidTaskTransition::class.java) {
+            TaskStateMachine.transition(TaskState.SUCCEEDED, TaskState.PAUSED)
+        }
+    }
+
+    @Test
     fun failedOutcomeRequiresErrorCode() {
         val errorCode: String? = null
         assertThrows(IllegalArgumentException::class.java) {
