@@ -134,7 +134,7 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
                 {"id": "deliver-1", "agent_id": "delivery", "objective": "Prepare delivery manifest",
                  "depends_on": ["read-1", "verify-1"], "requires_approval": False},
             ]}
-            with patch.object(openswarm_agent, "TASKS", store), \\
+            with patch.object(openswarm_agent, "TASKS", store), \
                  patch.object(openswarm_agent, "_manager_plan", return_value=plan):
                 report = json.loads(await openswarm_agent.run_openswarm_task(
                     task_id="verify-deliver", prompt="Read and verify evidence", plugin_id=None,
