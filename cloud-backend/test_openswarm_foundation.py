@@ -157,6 +157,29 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
+
+    async def test_safe_specialist_retries_transient_timeout_and_records_event(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(os.path.join(directory, "retry.sqlite"))
+            plan = {"summary": "Research a topic", "steps": [{
+                "id": "research-1", "agent_id": "research", "objective": "Find reliable sources",
+                "depends_on": [], "requires_approval": False,
+            }]}
+            executor = AsyncMock(side_effect=[
+                TimeoutError("temporary network timeout"),
+                {"agent_id": "research", "status": "EXECUTED", "verified": True, "output": "sources retrieved"},
+            ])
+            with patch.object(openswarm_agent, "TASKS", store), \\
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan), \\
+                 patch.object(openswarm_agent, "_run_specialist", new=executor):
+                result = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="retry-task", prompt="Research a topic", plugin_id=None,
+                    allowed_domains=[], max_steps=5,
+                ))
+                self.assertTrue(result["verified"])
+                self.assertEqual(executor.await_count, 2)
+                self.assertIn("agent_retry", [event["event"] for event in store.events("retry-task")])
+
     async def test_high_impact_agent_waits_for_explicit_approval_then_resumes_same_task(self):
         with tempfile.TemporaryDirectory() as directory:
             store = TaskStateStore(directory + "/approval.sqlite")
