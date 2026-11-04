@@ -155,6 +155,37 @@ class WorkspaceTaskRepository @Inject constructor(
         )
     }
 
+
+    suspend fun recordApprovalRequest(
+        taskId: String,
+        output: String,
+        event: String = "openswarm_approval_required",
+        now: Long = System.currentTimeMillis(),
+    ) {
+        val task = dao.get(taskId) ?: error("Task not found: $taskId")
+        TaskStateMachine.transition(TaskState.valueOf(task.state), TaskState.WAITING_APPROVAL)
+        dao.update(task.copy(
+            state = TaskState.WAITING_APPROVAL.name,
+            notes = "OpenSwarm approval request:\n${output.take(20_000)}",
+            updatedAt = now,
+        ))
+        dao.recordExecution(
+            WorkspaceTaskExecutionEntity(
+                taskId = taskId,
+                event = event,
+                fromState = task.state,
+                toState = TaskState.WAITING_APPROVAL.name,
+                attempt = 0,
+                success = null,
+                outputRedacted = output.take(20_000),
+                errorCode = "EXPLICIT_APPROVAL_REQUIRED",
+                errorMessageRedacted = "OpenSwarm paused before a high-impact action; review and approve the listed steps.",
+                startedAt = now,
+                finishedAt = now,
+            ),
+        )
+    }
+
     suspend fun recoverAfterRestart(now: Long = System.currentTimeMillis()): List<WorkspaceTaskEntity> {
         return dao.findInterruptedOrQueued().map { task ->
             if (task.state == TaskState.RUNNING.name) {
