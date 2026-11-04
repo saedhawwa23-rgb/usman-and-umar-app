@@ -62,6 +62,9 @@ class TaskStateStore:
                 event TEXT NOT NULL, from_state TEXT, to_state TEXT,
                 detail_json TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL)""")
             db.execute("CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, id)")
+            db.execute("""CREATE TABLE IF NOT EXISTS agent_memory (
+                memory_key TEXT PRIMARY KEY, value_json TEXT NOT NULL,
+                updated_at REAL NOT NULL)""")
 
     def create(self, task_id: str, prompt: str) -> dict[str, Any]:
         now = time.time()
@@ -126,6 +129,51 @@ class TaskStateStore:
                        (json.dumps(result), now, task_id))
             db.execute("INSERT INTO task_events(task_id,event,detail_json,created_at) VALUES(?,?,?,?)",
                        (task_id, "result_saved", json.dumps({"verified": result.get("verified", False)}), now))
+
+
+    def memory_get(self, key: str) -> dict[str, Any] | None:
+        normalized = str(key or "").strip()
+        if not normalized:
+            raise ValueError("Memory key is required.")
+        with self._lock, self._connect() as db:
+            row = db.execute("SELECT memory_key,value_json,updated_at FROM agent_memory WHERE memory_key=?",
+                             (normalized,)).fetchone()
+        if row is None:
+            return None
+        return {"key": row["memory_key"], "value": json.loads(row["value_json"]),
+                "updated_at": row["updated_at"]}
+
+    def memory_set(self, key: str, value: Any) -> dict[str, Any]:
+        normalized = str(key or "").strip()
+        if not normalized or len(normalized) > 160:
+            raise ValueError("Memory key must contain 1–160 characters.")
+        encoded = json.dumps(value, ensure_ascii=False)
+        if len(encoded.encode("utf-8")) > 100_000:
+            raise ValueError("Memory values are limited to 100 KB.")
+        now = time.time()
+        with self._lock, self._db() as db:
+            db.execute("""INSERT INTO agent_memory(memory_key,value_json,updated_at) VALUES(?,?,?)
+                          ON CONFLICT(memory_key) DO UPDATE SET value_json=excluded.value_json,
+                          updated_at=excluded.updated_at""", (normalized, encoded, now))
+        return {"key": normalized, "value": value, "updated_at": now}
+
+    def memory_search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        terms = [term.lower() for term in str(query or "").split() if len(term) > 2][:8]
+        limit = max(1, min(int(limit), 20))
+        with self._lock, self._connect() as db:
+            rows = db.execute("SELECT memory_key,value_json,updated_at FROM agent_memory ORDER BY updated_at DESC LIMIT 200").fetchall()
+        matches = []
+        for row in rows:
+            haystack = (row["memory_key"] + " " + row["value_json"]).lower()
+            if not terms or any(term in haystack for term in terms):
+                matches.append({"key": row["memory_key"], "value": json.loads(row["value_json"]),
+                                "updated_at": row["updated_at"]})
+                if len(matches) >= limit:
+                    break
+        return matches
+
+    def memory_recent(self, limit: int = 10) -> list[dict[str, Any]]:
+        return self.memory_search("", limit=limit)
 
     def events(self, task_id: str) -> list[dict[str, Any]]:
         with self._lock, self._connect() as db:
