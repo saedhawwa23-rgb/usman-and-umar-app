@@ -8,6 +8,10 @@ import hashlib
 import json
 import os
 import re
+import resource
+import shutil
+import subprocess
+import sys
 from html.parser import HTMLParser
 from pathlib import Path
 from statistics import mean, median
@@ -29,6 +33,83 @@ class Capability:
 
 
 Executor = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
+def _terminal_sandbox_enabled() -> bool:
+    return (
+        sys.platform.startswith("linux")
+        and os.getenv("OPENSWARM_ENABLE_SANDBOX", "").strip().lower() in {"1", "true", "yes"}
+        and shutil.which("bwrap") is not None
+    )
+
+
+async def _terminal_execute(payload: dict[str, Any]) -> dict[str, Any]:
+    if not _terminal_sandbox_enabled():
+        raise RuntimeError(
+            "Isolated terminal is unavailable. Install bubblewrap in the Colab runtime and set "
+            "OPENSWARM_ENABLE_SANDBOX=1; arbitrary unsandboxed shell execution is deliberately disabled."
+        )
+    argv = payload.get("argv")
+    if not isinstance(argv, list) or not argv or len(argv) > 32:
+        raise ValueError("terminal.execute requires an argv list containing 1–32 arguments.")
+    if any(not isinstance(item, str) or not item or len(item) > 4096 or "\x00" in item for item in argv):
+        raise ValueError("Terminal arguments must be non-empty strings of at most 4096 characters.")
+    command_path = shutil.which(argv[0])
+    if not command_path:
+        raise ValueError(f"Command is not installed in the Colab runtime: {argv[0]}")
+    resolved_command = Path(command_path).resolve()
+    if not (resolved_command.is_relative_to(Path("/usr/bin")) or resolved_command.is_relative_to(Path("/bin"))):
+        raise ValueError("Terminal commands must resolve inside /usr/bin or /bin.")
+    workspace = _workspace_root()
+    raw_cwd = str(payload.get("cwd") or ".")
+    cwd = (workspace / raw_cwd).resolve()
+    if not cwd.is_relative_to(workspace) or not cwd.is_dir():
+        raise ValueError("Terminal working directory must be an existing directory inside the OpenSwarm workspace.")
+    timeout_seconds = max(1, min(int(payload.get("timeout_seconds", 20)), 30))
+    bwrap = shutil.which("bwrap")
+    sandbox_argv = [bwrap, "--die-with-parent", "--unshare-all", "--new-session"]
+    for host_path in ("/usr", "/bin", "/lib", "/lib64", "/etc"):
+        if Path(host_path).exists():
+            sandbox_argv.extend(["--ro-bind", host_path, host_path])
+    sandbox_argv.extend([
+        "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+        "--bind", str(workspace), "/workspace",
+        "--chdir", "/workspace" if cwd == workspace else "/workspace/" + cwd.relative_to(workspace).as_posix(),
+        "--clearenv", "--setenv", "PATH", "/usr/bin:/bin",
+        "--setenv", "HOME", "/workspace", "--setenv", "TMPDIR", "/tmp",
+        "--", str(resolved_command), *argv[1:],
+    ])
+
+    def apply_limits() -> None:
+        resource.setrlimit(resource.RLIMIT_CPU, (timeout_seconds, timeout_seconds + 1))
+        resource.setrlimit(resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (20 * 1024 * 1024, 20 * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+        resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))
+
+    def run_command() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            sandbox_argv, cwd="/", env={"PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True, timeout=timeout_seconds + 5,
+            check=False, shell=False, preexec_fn=apply_limits,
+        )
+
+    started = time.monotonic()
+    try:
+        completed = await asyncio.to_thread(run_command)
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"Sandboxed command exceeded {timeout_seconds} seconds.") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Bubblewrap could not start the isolated terminal: {exc}") from exc
+    return {
+        "command": argv, "cwd": cwd.relative_to(workspace).as_posix() or ".",
+        "exit_code": completed.returncode, "stdout": (completed.stdout or "")[:20_000],
+        "stderr": (completed.stderr or "")[:20_000],
+        "duration_ms": int((time.monotonic() - started) * 1000),
+        "sandbox": "bubblewrap-unshare-all-network-disabled",
+        "verified": completed.returncode == 0,
+    }
+
 
 def _workspace_root() -> Path:
     root = Path(os.getenv("OPENSWARM_WORKSPACE", "/content/usman-workspace")).expanduser().resolve()
@@ -350,7 +431,7 @@ def build_default_capability_registry(memory_store: Any | None = None) -> Capabi
         Capability("browser.extract", "Navigate to an approved public URL and extract page text.", "cloud", ("network",), "low"),
         Capability("research.search", "Search public web results and return source titles and URLs.", "cloud", ("network",), "low"),
         Capability("code.generate", "Generate or review source code using the configured reasoning provider.", "cloud", ("model",), "low"),
-        Capability("terminal.execute", "Run a command in an isolated, policy-controlled execution environment.", "cloud", ("terminal",), "critical"),
+        Capability("terminal.execute", "Run an approved command inside a Bubblewrap sandbox with no network and a workspace-only writable mount.", "cloud", ("terminal",), "critical"),
         Capability("github.read", "Read a file from an authorized GitHub repository.", "cloud", ("github.read",), "low"),
         Capability("github.write", "Create or update a repository file and optionally create a branch.", "cloud", ("github.write",), "high"),
         Capability("github.pull_request", "Open a pull request between authorized repository branches.", "cloud", ("github.write",), "high"),
@@ -378,6 +459,7 @@ def build_default_capability_registry(memory_store: Any | None = None) -> Capabi
             "data.analyze": data_analyze, "documents.create": document_create,
             "github.read": github_read, "github.write": github_write,
             "github.pull_request": github_pull_request,
+            "terminal.execute": _terminal_execute if _terminal_sandbox_enabled() else None,
             "memory.read": memory_read if memory_store is not None else None,
             "memory.search": memory_search if memory_store is not None else None,
             "memory.write": memory_write if memory_store is not None else None,
