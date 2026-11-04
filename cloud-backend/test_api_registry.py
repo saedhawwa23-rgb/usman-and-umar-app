@@ -30,7 +30,7 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
         ids = {agent["id"] for agent in agents.json()["agents"]}
         self.assertTrue({"manager", "planner", "research", "browser", "coder", "terminal",
                          "github", "files", "automation", "android", "data", "documents",
-                         "drive", "security", "verification", "delivery"} <= ids)
+                         "drive", "security", "verification", "delivery", "memory"} <= ids)
         self.assertEqual(capabilities.status_code, 200)
         browser = next(item for item in capabilities.json()["capabilities"] if item["id"] == "browser")
         research = next(item for item in capabilities.json()["capabilities"] if item["id"] == "research")
