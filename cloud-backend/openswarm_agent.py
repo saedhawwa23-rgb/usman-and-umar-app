@@ -209,7 +209,7 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                         raise RuntimeError(f"{agent_id} step must select one of its registered capability IDs.")
                     tool_input = dict(step.get("tool_input", {}))
                     for input_key, output_key in (("content_from_step_id", "content"),
-                                                  ("markdown_from_step_id", "markdown")):
+                                                  ("markdown_from_step_id", "markdown"), ("value_from_step_id", "value")):
                         source_step_id = tool_input.pop(input_key, None)
                         if source_step_id:
                             source_result = completed.get(str(source_step_id))
