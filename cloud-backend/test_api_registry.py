@@ -64,7 +64,7 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
                 cancelled = await self.client.post("/tasks/cancel-api/cancel", headers=headers)
             self.assertEqual(paused.status_code, 200)
             self.assertEqual(cancelled.status_code, 200)
-            self.assertEqual(store.get("pause-api")["state"], "PAUSED")
+            self.assertEqual(store.get("pause-api")["state"], "PAUSE_REQUESTED")
             self.assertEqual(store.get("cancel-api")["state"], "CANCELLED")
 
     async def test_resume_endpoint_only_accepts_paused_tasks(self):
