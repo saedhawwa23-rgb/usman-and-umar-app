@@ -1,12 +1,13 @@
 import os
 import unittest
 import tempfile
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 from main import app
 from task_state import TaskStateStore
 import main
+import openswarm_agent
 
 
 class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
@@ -76,7 +77,9 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
             store.transition("resume-api", "RUNNING", "running")
             store.transition("resume-api", "PAUSED", "paused")
             store.save_result("resume-api", {"status": "PAUSED", "results": [], "approved_step_ids": []})
-            with patch.object(main, "_task_store", store), patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            with patch.object(main, "_task_store", store), \
+                 patch.object(openswarm_agent, "run_openswarm_task", new=AsyncMock(return_value='{"status":"COMPLETED"}')), \
+                 patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
                 response = await self.client.post(
                     "/tasks/resume-api/resume", headers={"Authorization": "Bearer test-secret"}
                 )
