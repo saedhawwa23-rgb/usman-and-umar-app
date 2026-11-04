@@ -209,17 +209,17 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = TaskStateStore(directory + "/approval.sqlite")
             plan = {"summary": "Commit the reviewed change", "steps": [{
-                "id": "push-1", "agent_id": "github", "objective": "Push reviewed commit",
+                "id": "push-1", "agent_id": "terminal", "objective": "Run approved terminal action",
                 "depends_on": [], "requires_approval": False,
             }]}
             executor = AsyncMock(return_value={
-                "agent_id": "github", "status": "EXECUTED", "verified": True, "output": "commit pushed"
+                "agent_id": "github", "status": "EXECUTED", "verified": True, "output": "command completed"
             })
             with patch.object(openswarm_agent, "TASKS", store), \
                  patch.object(openswarm_agent, "_manager_plan", return_value=plan), \
                  patch.object(openswarm_agent, "_run_specialist", new=executor):
                 first = json.loads(await openswarm_agent.run_openswarm_task(
-                    task_id="approval-task", prompt="Push the reviewed commit", plugin_id=None,
+                    task_id="approval-task", prompt="Run approved terminal action", plugin_id=None,
                     allowed_domains=[], max_steps=5,
                 ))
                 self.assertEqual(first["status"], "WAITING_FOR_USER")
@@ -227,7 +227,7 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(executor.await_count, 0)
 
                 second = json.loads(await openswarm_agent.run_openswarm_task(
-                    task_id="approval-task", prompt="Push the reviewed commit", plugin_id=None,
+                    task_id="approval-task", prompt="Run approved terminal action", plugin_id=None,
                     allowed_domains=[], max_steps=5, approved_step_ids=["push-1"],
                 ))
                 self.assertTrue(second["verified"])
@@ -315,18 +315,18 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = TaskStateStore(directory + "/approval.sqlite")
             plan = {"summary": "Commit the reviewed change", "steps": [{
-                "id": "push-1", "agent_id": "github", "objective": "Push reviewed commit",
+                "id": "push-1", "agent_id": "terminal", "objective": "Run approved terminal action",
                 "depends_on": [], "requires_approval": False,
             }]}
             with patch.object(openswarm_agent, "TASKS", store), \
                  patch.object(openswarm_agent, "_manager_plan", return_value=plan):
                 await openswarm_agent.run_openswarm_task(
-                    task_id="approval-invalid", prompt="Push the reviewed commit", plugin_id=None,
+                    task_id="approval-invalid", prompt="Run approved terminal action", plugin_id=None,
                     allowed_domains=[], max_steps=5,
                 )
                 with self.assertRaisesRegex(RuntimeError, "unknown or non-approval"):
                     await openswarm_agent.run_openswarm_task(
-                        task_id="approval-invalid", prompt="Push the reviewed commit", plugin_id=None,
+                        task_id="approval-invalid", prompt="Run approved terminal action", plugin_id=None,
                         allowed_domains=[], max_steps=5, approved_step_ids=["wrong-step"],
                     )
                 self.assertEqual(store.get("approval-invalid")["state"], "WAITING_FOR_USER")
