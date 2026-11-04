@@ -201,9 +201,9 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
             async def dispatch(step):
                 agent_id = step["agent_id"]
                 control_state = TASKS.get(task_id)["state"]
-                if control_state in {"PAUSED", "CANCELLED"}:
+                if control_state in {"PAUSE_REQUESTED", "PAUSED", "CANCELLED"}:
                     return {"agent_id": agent_id,
-                            "status": "CONTROL_PAUSED" if control_state == "PAUSED" else "CONTROL_CANCELLED",
+                            "status": "CONTROL_PAUSED" if control_state in {"PAUSE_REQUESTED", "PAUSED"} else "CONTROL_CANCELLED",
                             "verified": False, "output": "Execution stopped at a cooperative control checkpoint."}
                 TASKS.append_event(task_id, "agent_handoff", {
                     "step_id": step["id"], "from_agent": "manager",
@@ -307,10 +307,13 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                     "status": outcome.get("status"), "verified": outcome.get("verified", False),
                 })
             control_state = TASKS.get(task_id)["state"]
-            if control_state in {"PAUSED", "CANCELLED"}:
-                report = {"task_id": task_id, "summary": plan["summary"], "status": control_state,
+            if control_state in {"PAUSE_REQUESTED", "PAUSED", "CANCELLED"}:
+                final_control_state = "CANCELLED" if control_state == "CANCELLED" else "PAUSED"
+                report = {"task_id": task_id, "summary": plan["summary"], "status": final_control_state,
                           "results": results, "approved_step_ids": sorted(approved), "verified": False}
                 TASKS.save_result(task_id, report)
+                if control_state == "PAUSE_REQUESTED":
+                    TASKS.transition(task_id, "PAUSED", "pause_checkpoint_reached")
                 return json.dumps(report, ensure_ascii=False)
             TASKS.save_result(task_id, {"status": "RUNNING", "summary": plan["summary"],
                                         "results": results, "approved_step_ids": sorted(approved),
