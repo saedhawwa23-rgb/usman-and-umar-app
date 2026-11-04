@@ -9,7 +9,7 @@ from tool_registry import build_default_capability_registry
 
 AGENTS = build_default_registry()
 TASKS = TaskStateStore()
-CAPABILITIES = build_default_capability_registry()
+CAPABILITIES = build_default_capability_registry(TASKS)
 
 class CapabilityUnavailableError(RuntimeError):
     pass
