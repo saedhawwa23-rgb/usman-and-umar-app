@@ -298,6 +298,57 @@ def get_task_logs(task_id: str, authorization: str | None = Header(default=None,
 
 
 
+
+@app.post("/tasks/{task_id}/pause")
+def pause_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
+    _require_bearer_token(authorization)
+    try:
+        task = _task_store.get(task_id)
+        if task["state"] != "RUNNING":
+            raise HTTPException(status_code=409, detail=f"Only a RUNNING task can be paused; current state is {task['state']}.")
+        return _task_store.transition(task_id, "PAUSED", "user_requested_pause")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/tasks/{task_id}/cancel")
+def cancel_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
+    _require_bearer_token(authorization)
+    cancellable = {"PENDING", "PLANNING", "READY", "RUNNING", "VERIFYING",
+                   "WAITING_FOR_USER", "PAUSED", "RETRYING"}
+    try:
+        task = _task_store.get(task_id)
+        if task["state"] not in cancellable:
+            raise HTTPException(status_code=409, detail=f"Task cannot be cancelled from {task['state']}.")
+        return _task_store.transition(task_id, "CANCELLED", "user_requested_cancel")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/tasks/{task_id}/resume")
+async def resume_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
+    _require_bearer_token(authorization)
+    try:
+        task = _task_store.get(task_id)
+        if task["state"] != "PAUSED":
+            raise HTTPException(status_code=409, detail=f"Only a PAUSED task can be resumed; current state is {task['state']}.")
+        from openswarm_agent import run_openswarm_task
+        saved_result = task.get("result") or {}
+        result = await asyncio.wait_for(run_openswarm_task(
+            task_id=task_id, prompt=task["prompt"], plugin_id=None, plugin_ids=[],
+            allowed_domains=_allowed_domains_from_prompt(task["prompt"], require_url=False),
+            max_steps=30, approved_step_ids=saved_result.get("approved_step_ids", []),
+        ), timeout=_EXECUTION_TIMEOUT_SECONDS)
+        return {"result": result}
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(status_code=504, detail="Task resume exceeded the server execution timeout.") from exc
+    except Exception as exc:
+        logger.exception("Task resume failed for task_id=%s", task_id)
+        raise HTTPException(status_code=500, detail=_safe_exception_detail(exc)) from exc
+
+
 @app.get("/tools")
 def tools(authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
     _require_bearer_token(authorization)
