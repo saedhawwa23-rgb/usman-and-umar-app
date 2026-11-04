@@ -224,9 +224,9 @@ class CloudServerClient @Inject constructor(
                 if (targetId != null || serverAcceptedRequest) break
             } catch (failure: IOException) {
                 lastError = failure
-                // Once a server accepted the control request, never send it to
-                // another node: the first node may still be completing it.
-                if (targetId != null || serverAcceptedRequest) break
+                // An I/O timeout/reset can happen after the POST reached the
+                // server. Only explicit pre-connect failures are safe to retry.
+                break
             }
             if (shouldTryNextServer && targetId != null) break
         }
