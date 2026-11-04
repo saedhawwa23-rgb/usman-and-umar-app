@@ -189,13 +189,6 @@ android {
     }
 }
 
- 
-// Robolectric downloads its Android framework JAR independently of Gradle's
-// dependency cache. Use Maven Central's canonical hostname rather than
-// repo1.maven.org, which has returned HTTP 429 to GitHub-hosted runners.
-tasks.withType(org.gradle.api.tasks.testing.Test).configureEach {
-    systemProperty 'robolectric.dependency.repo.url', 'https://repo.maven.apache.org/maven2'
-}
 
 // AGP 9 removed `android { kotlinOptions { ... } }`. Under built-in Kotlin the
 // `kotlin { ... }` extension is registered by AGP itself (there is no
