@@ -197,9 +197,27 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                     "depends_on": step["depends_on"],
                     "approval_granted": step["id"] in approved,
                 })
-                if agent_id in {"manager", "verification", "delivery"}:
+                if agent_id == "manager":
                     return {"agent_id": agent_id, "status": "CONTROL_ONLY", "verified": False,
-                            "output": "Control-plane role recorded; no separate execution adapter is attached."}
+                            "output": "Manager handoff recorded; specialist execution is handled by the delegated steps."}
+                if agent_id == "verification":
+                    evidence = [completed[item] for item in step["depends_on"]]
+                    passed = bool(evidence) and all(item.get("verified") is True for item in evidence)
+                    checks = [{"agent_id": item.get("agent_id"), "status": item.get("status"),
+                               "verified": item.get("verified") is True} for item in evidence]
+                    return {"agent_id": agent_id, "status": "VERIFIED" if passed else "VERIFICATION_FAILED",
+                            "verified": passed, "checks": checks,
+                            "output": "All dependency steps returned verified execution evidence." if passed
+                                      else "One or more dependency steps lack verified execution evidence."}
+                if agent_id == "delivery":
+                    artifacts = [completed[item] for item in step["depends_on"]]
+                    passed = bool(artifacts) and all(item.get("verified") is True for item in artifacts)
+                    manifest = {"artifact_count": len(artifacts), "verified": passed,
+                                "artifacts": [{"agent_id": item.get("agent_id"),
+                                               "capability_id": item.get("capability_id"),
+                                               "output": item.get("output")} for item in artifacts]}
+                    return {"agent_id": agent_id, "status": "PACKAGED" if passed else "DELIVERY_BLOCKED",
+                            "verified": passed, "output": json.dumps(manifest, ensure_ascii=False)[:20000]}
                 if agent_id in {"files", "data", "documents", "github", "memory"}:
                     capability_id = step.get("capability_id")
                     allowed_capabilities = {
