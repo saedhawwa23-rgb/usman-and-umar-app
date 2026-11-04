@@ -304,7 +304,7 @@ def pause_task(task_id: str, authorization: str | None = Header(default=None, al
     _require_bearer_token(authorization)
     try:
         task = _task_store.get(task_id)
-        if task["state"] == "PAUSE_REQUESTED":
+        if task["state"] in {"PAUSE_REQUESTED", "PAUSED"}:
             return task
         if task["state"] != "RUNNING":
             raise HTTPException(status_code=409, detail=f"Only a RUNNING task can be paused; current state is {task['state']}.")
