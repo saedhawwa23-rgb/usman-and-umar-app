@@ -8,10 +8,10 @@ import hashlib
 import json
 import os
 import re
-import resource
 import shutil
 import subprocess
 import sys
+import time
 from html.parser import HTMLParser
 from pathlib import Path
 from statistics import mean, median
@@ -40,6 +40,7 @@ def _terminal_sandbox_enabled() -> bool:
         sys.platform.startswith("linux")
         and os.getenv("OPENSWARM_ENABLE_SANDBOX", "").strip().lower() in {"1", "true", "yes"}
         and shutil.which("bwrap") is not None
+        and shutil.which("prlimit") is not None
     )
 
 
@@ -80,18 +81,19 @@ async def _terminal_execute(payload: dict[str, Any]) -> dict[str, Any]:
         "--", str(resolved_command), *argv[1:],
     ])
 
-    def apply_limits() -> None:
-        resource.setrlimit(resource.RLIMIT_CPU, (timeout_seconds, timeout_seconds + 1))
-        resource.setrlimit(resource.RLIMIT_AS, (1024 * 1024 * 1024, 1024 * 1024 * 1024))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (20 * 1024 * 1024, 20 * 1024 * 1024))
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-        resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))
+    prlimit = shutil.which("prlimit")
+    if not prlimit:
+        raise RuntimeError("The Colab runtime does not provide prlimit; isolated terminal execution is disabled.")
+    limited_argv = [
+        prlimit, f"--cpu={timeout_seconds + 1}", "--as=1073741824",
+        "--fsize=20971520", "--nofile=64", "--nproc=32", "--", *sandbox_argv,
+    ]
 
     def run_command() -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            sandbox_argv, cwd="/", env={"PATH": "/usr/bin:/bin"},
+            limited_argv, cwd="/", env={"PATH": "/usr/bin:/bin"},
             capture_output=True, text=True, timeout=timeout_seconds + 5,
-            check=False, shell=False, preexec_fn=apply_limits,
+            check=False, shell=False,
         )
 
     started = time.monotonic()
