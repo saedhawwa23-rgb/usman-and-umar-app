@@ -83,7 +83,6 @@ class CloudServerKeepAliveService : Service() {
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Cluster keep-alive", NotificationManager.IMPORTANCE_LOW)
