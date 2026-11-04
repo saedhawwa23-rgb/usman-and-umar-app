@@ -1,9 +1,12 @@
 import tempfile
 import unittest
+from unittest.mock import AsyncMock, patch
+import json
 
 from agent_registry import build_default_registry
 from task_state import TaskStateStore
 from tool_registry import Capability, CapabilityRegistry, build_default_capability_registry
+import openswarm_agent
 
 
 class AgentRegistryTests(unittest.TestCase):
@@ -54,6 +57,57 @@ class CapabilityTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, "no configured execution adapter"):
             await registry.execute("drive.upload", {"path": "file.bin"})
 
+
+
+class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
+    async def test_high_impact_agent_waits_for_explicit_approval_then_resumes_same_task(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(directory + "/approval.sqlite")
+            plan = {"summary": "Commit the reviewed change", "steps": [{
+                "id": "push-1", "agent_id": "github", "objective": "Push reviewed commit",
+                "depends_on": [], "requires_approval": False,
+            }]}
+            executor = AsyncMock(return_value={
+                "agent_id": "github", "status": "EXECUTED", "verified": True, "output": "commit pushed"
+            })
+            with patch.object(openswarm_agent, "TASKS", store), \
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan), \
+                 patch.object(openswarm_agent, "_run_specialist", new=executor):
+                first = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="approval-task", prompt="Push the reviewed commit", plugin_id=None,
+                    allowed_domains=[], max_steps=5,
+                ))
+                self.assertEqual(first["status"], "WAITING_FOR_USER")
+                self.assertEqual(store.get("approval-task")["state"], "WAITING_FOR_USER")
+                self.assertEqual(executor.await_count, 0)
+
+                second = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="approval-task", prompt="Push the reviewed commit", plugin_id=None,
+                    allowed_domains=[], max_steps=5, approved_step_ids=["push-1"],
+                ))
+                self.assertTrue(second["verified"])
+                self.assertEqual(store.get("approval-task")["state"], "COMPLETED")
+                self.assertEqual(executor.await_count, 1)
+
+    async def test_unknown_approval_does_not_advance_waiting_task(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(directory + "/approval.sqlite")
+            plan = {"summary": "Commit the reviewed change", "steps": [{
+                "id": "push-1", "agent_id": "github", "objective": "Push reviewed commit",
+                "depends_on": [], "requires_approval": False,
+            }]}
+            with patch.object(openswarm_agent, "TASKS", store), \
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan):
+                await openswarm_agent.run_openswarm_task(
+                    task_id="approval-invalid", prompt="Push the reviewed commit", plugin_id=None,
+                    allowed_domains=[], max_steps=5,
+                )
+                with self.assertRaisesRegex(RuntimeError, "unknown or non-approval"):
+                    await openswarm_agent.run_openswarm_task(
+                        task_id="approval-invalid", prompt="Push the reviewed commit", plugin_id=None,
+                        allowed_domains=[], max_steps=5, approved_step_ids=["wrong-step"],
+                    )
+                self.assertEqual(store.get("approval-invalid")["state"], "WAITING_FOR_USER")
 
 if __name__ == "__main__":
     unittest.main()
