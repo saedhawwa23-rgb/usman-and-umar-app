@@ -17,7 +17,10 @@ from pathlib import Path
 from statistics import mean, median
 from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
-import httpx
+try:
+    import httpx
+except ModuleNotFoundError:  # Minimal Colab startup environment installs AI/network deps later.
+    httpx = None
 from dataclasses import asdict, dataclass
 from typing import Any, Awaitable, Callable
 
