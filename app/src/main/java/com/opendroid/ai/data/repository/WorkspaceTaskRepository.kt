@@ -192,6 +192,42 @@ class WorkspaceTaskRepository @Inject constructor(
         )
     }
 
+
+    suspend fun recordPauseCheckpoint(
+        taskId: String,
+        output: String,
+        cloudServerId: String? = null,
+        now: Long = System.currentTimeMillis(),
+    ) {
+        val task = dao.get(taskId) ?: error("Task not found: $taskId")
+        TaskStateMachine.transition(TaskState.valueOf(task.state), TaskState.PAUSED)
+        val checkpoint = runCatching {
+            org.json.JSONObject(output).apply {
+                cloudServerId?.takeIf { it.isNotBlank() }?.let { put("_cloud_server_id", it) }
+            }.toString()
+        }.getOrDefault(output)
+        dao.update(task.copy(
+            state = TaskState.PAUSED.name,
+            notes = "OpenSwarm paused:\n${checkpoint.take(20_000)}",
+            updatedAt = now,
+        ))
+        dao.recordExecution(
+            WorkspaceTaskExecutionEntity(
+                taskId = taskId,
+                event = "openswarm_paused",
+                fromState = task.state,
+                toState = TaskState.PAUSED.name,
+                attempt = 0,
+                success = null,
+                outputRedacted = checkpoint.take(20_000),
+                errorCode = "TASK_PAUSED",
+                errorMessageRedacted = "OpenSwarm paused at a specialist checkpoint; completed steps are preserved.",
+                startedAt = now,
+                finishedAt = now,
+            ),
+        )
+    }
+
     suspend fun recoverAfterRestart(now: Long = System.currentTimeMillis()): List<WorkspaceTaskEntity> {
         return dao.findInterruptedOrQueued().map { task ->
             if (task.state == TaskState.RUNNING.name) {
