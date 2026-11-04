@@ -47,13 +47,18 @@ def _load_ai_execution_functions(openswarm_requested: bool) -> None:
     """Load browser and optional OpenSwarm modules only when /execute needs them."""
     global run_playwright_task, run_openswarm_task
     try:
-        import playwright  # noqa: F401
-        if openswarm_requested and run_openswarm_task is None:
-            from openswarm_agent import run_openswarm_task as loaded_swarm
-            run_openswarm_task = loaded_swarm
-        if not openswarm_requested and run_playwright_task is None:
-            from browser_scraper import run_playwright_task as loaded_browser
-            run_playwright_task = loaded_browser
+        if openswarm_requested:
+            if run_openswarm_task is None:
+                from openswarm_agent import run_openswarm_task as loaded_swarm
+                run_openswarm_task = loaded_swarm
+        else:
+            # Direct browser requests need Playwright immediately. OpenSwarm tasks
+            # may use only local tools, so browser dependencies remain lazy and
+            # load only if a plan selects the browser capability.
+            import playwright  # noqa: F401
+            if run_playwright_task is None:
+                from browser_scraper import run_playwright_task as loaded_browser
+                run_playwright_task = loaded_browser
     except ModuleNotFoundError as exc:
         logger.info("Browser dependency is not ready: %s", exc)
         raise RuntimeError(AI_PACKAGES_WAITING_MESSAGE) from exc
