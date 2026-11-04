@@ -1,9 +1,12 @@
 import os
 import unittest
+import tempfile
 from unittest.mock import patch
 
 import httpx
 from main import app
+from task_state import TaskStateStore
+import main
 
 
 class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
@@ -44,6 +47,41 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("research.search", tool_ids)
         self.assertIn("memory.read", tool_ids)
 
+
+
+    async def test_pause_and_cancel_endpoints_update_task_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(os.path.join(directory, "api.sqlite"))
+            for task_id in ("pause-api", "cancel-api"):
+                store.create(task_id, "test")
+                store.transition(task_id, "PLANNING", "planning")
+                store.transition(task_id, "READY", "ready")
+                store.transition(task_id, "RUNNING", "running")
+            with patch.object(main, "_task_store", store), patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+                headers = {"Authorization": "Bearer test-secret"}
+                paused = await self.client.post("/tasks/pause-api/pause", headers=headers)
+                cancelled = await self.client.post("/tasks/cancel-api/cancel", headers=headers)
+            self.assertEqual(paused.status_code, 200)
+            self.assertEqual(cancelled.status_code, 200)
+            self.assertEqual(store.get("pause-api")["state"], "PAUSED")
+            self.assertEqual(store.get("cancel-api")["state"], "CANCELLED")
+
+    async def test_resume_endpoint_only_accepts_paused_tasks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(os.path.join(directory, "api.sqlite"))
+            store.create("resume-api", "Resume my task")
+            store.transition("resume-api", "PLANNING", "planning")
+            store.save_plan("resume-api", [])
+            store.transition("resume-api", "READY", "ready")
+            store.transition("resume-api", "RUNNING", "running")
+            store.transition("resume-api", "PAUSED", "paused")
+            store.save_result("resume-api", {"status": "PAUSED", "results": [], "approved_step_ids": []})
+            with patch.object(main, "_task_store", store), patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+                response = await self.client.post(
+                    "/tasks/resume-api/resume", headers={"Authorization": "Bearer test-secret"}
+                )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["result"], '{"status":"COMPLETED"}')
 
     async def test_unconfigured_tool_fails_closed_even_when_approved(self):
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
