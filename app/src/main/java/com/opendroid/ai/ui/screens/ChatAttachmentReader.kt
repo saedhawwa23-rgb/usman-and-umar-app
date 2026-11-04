@@ -3,6 +3,7 @@ package com.opendroid.ai.ui.screens
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.core.graphics.scale
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.text.Html
@@ -92,11 +93,9 @@ fun bitmapToBase64(bitmap: Bitmap): String {
     val maxDimension = 1600
     val scale = minOf(1f, maxDimension.toFloat() / maxOf(bitmap.width, bitmap.height).coerceAtLeast(1))
     val resized = if (scale < 1f) {
-        Bitmap.createScaledBitmap(
-            bitmap,
+        bitmap.scale(
             (bitmap.width * scale).toInt().coerceAtLeast(1),
             (bitmap.height * scale).toInt().coerceAtLeast(1),
-            true,
         )
     } else bitmap
     try {
