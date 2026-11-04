@@ -148,6 +148,10 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
             raise
     elif existing["state"] == "WAITING_FOR_USER":
         plan = {"summary": (existing.get("result") or {}).get("summary") or prompt, "steps": existing["plan"]}
+    elif existing["state"] == "PAUSED":
+        saved_result = existing.get("result") or {}
+        plan = {"summary": saved_result.get("summary") or prompt, "steps": existing["plan"]}
+        approved.update(saved_result.get("approved_step_ids") or [])
     else:
         raise RuntimeError(f"Task {task_id} already exists in state {existing['state']}; use a new task ID or resume only a task waiting for approval.")
 
@@ -178,12 +182,17 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
         return json.dumps(report, ensure_ascii=False)
 
     try:
-        if existing is not None and existing["state"] == "WAITING_FOR_USER":
-            TASKS.transition(task_id, "READY", "user_approval_received", {"approved_step_ids": sorted(approved)})
+        if existing is not None and existing["state"] in {"WAITING_FOR_USER", "PAUSED"}:
+            TASKS.transition(task_id, "READY", "user_approval_received" if existing["state"] == "WAITING_FOR_USER" else "task_resumed",
+                             {"approved_step_ids": sorted(approved)})
         TASKS.transition(task_id, "RUNNING", "specialists_started")
-        results = []
-        pending = {step["id"]: step for step in plan["steps"]}
-        completed = {}
+        saved_results = (existing.get("result") or {}).get("results", []) if existing is not None and existing["state"] == "PAUSED" else []
+        results = list(saved_results)
+        completed = {
+            item["step_id"]: {key: value for key, value in item.items() if key != "step_id"}
+            for item in saved_results if isinstance(item, dict) and isinstance(item.get("step_id"), str)
+        }
+        pending = {step["id"]: step for step in plan["steps"] if step["id"] not in completed}
         while pending:
             ready = [step for step in pending.values()
                      if all(dependency in completed for dependency in step["depends_on"])]
@@ -191,6 +200,11 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                 raise RuntimeError("Manager plan contains a dependency cycle or blocked step.")
             async def dispatch(step):
                 agent_id = step["agent_id"]
+                control_state = TASKS.get(task_id)["state"]
+                if control_state in {"PAUSED", "CANCELLED"}:
+                    return {"agent_id": agent_id,
+                            "status": "CONTROL_PAUSED" if control_state == "PAUSED" else "CONTROL_CANCELLED",
+                            "verified": False, "output": "Execution stopped at a cooperative control checkpoint."}
                 TASKS.append_event(task_id, "agent_handoff", {
                     "step_id": step["id"], "from_agent": "manager",
                     "to_agent": agent_id, "objective": step["objective"],
@@ -277,19 +291,30 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                         await asyncio.sleep(0.5 * (2 ** attempt))
             dispatched = await asyncio.gather(*(dispatch_with_retry(step) for step in ready), return_exceptions=True)
             for step, outcome in zip(ready, dispatched):
-                pending.pop(step["id"], None)
                 if isinstance(outcome, BaseException):
                     TASKS.append_event(task_id, "agent_failed", {
                         "step_id": step["id"], "agent_id": step["agent_id"],
                         "error_type": type(outcome).__name__, "message": str(outcome)[:500],
                     })
                     raise outcome
+                if outcome.get("status") in {"CONTROL_PAUSED", "CONTROL_CANCELLED"}:
+                    continue
+                pending.pop(step["id"], None)
                 completed[step["id"]] = outcome
                 results.append({"step_id": step["id"], **outcome})
                 TASKS.append_event(task_id, "agent_result", {
                     "step_id": step["id"], "agent_id": step["agent_id"],
                     "status": outcome.get("status"), "verified": outcome.get("verified", False),
                 })
+            control_state = TASKS.get(task_id)["state"]
+            if control_state in {"PAUSED", "CANCELLED"}:
+                report = {"task_id": task_id, "summary": plan["summary"], "status": control_state,
+                          "results": results, "approved_step_ids": sorted(approved), "verified": False}
+                TASKS.save_result(task_id, report)
+                return json.dumps(report, ensure_ascii=False)
+            TASKS.save_result(task_id, {"status": "RUNNING", "summary": plan["summary"],
+                                        "results": results, "approved_step_ids": sorted(approved),
+                                        "verified": False})
         if not results:
             raise CapabilityUnavailableError("Manager plan contained no executable specialist.")
         TASKS.transition(task_id, "VERIFYING", "independent_result_check_started")
