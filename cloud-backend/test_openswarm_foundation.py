@@ -49,6 +49,13 @@ class CapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(descriptions["github.write"]["adapter_configured"])
         self.assertFalse(descriptions["drive.upload"]["adapter_configured"])
 
+    async def test_github_adapters_are_enabled_only_when_colab_token_is_present(self):
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}):
+            descriptions = {item["id"]: item for item in build_default_capability_registry().describe()}
+        self.assertTrue(descriptions["github.read"]["adapter_configured"])
+        self.assertTrue(descriptions["github.write"]["adapter_configured"])
+        self.assertTrue(descriptions["github.pull_request"]["adapter_configured"])
+
     async def test_high_risk_capability_requires_approval(self):
         registry = CapabilityRegistry()
         async def run(_payload):
