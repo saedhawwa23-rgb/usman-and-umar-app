@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -41,6 +42,10 @@ class CapabilityTests(unittest.IsolatedAsyncioTestCase):
         descriptions = {item["id"]: item for item in registry.describe()}
         self.assertTrue(descriptions["browser.extract"]["adapter_configured"])
         self.assertTrue(descriptions["research.search"]["adapter_configured"])
+        self.assertTrue(descriptions["files.read"]["adapter_configured"])
+        self.assertTrue(descriptions["files.write"]["adapter_configured"])
+        self.assertTrue(descriptions["data.analyze"]["adapter_configured"])
+        self.assertTrue(descriptions["documents.create"]["adapter_configured"])
         self.assertFalse(descriptions["github.write"]["adapter_configured"])
         self.assertFalse(descriptions["drive.upload"]["adapter_configured"])
 
@@ -72,6 +77,34 @@ class ResearchParserTests(unittest.TestCase):
         candidate = urljoin("https://html.duckduckgo.com", parser.results[0]["href"])
         target = parse_qs(urlsplit(candidate).query)["uddg"][0]
         self.assertEqual(target, "https://example.com/article")
+
+class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
+
+    async def test_workspace_write_requires_approval_and_read_is_confined(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"OPENSWARM_WORKSPACE": directory}):
+            registry = build_default_capability_registry()
+            with self.assertRaises(PermissionError):
+                await registry.execute("files.write", {"path": "reports/summary.md", "content": "# Report"})
+            written = await registry.execute(
+                "files.write", {"path": "reports/summary.md", "content": "# Report"}, approved=True
+            )
+            self.assertTrue(written["verified"])
+            read = await registry.execute("files.read", {"path": "reports/summary.md"})
+            self.assertEqual(read["content"], "# Report")
+            with self.assertRaisesRegex(ValueError, "escapes"):
+                await registry.execute("files.read", {"path": "../outside.txt"})
+
+    async def test_csv_analysis_returns_numeric_summary_from_workspace(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"OPENSWARM_WORKSPACE": directory}):
+            with open(os.path.join(directory, "metrics.csv"), "w", encoding="utf-8") as handle:
+                handle.write("month,revenue\nJan,10\nFeb,20\n")
+            result = await build_default_capability_registry().execute(
+                "data.analyze", {"path": "metrics.csv"}
+            )
+            self.assertTrue(result["verified"])
+            self.assertEqual(result["rows"], 2)
+            self.assertEqual(result["numeric_summary"]["revenue"]["mean"], 15)
+
 
 class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
     async def test_high_impact_agent_waits_for_explicit_approval_then_resumes_same_task(self):
