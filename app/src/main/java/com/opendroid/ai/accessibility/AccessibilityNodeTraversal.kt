@@ -87,7 +87,7 @@ class AccessibilityNodeTraversal @Inject constructor() {
     }
 
     /**
-     * Universal submit matcher for local AI clients. It first uses semantic labels and then
+     * Universal submit matcher for local AI clients. It first uses exact semantic labels and then
      * falls back to a clickable ImageView/Button positioned next to an editable input.
      */
     fun findAndClickUniversalSubmitControl(root: AccessibilityNodeInfo?, labels: List<String>): Boolean {
@@ -111,11 +111,11 @@ class AccessibilityNodeTraversal @Inject constructor() {
     }
 
     private fun findSubmitNode(node: AccessibilityNodeInfo, labels: List<String>): Boolean {
-        val text = node.text?.toString()?.lowercase()
-        val contentDesc = node.contentDescription?.toString()?.lowercase()
+        val text = node.text?.toString()?.trim()
+        val contentDesc = node.contentDescription?.toString()?.trim()
         if (node.isClickable && labels.any { label ->
-                text == label.lowercase() || contentDesc == label.lowercase() ||
-                    text?.contains(label.lowercase()) == true || contentDesc?.contains(label.lowercase()) == true
+                text?.equals(label.trim(), ignoreCase = true) == true ||
+                    contentDesc?.equals(label.trim(), ignoreCase = true) == true
             }) {
             return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
