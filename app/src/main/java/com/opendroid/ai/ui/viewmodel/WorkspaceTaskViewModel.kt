@@ -417,9 +417,9 @@ class WorkspaceTaskViewModel @Inject constructor(
                 val savedServerId = checkpoint.takeIf { it != task.notes }
                     ?.let { runCatching { JSONObject(it).optString("_cloud_server_id") }.getOrNull() }
                     ?.takeIf { it.isNotBlank() }
-                var current = repository.transition(task.id, TaskState.READY, "openswarm_resume_requested")
-                current = repository.transition(task.id, TaskState.QUEUED, "openswarm_resume_queued")
-                current = repository.transition(task.id, TaskState.RUNNING, "openswarm_resume_started")
+                repository.transition(task.id, TaskState.READY, "openswarm_resume_requested")
+                repository.transition(task.id, TaskState.QUEUED, "openswarm_resume_queued")
+                repository.transition(task.id, TaskState.RUNNING, "openswarm_resume_started")
                 val response = withContext(Dispatchers.IO) {
                     cloudServerClient.controlTask(task.id, "resume", savedServerId)
                 }
