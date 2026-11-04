@@ -81,6 +81,7 @@ class GitHubAdapterTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_github_write_requires_approval_and_verifies_readback(self):
         stored = {}
+
         def handler(request):
             self.assertEqual(request.headers.get("Authorization"), "Bearer test-token")
             if request.method == "GET" and request.url.path.endswith("/contents/src/demo.py"):
@@ -100,21 +101,21 @@ class GitHubAdapterTests(unittest.IsolatedAsyncioTestCase):
 
         transport = httpx.MockTransport(handler)
         original_client = httpx.AsyncClient
+
         def client_factory(*args, **kwargs):
             return original_client(transport=transport, **kwargs)
 
-        with tempfile.TemporaryDirectory() as directory:
-            with patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}):
-                with patch("tool_registry.httpx.AsyncClient", side_effect=client_factory):
-                    registry = build_default_capability_registry()
-            payload = {"repo": "example/repo", "path": "src/demo.py", "content": "print('hello')",
-                       "message": "Add demo", "branch": "main"}
-            with self.assertRaises(PermissionError):
-                await registry.execute("github.write", payload)
-            result = await registry.execute("github.write", payload, approved=True)
-            self.assertTrue(result["verified"])
-            read = await registry.execute("github.read", {"repo": "example/repo", "path": "src/demo.py"})
-            self.assertEqual(read["content"], "print('hello')")
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}):
+            with patch("tool_registry.httpx.AsyncClient", side_effect=client_factory):
+                registry = build_default_capability_registry()
+                payload = {"repo": "example/repo", "path": "src/demo.py", "content": "print('hello')",
+                           "message": "Add demo", "branch": "main"}
+                with self.assertRaises(PermissionError):
+                    await registry.execute("github.write", payload)
+                result = await registry.execute("github.write", payload, approved=True)
+                self.assertTrue(result["verified"])
+                read = await registry.execute("github.read", {"repo": "example/repo", "path": "src/demo.py"})
+                self.assertEqual(read["content"], "print('hello')")
 
 
 class ResearchParserTests(unittest.TestCase):
