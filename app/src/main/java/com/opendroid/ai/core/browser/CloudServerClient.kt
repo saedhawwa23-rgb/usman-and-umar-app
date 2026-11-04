@@ -71,6 +71,7 @@ class CloudServerClient @Inject constructor(
         targetId: String? = null,
         thinkHarder: Boolean = false,
         imageBase64: String? = null,
+        approvedStepIds: List<String> = emptyList(),
         onLog: (String) -> Unit = {},
     ): String {
         val configured = settingsRepository.cloudServers.first()
@@ -105,6 +106,7 @@ class CloudServerClient @Inject constructor(
             thinkHarder = thinkHarder,
             imageBase64 = imageBase64,
             appClientToken = clientToken,
+            approvedStepIds = approvedStepIds,
         ).toRequestBody("application/json; charset=utf-8".toMediaType())
 
         var lastError: Throwable? = null
@@ -228,6 +230,7 @@ internal fun buildOpenSwarmPayload(
     thinkHarder: Boolean,
     imageBase64: String?,
     appClientToken: String,
+    approvedStepIds: List<String> = emptyList(),
 ): String = JSONObject()
     .put("task_id", taskId)
     .put("prompt", prompt)
@@ -235,6 +238,7 @@ internal fun buildOpenSwarmPayload(
     .put("plugins", JSONArray(pluginIds.distinct().filter { it.isNotBlank() }))
     .put("browser_max_steps", if (thinkHarder) 30 else 15)
     .put("think_harder", thinkHarder)
+    .put("approved_step_ids", JSONArray(approvedStepIds.distinct().filter { it.isNotBlank() }))
     .put("APP_CLIENT_TOKEN", appClientToken)
     .apply { imageBase64?.takeIf { it.isNotBlank() }?.let { put("image_base64", it) } }
     .toString()
