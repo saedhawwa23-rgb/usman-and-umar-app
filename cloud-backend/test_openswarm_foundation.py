@@ -103,7 +103,7 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
                 "depends_on": [], "requires_approval": False, "capability_id": "documents.create",
                 "tool_input": {"path": "reports/project.md", "markdown": "# Project\n\nReviewed draft."},
             }]}
-            with patch.object(openswarm_agent, "TASKS", store), \\
+            with patch.object(openswarm_agent, "TASKS", store), \
                  patch.object(openswarm_agent, "_manager_plan", return_value=plan):
                 first = json.loads(await openswarm_agent.run_openswarm_task(
                     task_id="document-task", prompt="Create a project note", plugin_id=None,
