@@ -29,7 +29,7 @@ def _text(message: Any) -> str:
 
 def _manager_plan(prompt: str, plugin_ids: list[str], max_steps: int) -> dict[str, Any]:
     response = _text(_model().invoke([
-        ("system", "You are OpenSwarm Manager. Return JSON only: {summary:string,steps:[{id:string,agent_id:string,objective:string,depends_on:string[],requires_approval:boolean}]}. Use unique step IDs; depends_on lists earlier step IDs. Independent steps may run in parallel. Available IDs: manager,planner,research,browser,coder,terminal,github,files,automation,android,data,documents,drive,security,verification,delivery. Browser can inspect public pages. Research can retrieve public search result titles and URLs. Coder/planner generate reasoning only. Do not claim terminal/GitHub/Drive/Android/files/data/documents/automation execution; those adapters may be unavailable. Respect step limit."),
+        ("system", "You are OpenSwarm Manager. Return JSON only: {summary:string,steps:[{id:string,agent_id:string,objective:string,depends_on:string[],requires_approval:boolean,capability_id:string|null,tool_input:object}]}. Use unique step IDs; depends_on lists earlier step IDs. Independent steps may run in parallel. Available IDs: manager,planner,research,browser,coder,terminal,github,files,automation,android,data,documents,drive,security,verification,delivery. Browser can inspect public pages. Research can retrieve public search result titles and URLs. Coder/planner generate reasoning only. Do not claim terminal/GitHub/Drive/Android/files/data/documents/automation execution; those adapters may be unavailable. Respect step limit."),
         ("user", json.dumps({"objective": prompt, "plugins": plugin_ids, "step_limit": max_steps}))
     ]))
     try:
@@ -55,8 +55,15 @@ def _manager_plan(prompt: str, plugin_ids: list[str], max_steps: int) -> dict[st
         requires_approval = step.get("requires_approval", False)
         if not isinstance(requires_approval, bool):
             raise RuntimeError(f"Invalid approval flag for {step_id}.")
+        capability_id = step.get("capability_id")
+        tool_input = step.get("tool_input", {})
+        if capability_id is not None and not isinstance(capability_id, str):
+            raise RuntimeError(f"Invalid capability ID for {step_id}.")
+        if not isinstance(tool_input, dict):
+            raise RuntimeError(f"Invalid tool input for {step_id}.")
         normalized.append({**step, "id": step_id, "depends_on": dependencies,
-                           "requires_approval": requires_approval})
+                           "requires_approval": requires_approval, "capability_id": capability_id,
+                           "tool_input": tool_input})
     known_steps = {step["id"] for step in normalized}
     for step in normalized:
         if any(dep not in known_steps or dep == step["id"] for dep in step["depends_on"]):
@@ -133,11 +140,13 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
 
     # High-impact agent classes always require explicit approval, even if the
     # planner omitted the flag. This keeps future adapters safe by default.
-    high_impact_agents = {"terminal", "github", "files", "automation", "android", "drive"}
-    approval_steps = {
-        step["id"] for step in plan["steps"]
-        if step.get("requires_approval") is True or step["agent_id"] in high_impact_agents
-    }
+    high_impact_agents = {"terminal", "github", "automation", "android", "drive"}
+    approval_steps = set()
+    for step in plan["steps"]:
+        capability = CAPABILITIES.get(step.get("capability_id") or "")
+        if (step.get("requires_approval") is True or step["agent_id"] in high_impact_agents or
+                (capability is not None and capability.risk in {"high", "critical"})):
+            approval_steps.add(step["id"])
     unknown_approvals = approved - approval_steps
     if unknown_approvals:
         raise RuntimeError("Approval contains unknown or non-approval step IDs: " + ", ".join(sorted(unknown_approvals)))
@@ -178,6 +187,21 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                 if agent_id in {"manager", "verification", "delivery"}:
                     return {"agent_id": agent_id, "status": "CONTROL_ONLY", "verified": False,
                             "output": "Control-plane role recorded; no separate execution adapter is attached."}
+                if agent_id in {"files", "data", "documents"}:
+                    capability_id = step.get("capability_id")
+                    allowed_capabilities = {
+                        "files": {"files.read", "files.write", "files.list"},
+                        "data": {"data.analyze"},
+                        "documents": {"documents.create"},
+                    }[agent_id]
+                    if capability_id not in allowed_capabilities:
+                        raise RuntimeError(f"{agent_id} step must select one of its registered capability IDs.")
+                    result = await CAPABILITIES.execute(
+                        capability_id, step.get("tool_input", {}), approved=step["id"] in approved
+                    )
+                    return {"agent_id": agent_id, "status": "EXECUTED",
+                            "verified": result.get("verified") is True, "capability_id": capability_id,
+                            "output": json.dumps(result, ensure_ascii=False)[:20000]}
                 if agent_id == "security":
                     return {"agent_id": agent_id, "status": "PARTIAL", "verified": False,
                             "output": "Only fixed backend URL/domain policies apply; this is not a complete security audit."}
