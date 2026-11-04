@@ -44,7 +44,7 @@ def build_default_registry() -> AgentRegistry:
         ("coder", "Coding", "Produces code and patches; execution is only claimed when a runner verifies it.", ("code.generate", "code.review"), True),
         ("terminal", "Terminal", "Runs approved commands in a configured isolated execution adapter.", ("terminal.execute",), False),
         ("github", "GitHub", "Uses an authorized GitHub adapter for repository and PR operations.", ("github.read", "github.write"), False),
-        ("files", "File Manager", "Reads and writes files through a configured workspace adapter.", ("files.read", "files.write"), False),
+        ("files", "File Manager", "Lists, reads and writes files inside the configured workspace.", ("files.list", "files.read", "files.write"), False),
         ("automation", "Automation", "Runs registered deterministic workflows and macros.", ("workflow.execute", "macros.execute"), False),
         ("android", "Android Phone", "Delegates permitted device actions to the Android client.", ("android.intent", "android.accessibility"), False),
         ("data", "Data Analysis", "Processes datasets through a configured analysis runtime.", ("data.analyze", "data.transform"), False),
