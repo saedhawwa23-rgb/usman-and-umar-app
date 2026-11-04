@@ -16,6 +16,8 @@ on:
     paths-ignore:
       - 'website/**'
       - 'docs/**'
+      - 'cloud-backend/**'
+      - 'USMAN_COLAB_BACKEND.ipynb'
       - '**.md'
 
 permissions:
