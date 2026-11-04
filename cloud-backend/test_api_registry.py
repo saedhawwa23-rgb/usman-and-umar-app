@@ -35,11 +35,14 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
         browser = next(item for item in capabilities.json()["capabilities"] if item["id"] == "browser")
         research = next(item for item in capabilities.json()["capabilities"] if item["id"] == "research")
         github = next(item for item in capabilities.json()["capabilities"] if item["id"] == "github")
+        memory = next(item for item in capabilities.json()["capabilities"] if item["id"] == "memory")
         self.assertTrue(browser["adapter_configured"])
         self.assertTrue(research["adapter_configured"])
+        self.assertTrue(memory["adapter_configured"])
         self.assertFalse(github["adapter_configured"])
         tool_ids = {item["id"] for item in capabilities.json()["tools"]}
         self.assertIn("research.search", tool_ids)
+        self.assertIn("memory.read", tool_ids)
 
 
     async def test_unconfigured_tool_fails_closed_even_when_approved(self):
