@@ -3,6 +3,8 @@ package com.opendroid.ai.core.browser
 import com.opendroid.ai.data.repository.CloudServerConfig
 import com.opendroid.ai.data.repository.SettingsRepository
 import java.io.IOException
+import java.net.ConnectException
+import java.net.UnknownHostException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -179,6 +181,7 @@ class CloudServerClient @Inject constructor(
         }
         var lastError: Throwable? = null
         for (server in ordered) {
+            var serverAcceptedRequest = false
             try {
                 val baseUrl = normalizeServerBase(server.url)
                 val request = Request.Builder()
@@ -192,9 +195,9 @@ class CloudServerClient @Inject constructor(
                     val responseBody = response.body?.string().orEmpty()
                     if (response.isSuccessful) {
                         successfulBody = responseBody
-                    } else if (response.code == 404 || response.code == 409 ||
-                        response.code in setOf(500, 503, 504)) {
-                        lastError = IOException("HTTP ${response.code}: ${responseBody.take(250)}")
+                        serverAcceptedRequest = true
+                    } else if (response.code == 404) {
+                        lastError = IOException("Task not found on ${server.name} (HTTP 404).")
                         shouldTryNextServer = true
                     } else {
                         error(BrowserUseRemoteProtocol.httpError(response.code, responseBody))
@@ -213,10 +216,19 @@ class CloudServerClient @Inject constructor(
                     }.getOrDefault(completedBody)
                 }
                 if (!shouldTryNextServer || targetId != null) break
+            } catch (failure: ConnectException) {
+                lastError = failure
+                if (targetId != null || serverAcceptedRequest) break
+            } catch (failure: UnknownHostException) {
+                lastError = failure
+                if (targetId != null || serverAcceptedRequest) break
             } catch (failure: IOException) {
                 lastError = failure
-                if (targetId != null) break
+                // Once a server accepted the control request, never send it to
+                // another node: the first node may still be completing it.
+                if (targetId != null || serverAcceptedRequest) break
             }
+            if (shouldTryNextServer && targetId != null) break
         }
         throw lastError ?: IOException("No configured server owns cloud task $taskId.")
     }
