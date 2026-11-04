@@ -11,6 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.first
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -189,9 +191,7 @@ class CloudServerClient @Inject constructor(
                 controlClient.newCall(request).execute().use { response ->
                     val responseBody = response.body?.string().orEmpty()
                     if (response.isSuccessful) {
-                        successfulBody = runCatching {
-                            JSONObject(responseBody).put("_cloud_server_id", server.id).toString()
-                        }.getOrDefault(responseBody)
+                        successfulBody = responseBody
                     } else if (response.code == 404 || response.code == 409 ||
                         response.code in setOf(500, 503, 504)) {
                         lastError = IOException("HTTP ${response.code}: ${responseBody.take(250)}")
@@ -200,7 +200,18 @@ class CloudServerClient @Inject constructor(
                         error(BrowserUseRemoteProtocol.httpError(response.code, responseBody))
                     }
                 }
-                if (successfulBody != null) return successfulBody!!
+                if (successfulBody != null) {
+                    var completedBody = successfulBody!!
+                    if (action == "pause" && runCatching {
+                            JSONObject(completedBody).optString("state") == "PAUSE_REQUESTED"
+                        }.getOrDefault(false)
+                    ) {
+                        completedBody = awaitPausedCheckpoint(server, taskId)
+                    }
+                    return runCatching {
+                        JSONObject(completedBody).put("_cloud_server_id", server.id).toString()
+                    }.getOrDefault(completedBody)
+                }
                 if (!shouldTryNextServer || targetId != null) break
             } catch (failure: IOException) {
                 lastError = failure
@@ -208,6 +219,39 @@ class CloudServerClient @Inject constructor(
             }
         }
         throw lastError ?: IOException("No configured server owns cloud task $taskId.")
+    }
+
+
+    /** Wait until the active specialist finishes and the backend persists a PAUSED checkpoint. */
+    private suspend fun awaitPausedCheckpoint(server: CloudServerConfig, taskId: String): String {
+        val baseUrl = normalizeServerBase(server.url)
+        repeat(180) {
+            delay(1_000)
+            val request = Request.Builder()
+                .url("$baseUrl/tasks/$taskId")
+                .header("Authorization", "Bearer ${server.token}")
+                .get()
+                .build()
+            val responseBody = withContext(Dispatchers.IO) {
+                controlClient.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        if (response.code in setOf(500, 502, 503, 504)) return@withContext null
+                        throw IOException("Could not confirm the pause checkpoint (HTTP ${response.code}): ${body.take(250)}")
+                    }
+                    body
+                }
+            } ?: return@repeat
+            val state = runCatching { JSONObject(responseBody).optString("state") }.getOrDefault("")
+            when (state) {
+                "PAUSED", "CANCELLED" -> return responseBody
+                "PAUSE_REQUESTED", "RUNNING" -> Unit
+                else -> throw IOException("Pause request ended before a safe checkpoint; remote task state is ${state.ifBlank { "unknown" }}.")
+            }
+        }
+        throw SocketTimeoutException(
+            "Pause was accepted, but the current specialist did not reach a checkpoint within 180 seconds. The task may still be running; do not resume it yet."
+        )
     }
 
     /** Reads the real agent roster and adapter readiness from the fastest healthy configured backend. */
