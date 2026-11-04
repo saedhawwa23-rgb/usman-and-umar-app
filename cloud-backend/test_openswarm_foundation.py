@@ -119,6 +119,31 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
                 await registry.execute("files.read", {"path": "../outside.txt"})
 
 
+
+    async def test_verification_and_delivery_require_verified_dependencies(self):
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"OPENSWARM_WORKSPACE": directory}):
+            with open(os.path.join(directory, "evidence.txt"), "w", encoding="utf-8") as handle:
+                handle.write("verified source evidence")
+            store = TaskStateStore(os.path.join(directory, "tasks.sqlite"))
+            plan = {"summary": "Read and verify evidence", "steps": [
+                {"id": "read-1", "agent_id": "files", "objective": "Read evidence",
+                 "depends_on": [], "requires_approval": False, "capability_id": "files.read",
+                 "tool_input": {"path": "evidence.txt"}},
+                {"id": "verify-1", "agent_id": "verification", "objective": "Verify file read",
+                 "depends_on": ["read-1"], "requires_approval": False},
+                {"id": "deliver-1", "agent_id": "delivery", "objective": "Prepare delivery manifest",
+                 "depends_on": ["read-1", "verify-1"], "requires_approval": False},
+            ]}
+            with patch.object(openswarm_agent, "TASKS", store), \\
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan):
+                report = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="verify-deliver", prompt="Read and verify evidence", plugin_id=None,
+                    allowed_domains=[], max_steps=5,
+                ))
+            self.assertTrue(report["verified"])
+            self.assertEqual(store.get("verify-deliver")["state"], "COMPLETED")
+            self.assertEqual(report["results"][-1]["status"], "PACKAGED")
+
     async def test_document_specialist_waits_for_approval_then_creates_workspace_file(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"OPENSWARM_WORKSPACE": directory}):
             store = TaskStateStore(os.path.join(directory, "tasks.sqlite"))
