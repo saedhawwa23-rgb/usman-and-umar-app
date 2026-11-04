@@ -236,6 +236,31 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+
+    async def test_cancelled_task_stops_at_next_execution_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(os.path.join(directory, "cancel.sqlite"))
+            plan = {"summary": "Research then code", "steps": [
+                {"id": "research-1", "agent_id": "research", "objective": "Collect sources",
+                 "depends_on": [], "requires_approval": False},
+                {"id": "coder-1", "agent_id": "coder", "objective": "Draft code",
+                 "depends_on": ["research-1"], "requires_approval": False},
+            ]}
+            async def cancel_after_research(agent_id, objective, state):
+                store.transition("cancel-task", "CANCELLED", "test_cancel_requested")
+                return {"agent_id": agent_id, "status": "EXECUTED", "verified": True, "output": "sources"}
+            executor = AsyncMock(side_effect=cancel_after_research)
+            with patch.object(openswarm_agent, "TASKS", store), \\
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan), \\
+                 patch.object(openswarm_agent, "_run_specialist", new=executor):
+                report = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="cancel-task", prompt="Research then code", plugin_id=None,
+                    allowed_domains=[], max_steps=5,
+                ))
+            self.assertEqual(report["status"], "CANCELLED")
+            self.assertEqual(store.get("cancel-task")["state"], "CANCELLED")
+            self.assertEqual(executor.await_count, 1)
+
     async def test_paused_task_resumes_from_last_completed_step(self):
         with tempfile.TemporaryDirectory() as directory:
             store = TaskStateStore(os.path.join(directory, "pause.sqlite"))
