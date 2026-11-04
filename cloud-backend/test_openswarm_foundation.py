@@ -250,8 +250,8 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
                 store.transition("cancel-task", "CANCELLED", "test_cancel_requested")
                 return {"agent_id": agent_id, "status": "EXECUTED", "verified": True, "output": "sources"}
             executor = AsyncMock(side_effect=cancel_after_research)
-            with patch.object(openswarm_agent, "TASKS", store), \\
-                 patch.object(openswarm_agent, "_manager_plan", return_value=plan), \\
+            with patch.object(openswarm_agent, "TASKS", store), \
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan), \
                  patch.object(openswarm_agent, "_run_specialist", new=executor):
                 report = json.loads(await openswarm_agent.run_openswarm_task(
                     task_id="cancel-task", prompt="Research then code", plugin_id=None,
