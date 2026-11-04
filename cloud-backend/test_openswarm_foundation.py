@@ -103,9 +103,10 @@ class GitHubAdapterTests(unittest.IsolatedAsyncioTestCase):
         def client_factory(*args, **kwargs):
             return original_client(transport=transport, **kwargs)
 
-        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}), \
-             patch("tool_registry.httpx.AsyncClient", side_effect=client_factory):
-            registry = build_default_capability_registry()
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}):
+                with patch("tool_registry.httpx.AsyncClient", side_effect=client_factory):
+                    registry = build_default_capability_registry()
             payload = {"repo": "example/repo", "path": "src/demo.py", "content": "print('hello')",
                        "message": "Add demo", "branch": "main"}
             with self.assertRaises(PermissionError):
@@ -147,7 +148,7 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_workspace_write_requires_approval_and_read_is_confined(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"OPENSWARM_WORKSPACE": directory}):
-            registry = build_default_capability_registry()
+                    registry = build_default_capability_registry()
             with self.assertRaises(PermissionError):
                 await registry.execute("files.write", {"path": "reports/summary.md", "content": "# Report"})
             written = await registry.execute(
