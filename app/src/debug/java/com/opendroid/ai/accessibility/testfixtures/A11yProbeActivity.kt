@@ -118,6 +118,14 @@ class A11yProbeActivity : Activity() {
             minWidth = 0
             minimumWidth = 0
             setPadding(8, 0, 8, 0)
+            // Keep the complete owned fixture inside the viewport on the
+            // smallest API-28 emulator; otherwise the final submit control
+            // exists in the accessibility tree but ACTION_CLICK cannot reach
+            // its off-screen View.
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (28 * resources.displayMetrics.density).toInt()
+            )
             setOnClickListener { counter.incrementAndGet() }
         }
 
