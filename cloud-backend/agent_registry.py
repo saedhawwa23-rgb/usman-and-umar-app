@@ -39,7 +39,7 @@ def build_default_registry() -> AgentRegistry:
     agents = (
         ("manager", "Manager / Orchestrator", "Plans work, delegates specialists, tracks execution and assembles results.", ("planning", "delegation", "coordination"), True),
         ("planner", "Planner", "Decomposes objectives into ordered, dependency-aware steps.", ("planning", "dependencies"), True),
-        ("research", "Research", "Synthesizes supplied source extracts and compares evidence; retrieval is delegated to the browser adapter.", ("source_synthesis", "source_analysis"), True),
+        ("research", "Research", "Searches public web results, synthesizes source evidence and compares claims.", ("source_synthesis", "source_analysis"), True),
         ("browser", "Browser", "Uses bounded Playwright navigation and page extraction.", ("browser.navigate", "browser.extract", "browser.click"), False),
         ("coder", "Coding", "Produces code and patches; execution is only claimed when a runner verifies it.", ("code.generate", "code.review"), True),
         ("terminal", "Terminal", "Runs approved commands in a configured isolated execution adapter.", ("terminal.execute",), False),
@@ -53,6 +53,7 @@ def build_default_registry() -> AgentRegistry:
         ("security", "Security", "Applies URL, command, path, secret and approval policies.", ("security.validate", "security.approval"), False),
         ("verification", "Verification", "Independently verifies operation evidence and generated artifacts.", ("verification.check",), False),
         ("delivery", "Delivery", "Packages verified outputs and reports their locations.", ("delivery.package",), False),
+        ("memory", "Persistent Memory", "Searches and updates approval-controlled persistent agent memory.", ("memory.read", "memory.search", "memory.write"), False),
     )
     for agent_id, name, description, capabilities, requires_model in agents:
         registry.register(AgentDefinition(agent_id, name, description, capabilities, requires_model=requires_model))
