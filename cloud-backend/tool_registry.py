@@ -2,8 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import hashlib
+import json
+import os
 import re
 from html.parser import HTMLParser
+from pathlib import Path
+from statistics import mean, median
 from urllib.parse import parse_qs, urljoin, urlsplit
 
 import httpx
@@ -22,6 +28,21 @@ class Capability:
 
 
 Executor = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+
+def _workspace_root() -> Path:
+    root = Path(os.getenv("OPENSWARM_WORKSPACE", "/content/usman-workspace")).expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+def _workspace_path(raw_path: Any) -> Path:
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        raise ValueError("A relative workspace path is required.")
+    root = _workspace_root()
+    candidate = (root / raw_path).resolve()
+    if candidate == root or root not in candidate.parents:
+        raise ValueError("Workspace path escapes the configured workspace root.")
+    return candidate
+
 
 
 class CapabilityRegistry:
