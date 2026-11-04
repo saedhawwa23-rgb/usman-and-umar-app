@@ -344,6 +344,8 @@ async def resume_task(task_id: str, authorization: str | None = Header(default=N
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except asyncio.TimeoutError as exc:
         raise HTTPException(status_code=504, detail="Task resume exceeded the server execution timeout.") from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.exception("Task resume failed for task_id=%s", task_id)
         raise HTTPException(status_code=500, detail=_safe_exception_detail(exc)) from exc
