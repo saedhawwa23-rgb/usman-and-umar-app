@@ -251,6 +251,8 @@ def build_default_capability_registry() -> CapabilityRegistry:
         item = response.json()
         if item.get("type") != "file":
             raise ValueError("github.read only reads a single file, not a directory.")
+        if int(item.get("size") or 0) > 1_000_000:
+            raise ValueError("GitHub file exceeds the 1 MB text-read limit.")
         encoded = str(item.get("content") or "").replace("\n", "")
         content = base64.b64decode(encoded).decode("utf-8")
         if len(content.encode("utf-8")) > 1_000_000:
@@ -268,7 +270,8 @@ def build_default_capability_registry() -> CapabilityRegistry:
         if len(encoded) > 1_000_000:
             raise ValueError("GitHub file exceeds the 1 MB write limit.")
         branch = str(payload.get("branch") or "main").strip()
-        if not re.fullmatch(r"[A-Za-z0-9._/-]+", branch) or ".." in branch or branch.startswith("/"):
+        if (not re.fullmatch(r"[A-Za-z0-9._/-]+", branch) or ".." in branch or branch.startswith("/")
+                or any(part in {"", ".", ".."} for part in branch.split("/"))):
             raise ValueError("Invalid GitHub branch name.")
         headers = github_headers()
         base_url = f"https://api.github.com/repos/{repo}"
