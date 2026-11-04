@@ -196,7 +196,7 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                 if agent_id in {"manager", "verification", "delivery"}:
                     return {"agent_id": agent_id, "status": "CONTROL_ONLY", "verified": False,
                             "output": "Control-plane role recorded; no separate execution adapter is attached."}
-                        if agent_id in {"files", "data", "documents", "github", "memory"}:
+                if agent_id in {"files", "data", "documents", "github", "memory"}:
                     capability_id = step.get("capability_id")
                     allowed_capabilities = {
                         "files": {"files.read", "files.write", "files.list"},
