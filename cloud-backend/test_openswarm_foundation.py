@@ -314,7 +314,7 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
                  "depends_on": ["research-1"], "requires_approval": False},
             ]}
             async def pause_after_research(agent_id, objective, state):
-                store.transition("pause-task", "PAUSED", "test_pause_requested")
+                store.transition("pause-task", "PAUSE_REQUESTED", "test_pause_requested")
                 return {"agent_id": agent_id, "status": "EXECUTED", "verified": True, "output": "sources"}
             first_executor = AsyncMock(side_effect=pause_after_research)
             with patch.object(openswarm_agent, "TASKS", store), \
