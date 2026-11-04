@@ -351,7 +351,7 @@ class WorkspaceTaskViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 check(hasValidatedInternet()) { "Internet is required to resume this cloud approval." }
-                val approvalJson = task.notes.substringAfter("OpenSwarm approval request:\\n", "")
+                val approvalJson = task.notes.substringAfter("OpenSwarm approval request:\n", "")
                 check(approvalJson.isNotBlank()) { "The saved approval request is missing. Refresh the task result before approving." }
                 val approvalItems = JSONObject(approvalJson).optJSONArray("approval_required")
                     ?: error("The approval request has no step list.")
