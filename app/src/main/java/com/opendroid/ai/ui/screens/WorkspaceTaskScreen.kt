@@ -339,9 +339,9 @@ fun WorkspaceTaskScreen(
             when (page) {
                 TaskuaryPage.INBOX -> {
                     item { SectionTitle("INBOX") }
-                    val inbox = tasks.filter { it.state in setOf(TaskState.DRAFT.name, TaskState.WAITING_FOR_NETWORK.name, TaskState.FAILED.name, TaskState.WAITING_USER.name, TaskState.WAITING_APPROVAL.name) }
+                    val inbox = tasks.filter { it.state in setOf(TaskState.DRAFT.name, TaskState.WAITING_FOR_NETWORK.name, TaskState.FAILED.name, TaskState.WAITING_USER.name, TaskState.WAITING_APPROVAL.name, TaskState.PAUSED.name) }
                     if (inbox.isEmpty()) item { Text("Inbox is clear.", color = AppTheme.colors.textSecondary) }
-                    items(inbox, key = { "inbox-${it.id}" }) { task -> TaskCard(task, viewModel::runTask, ::beginDriveUpload) }
+                    items(inbox, key = { "inbox-${it.id}" }) { task -> TaskCard(task, viewModel::runTask, ::beginDriveUpload, onPause = viewModel::pauseCloudTask, onCancel = viewModel::cancelCloudTask) }
                 }
                 TaskuaryPage.DASHBOARD -> {
                     val today = startOfToday()
@@ -362,7 +362,7 @@ fun WorkspaceTaskScreen(
                         var dragPosition by remember { mutableStateOf(Offset.Unspecified) }
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                             KanbanColumn("DRAFT", tasks.filter { it.state == TaskState.DRAFT.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition != Offset.Unspecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified })
-                            KanbanColumn("RUNNING", tasks.filter { it.state == TaskState.RUNNING.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition != Offset.Unspecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified })
+                            KanbanColumn("RUNNING", tasks.filter { it.state == TaskState.RUNNING.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition != Offset.Unspecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified }, viewModel::pauseCloudTask, viewModel::cancelCloudTask)
                             KanbanColumn("SUCCEEDED", tasks.filter { it.state == TaskState.SUCCEEDED.name }, viewModel::runTask, ::beginDriveUpload, columnBounds, draggedTask, dragPosition, { draggedTask = it; dragPosition = Offset.Unspecified }, { amount -> dragPosition = if (dragPosition != Offset.Unspecified) dragPosition + amount else amount }, { task, column -> viewModel.dropTaskOnColumn(task, column); draggedTask = null; dragPosition = Offset.Unspecified })
                         }
                         if (draggedTask != null) Text("Drop ${draggedTask?.title} on a column to move it", color = AccentCyan, fontSize = 12.sp)
@@ -474,6 +474,8 @@ private fun TaskCard(
     task: WorkspaceTaskEntity,
     onRun: (WorkspaceTaskEntity) -> Unit,
     onSaveOutput: (WorkspaceTaskEntity) -> Unit,
+    onPause: (WorkspaceTaskEntity) -> Unit = {},
+    onCancel: (WorkspaceTaskEntity) -> Unit = {},
     modifier: Modifier = Modifier,
     onDragStart: (() -> Unit)? = null,
     onDrag: ((Offset) -> Unit)? = null,
@@ -505,6 +507,19 @@ private fun TaskCard(
             }
             if (task.state == TaskState.WAITING_FOR_NETWORK.name) {
                 Text("Offline — this task will wait. No AI app or server was contacted.", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+            }
+            if (task.state == TaskState.PAUSED.name && task.toolId?.startsWith("hybrid:CLOUD_OPENSWARM") == true) {
+                Text("OpenSwarm is paused. Completed specialist steps are saved and will not be repeated.", color = AccentCyan, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onRun(task) }) { Text("Resume") }
+                    Button(onClick = { onCancel(task) }) { Text("Cancel") }
+                }
+            }
+            if (task.state == TaskState.RUNNING.name && task.toolId?.startsWith("hybrid:CLOUD_OPENSWARM") == true) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onPause(task) }) { Text("Pause") }
+                    Button(onClick = { onCancel(task) }) { Text("Cancel") }
+                }
             }
             if (task.state == TaskState.WAITING_APPROVAL.name) {
                 Text("OpenSwarm is paused before a high-impact action. Review the requested steps before resuming.", color = AccentCyan, fontSize = 12.sp)
@@ -548,6 +563,8 @@ private fun KanbanColumn(
     onDragStart: (WorkspaceTaskEntity) -> Unit,
     onDrag: (Offset) -> Unit,
     onDrop: (WorkspaceTaskEntity, String) -> Unit,
+    onPause: (WorkspaceTaskEntity) -> Unit = {},
+    onCancel: (WorkspaceTaskEntity) -> Unit = {},
 ) {
     val highlighted = draggedTask != null && columnBounds[title]?.contains(dragPosition) == true
     Column(
@@ -562,7 +579,7 @@ private fun KanbanColumn(
         if (tasks.isEmpty()) Text("No tasks", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
         tasks.forEach { task ->
             TaskCard(
-                task, onRun, onSaveOutput,
+                task, onRun, onSaveOutput, onPause = onPause, onCancel = onCancel,
                 modifier = if (draggedTask?.id == task.id) Modifier else Modifier,
                 onDragStart = {
                     onDragStart(task)
