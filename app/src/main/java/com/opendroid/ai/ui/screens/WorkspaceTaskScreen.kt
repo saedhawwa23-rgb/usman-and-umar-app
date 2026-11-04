@@ -509,7 +509,7 @@ private fun TaskCard(
                 Text("Offline — this task will wait. No AI app or server was contacted.", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
             }
             if (task.state == TaskState.PAUSED.name && task.toolId?.startsWith("hybrid:CLOUD_OPENSWARM") == true) {
-                Text("OpenSwarm is paused. Completed specialist steps are saved and will not be repeated.", color = AccentCyan, fontSize = 12.sp)
+                Text("Pause requested. The current specialist may finish; completed steps are saved and will not be repeated.", color = AccentCyan, fontSize = 12.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { onRun(task) }) { Text("Resume") }
                     Button(onClick = { onCancel(task) }) { Text("Cancel") }
