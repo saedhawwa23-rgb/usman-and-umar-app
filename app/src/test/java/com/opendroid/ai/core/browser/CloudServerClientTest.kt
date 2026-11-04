@@ -34,6 +34,7 @@ class CloudServerClientTest {
             thinkHarder = true,
             imageBase64 = null,
             appClientToken = "same-cluster-token",
+            approvedStepIds = listOf("step-a", "step-a", "step-b"),
         )
         val json = JSONObject(body)
 
@@ -44,6 +45,8 @@ class CloudServerClientTest {
         assertEquals("same-cluster-token", json.getString("APP_CLIENT_TOKEN"))
         assertEquals(30, json.getInt("browser_max_steps"))
         assertEquals(1, json.getJSONArray("plugins").length())
+        assertEquals(2, json.getJSONArray("approved_step_ids").length())
+        assertEquals("step-a", json.getJSONArray("approved_step_ids").getString(0))
         assertFalse(json.has("image_base64"))
     }
 }
