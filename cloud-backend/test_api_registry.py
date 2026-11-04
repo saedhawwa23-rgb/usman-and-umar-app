@@ -75,6 +75,7 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
             store.save_plan("resume-api", [])
             store.transition("resume-api", "READY", "ready")
             store.transition("resume-api", "RUNNING", "running")
+            store.transition("resume-api", "PAUSE_REQUESTED", "pause_requested")
             store.transition("resume-api", "PAUSED", "paused")
             store.save_result("resume-api", {"status": "PAUSED", "results": [], "approved_step_ids": []})
             with patch.object(main, "_task_store", store), \
