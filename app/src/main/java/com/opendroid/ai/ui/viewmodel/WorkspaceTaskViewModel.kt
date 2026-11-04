@@ -371,10 +371,20 @@ class WorkspaceTaskViewModel @Inject constructor(
                 val response = withContext(Dispatchers.IO) {
                     cloudServerClient.controlTask(task.id, "pause")
                 }
+                val remoteState = JSONObject(response).optString("state")
                 val serverId = runCatching { JSONObject(response).optString("_cloud_server_id") }
                     .getOrNull()?.takeIf { it.isNotBlank() }
-                repository.recordPauseCheckpoint(task.id, response, serverId)
-                _message.value = "Pause requested. The current specialist operation may finish before OpenSwarm stops at its next checkpoint."
+                when (remoteState) {
+                    "PAUSED" -> {
+                        repository.recordPauseCheckpoint(task.id, response, serverId)
+                        _message.value = "OpenSwarm confirmed its pause checkpoint. Completed steps are preserved."
+                    }
+                    "CANCELLED" -> {
+                        repository.transition(task.id, TaskState.CANCELLED, "openswarm_cancelled_during_pause")
+                        _message.value = "The cloud task was cancelled before the pause checkpoint."
+                    }
+                    else -> error("The cloud server did not confirm PAUSED; local task state was left unchanged.")
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (failure: Exception) {
