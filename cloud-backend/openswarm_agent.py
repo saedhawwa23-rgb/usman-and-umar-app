@@ -114,7 +114,6 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
             raise
     elif existing["state"] == "WAITING_FOR_USER":
         plan = {"summary": (existing.get("result") or {}).get("summary") or prompt, "steps": existing["plan"]}
-        TASKS.transition(task_id, "READY", "user_approval_received", {"approved_step_ids": sorted(approved)})
     else:
         raise RuntimeError(f"Task {task_id} already exists in state {existing['state']}; use a new task ID or resume only a task waiting for approval.")
 
@@ -135,11 +134,16 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
         report = {"task_id": task_id, "status": "WAITING_FOR_USER", "summary": plan["summary"],
                   "approval_required": details, "verified": False}
         TASKS.save_result(task_id, report)
-        TASKS.transition(task_id, "WAITING_FOR_USER", "explicit_approval_required",
-                         {"step_ids": sorted(awaiting)})
+        if existing is not None and existing["state"] == "WAITING_FOR_USER":
+            TASKS.append_event(task_id, "approval_progress", {"approved_step_ids": sorted(approved), "remaining_step_ids": sorted(awaiting)})
+        else:
+            TASKS.transition(task_id, "WAITING_FOR_USER", "explicit_approval_required",
+                             {"step_ids": sorted(awaiting)})
         return json.dumps(report, ensure_ascii=False)
 
     try:
+        if existing is not None and existing["state"] == "WAITING_FOR_USER":
+            TASKS.transition(task_id, "READY", "user_approval_received", {"approved_step_ids": sorted(approved)})
         TASKS.transition(task_id, "RUNNING", "specialists_started")
         results = []
         pending = {step["id"]: step for step in plan["steps"]}
