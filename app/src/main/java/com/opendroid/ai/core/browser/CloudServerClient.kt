@@ -89,6 +89,9 @@ class CloudServerClient @Inject constructor(
             val selected = candidates.firstOrNull { it.id == id }
                 ?: error("The selected cloud server is disabled or not configured.")
             if (selected.id !in healthyIds) {
+                if (approvedStepIds.isNotEmpty()) {
+                    error("The original OpenSwarm server ${selected.name} is unavailable. Approval resume is pinned to its original task store; no cross-server retry was attempted.")
+                }
                 onLog("${selected.name} failed its /health check. Failing over to ${rankedHealthy.first().name}...")
                 rankedHealthy
             } else {
@@ -120,7 +123,12 @@ class CloudServerClient @Inject constructor(
                     .build()
                 client.newCall(request).execute().use { response ->
                     val responseBody = response.body?.string().orEmpty()
-                    if (response.isSuccessful) return responseBody
+                    if (response.isSuccessful) {
+                        val enriched = runCatching {
+                            JSONObject(responseBody).put("_cloud_server_id", server.id).toString()
+                        }.getOrDefault(responseBody)
+                        return enriched
+                    }
                     val retryable = response.code == 500 || response.code == 503 || response.code == 504
                     if (!retryable || position == ordered.lastIndex) {
                         error(BrowserUseRemoteProtocol.httpError(response.code, responseBody))
