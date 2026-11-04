@@ -17,7 +17,7 @@ class AgentRegistryTests(unittest.TestCase):
         ids = {agent["id"] for agent in registry.all()}
         self.assertTrue({"manager", "planner", "research", "browser", "coder", "terminal",
                          "github", "files", "automation", "android", "data", "documents",
-                         "drive", "security", "verification", "delivery"} <= ids)
+                         "drive", "security", "verification", "delivery", "memory"} <= ids)
 
 
 class TaskStateTests(unittest.TestCase):
