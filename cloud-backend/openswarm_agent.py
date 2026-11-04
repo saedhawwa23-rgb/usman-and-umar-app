@@ -129,6 +129,8 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
     except KeyError:
         existing = None
 
+    if existing is None and approved:
+        raise RuntimeError("No saved pending-approval record exists for this task on this server. Refusing to apply stale or cross-server approvals.")
     if existing is None:
         TASKS.create(task_id, prompt)
         try:
