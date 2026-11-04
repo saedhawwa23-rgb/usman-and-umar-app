@@ -48,6 +48,7 @@ class CapabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(descriptions["documents.create"]["adapter_configured"])
         self.assertFalse(descriptions["github.write"]["adapter_configured"])
         self.assertFalse(descriptions["drive.upload"]["adapter_configured"])
+        self.assertFalse(descriptions["memory.read"]["adapter_configured"])
 
     async def test_github_adapters_are_enabled_only_when_colab_token_is_present(self):
         with patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}):
@@ -86,6 +87,22 @@ class ResearchParserTests(unittest.TestCase):
         self.assertEqual(target, "https://example.com/article")
 
 class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
+
+
+    async def test_persistent_memory_is_shared_and_write_requires_approval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(os.path.join(directory, "memory.sqlite"))
+            registry = build_default_capability_registry(store)
+            with self.assertRaises(PermissionError):
+                await registry.execute("memory.write", {"key": "project", "value": {"branch": "feature/demo"}})
+            saved = await registry.execute(
+                "memory.write", {"key": "project", "value": {"branch": "feature/demo"}}, approved=True
+            )
+            self.assertTrue(saved["verified"])
+            loaded = await registry.execute("memory.read", {"key": "project"})
+            self.assertEqual(loaded["item"]["value"]["branch"], "feature/demo")
+            matches = await registry.execute("memory.search", {"query": "feature demo"})
+            self.assertEqual(matches["items"][0]["key"], "project")
 
     async def test_workspace_write_requires_approval_and_read_is_confined(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"OPENSWARM_WORKSPACE": directory}):
