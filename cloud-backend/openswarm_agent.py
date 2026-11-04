@@ -73,7 +73,9 @@ def _manager_plan(prompt: str, plugin_ids: list[str], max_steps: int) -> dict[st
 async def _run_specialist(agent_id: str, objective: str, state: dict[str, Any]) -> dict[str, Any]:
     if agent_id == "browser":
         context_text = json.dumps(state.get("shared_context", []), ensure_ascii=False)
-        search_text = objective + " " + context_text + " " + state["prompt"]
+        tool_input = state.get("step", {}).get("tool_input", {})
+        explicit_url = str(tool_input.get("url") or "") if isinstance(tool_input, dict) else ""
+        search_text = explicit_url + " " + objective + " " + context_text + " " + state["prompt"]
         match = re.search(r"https?://\S+", search_text, re.IGNORECASE)
         url = match.group(0).rstrip(".,;:!?)]}") if match else ""
         if not url and "fmhy_browser" in state.get("plugins", []):
@@ -88,7 +90,9 @@ async def _run_specialist(agent_id: str, objective: str, state: dict[str, Any]) 
             raise RuntimeError("Browser specialist returned empty or unverified content.")
         return {"agent_id": agent_id, "status": "EXECUTED", "verified": True, "source_url": url, "output": output[:20000]}
     if agent_id == "research":
-        search_result = await CAPABILITIES.execute("research.search", {"query": objective, "limit": 8})
+        tool_input = state.get("step", {}).get("tool_input", {})
+        query = str(tool_input.get("query") or objective) if isinstance(tool_input, dict) else objective
+        search_result = await CAPABILITIES.execute("research.search", {"query": query, "limit": 8})
         sources = search_result.get("sources", [])
         if not sources:
             raise RuntimeError("Research search returned no public source URLs.")
@@ -208,7 +212,7 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                 prior = [completed[item] for item in step["depends_on"]]
                 return await _run_specialist(agent_id, step["objective"], {
                     "prompt": prompt, "allowed_domains": allowed_domains,
-                    "plugins": plugins, "shared_context": prior,
+                    "plugins": plugins, "shared_context": prior, "step": step,
                 })
             dispatched = await asyncio.gather(*(dispatch(step) for step in ready), return_exceptions=True)
             for step, outcome in zip(ready, dispatched):
