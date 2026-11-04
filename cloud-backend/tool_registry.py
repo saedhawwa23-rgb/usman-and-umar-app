@@ -153,6 +153,76 @@ def build_default_capability_registry() -> CapabilityRegistry:
                 break
         return {"query": query, "sources": sources, "verified": bool(sources)}
 
+
+    async def file_read(payload: dict[str, Any]) -> dict[str, Any]:
+        path = _workspace_path(payload.get("path"))
+        if not path.is_file():
+            raise FileNotFoundError("Workspace file not found.")
+        if path.stat().st_size > 1_000_000:
+            raise ValueError("File exceeds the 1 MB text-read limit.")
+        content = path.read_text(encoding="utf-8")
+        return {"path": str(path.relative_to(_workspace_root())), "content": content,
+                "size_bytes": path.stat().st_size, "verified": True}
+
+    async def file_write(payload: dict[str, Any]) -> dict[str, Any]:
+        path = _workspace_path(payload.get("path"))
+        content = payload.get("content")
+        if not isinstance(content, str):
+            raise ValueError("files.write requires UTF-8 text content.")
+        encoded = content.encode("utf-8")
+        if len(encoded) > 1_000_000:
+            raise ValueError("File exceeds the 1 MB write limit.")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(encoded)
+        return {"path": str(path.relative_to(_workspace_root())), "size_bytes": len(encoded),
+                "sha256": hashlib.sha256(encoded).hexdigest(), "verified": path.read_bytes() == encoded}
+
+    async def file_list(payload: dict[str, Any]) -> dict[str, Any]:
+        raw = payload.get("path", ".")
+        base = _workspace_root() if raw == "." else _workspace_path(raw)
+        if not base.is_dir():
+            raise NotADirectoryError("Workspace directory not found.")
+        items = [{"name": item.name, "type": "directory" if item.is_dir() else "file",
+                  "size_bytes": item.stat().st_size if item.is_file() else None}
+                 for item in sorted(base.iterdir(), key=lambda item: item.name.lower())[:200]]
+        return {"path": "." if base == _workspace_root() else str(base.relative_to(_workspace_root())),
+                "items": items, "verified": True}
+
+    async def data_analyze(payload: dict[str, Any]) -> dict[str, Any]:
+        path = _workspace_path(payload.get("path"))
+        if not path.is_file() or path.stat().st_size > 2_000_000:
+            raise ValueError("data.analyze requires an existing workspace CSV or JSON file up to 2 MB.")
+        if path.suffix.lower() == ".csv":
+            with path.open("r", encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            numeric = {}
+            for key in (rows[0].keys() if rows else []):
+                values = []
+                for row in rows:
+                    try:
+                        values.append(float(row.get(key, "")))
+                    except (TypeError, ValueError):
+                        continue
+                if values:
+                    numeric[key] = {"count": len(values), "mean": mean(values), "median": median(values),
+                                    "min": min(values), "max": max(values)}
+            return {"path": str(path.relative_to(_workspace_root())), "rows": len(rows),
+                    "columns": list(rows[0].keys()) if rows else [], "numeric_summary": numeric, "verified": True}
+        if path.suffix.lower() == ".json":
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return {"path": str(path.relative_to(_workspace_root())),
+                    "top_level_type": type(data).__name__,
+                    "top_level_keys": list(data.keys())[:200] if isinstance(data, dict) else None,
+                    "item_count": len(data) if isinstance(data, (list, dict)) else None, "verified": True}
+        raise ValueError("data.analyze supports .csv and .json files only.")
+
+    async def document_create(payload: dict[str, Any]) -> dict[str, Any]:
+        path = _workspace_path(payload.get("path"))
+        content = payload.get("markdown")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("documents.create requires non-empty Markdown content.")
+        return await file_write({"path": str(path.relative_to(_workspace_root())), "content": content})
+
     entries = (
         Capability("browser.extract", "Navigate to an approved public URL and extract page text.", "cloud", ("network",), "low"),
         Capability("research.search", "Search public web results and return source titles and URLs.", "cloud", ("network",), "low"),
@@ -160,19 +230,24 @@ def build_default_capability_registry() -> CapabilityRegistry:
         Capability("terminal.execute", "Run a command in an isolated, policy-controlled execution environment.", "cloud", ("terminal",), "critical"),
         Capability("github.read", "Read authorized GitHub repository resources.", "cloud", ("github.read",), "low"),
         Capability("github.write", "Create branches, commits, pushes and pull requests.", "cloud", ("github.write",), "high"),
-        Capability("files.read", "Read files from an authorized workspace.", "cloud", ("files",), "low"),
-        Capability("files.write", "Create or modify files in an authorized workspace.", "cloud", ("files",), "high"),
+        Capability("files.read", "Read UTF-8 text files inside the configured workspace.", "cloud", ("files",), "low"),
+        Capability("files.write", "Create or replace UTF-8 text files inside the configured workspace.", "cloud", ("files",), "high"),
+        Capability("files.list", "List entries inside the configured workspace.", "cloud", ("files",), "low"),
         Capability("automation.execute", "Execute an approved registered workflow.", "cloud", ("automation",), "high"),
         Capability("android.intent", "Request an approved Android intent through the connected app.", "android", ("android",), "high"),
         Capability("android.accessibility", "Execute an explicitly approved Accessibility workflow.", "android", ("accessibility",), "critical"),
-        Capability("data.analyze", "Analyze structured data in a configured runtime.", "cloud", ("files",), "low"),
-        Capability("documents.create", "Generate a document using a configured document adapter.", "cloud", ("files",), "low"),
+        Capability("data.analyze", "Summarize CSV and JSON files inside the configured workspace.", "cloud", ("files",), "low"),
+        Capability("documents.create", "Create a Markdown document inside the configured workspace.", "cloud", ("files",), "high"),
         Capability("drive.search", "Search files in an authorized Google Drive account.", "cloud", ("drive.read",), "low"),
         Capability("drive.upload", "Upload a file to an authorized Google Drive account.", "cloud", ("drive.write",), "high"),
         Capability("verification.check", "Verify an operation using independent execution evidence.", "cloud", (), "low"),
         Capability("delivery.package", "Package and report verified task artifacts.", "cloud", ("files",), "low"),
     )
     for item in entries:
-        executor = browser_extract if item.id == "browser.extract" else research_search if item.id == "research.search" else None
-        registry.register(item, executor)
+        executors = {
+            "browser.extract": browser_extract, "research.search": research_search,
+            "files.read": file_read, "files.write": file_write, "files.list": file_list,
+            "data.analyze": data_analyze, "documents.create": document_create,
+        }
+        registry.register(item, executors.get(item.id))
     return registry
