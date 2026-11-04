@@ -105,6 +105,10 @@ class CloudServerClient @Inject constructor(
                 }
                 onLog("${selected.name} failed its /health check. Failing over to ${rankedHealthy.first().name}...")
                 rankedHealthy
+            } else if (approvedStepIds.isNotEmpty()) {
+                // Approval resumes must stay on the original task store even if
+                // another healthy node is available.
+                listOf(selected)
             } else {
                 listOf(selected) + rankedHealthy.filterNot { it.id == selected.id }
             }
