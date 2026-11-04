@@ -219,6 +219,9 @@ dependencies {
     implementation 'androidx.core:core-ktx:1.18.0'
     implementation 'androidx.documentfile:documentfile:1.0.1'
     implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
+    // PDFBox's JPX filter calls this optional decoder. Package it at runtime so
+    // release/R8 builds retain JPEG-2000 PDF image support on supported ABIs.
+    runtimeOnly 'com.github.Tgo1014.JP2ForAndroid:jp2-android:1.0.5'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
     implementation 'androidx.activity:activity-compose:1.13.0'
