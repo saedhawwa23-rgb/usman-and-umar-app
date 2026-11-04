@@ -140,19 +140,28 @@ class CloudServerClient @Inject constructor(
                         }.getOrDefault(responseBody)
                         return enriched
                     }
-                    val retryable = response.code == 500 || response.code == 503 || response.code == 504
-                    if (!retryable || position == ordered.lastIndex) {
-                        error(BrowserUseRemoteProtocol.httpError(response.code, responseBody))
-                    }
-                    lastError = IOException("HTTP ${response.code}")
+                    // A server response may follow partial task execution. Never replay a
+                    // task on another node merely because this node returned 5xx.
+                    error(BrowserUseRemoteProtocol.httpError(response.code, responseBody))
                 }
-            } catch (failure: SocketTimeoutException) {
+            } catch (failure: ConnectException) {
+                // Connection refusal happens before the HTTP request is delivered.
+                lastError = failure
+            } catch (failure: UnknownHostException) {
+                // DNS resolution failed before the request could be delivered.
                 lastError = failure
             } catch (failure: IOException) {
-                lastError = failure
+                // Read timeouts and connection resets are ambiguous: the server may
+                // have accepted and executed the task. Fail closed to prevent duplicates.
+                throw IOException(
+                    "The request to ${server.name} failed after dispatch may have begun. " +
+                        "Automatic cross-server retry was stopped to avoid duplicate task execution. " +
+                        "Check this server's task history before retrying.",
+                    failure,
+                )
             }
             if (position < ordered.lastIndex) {
-                onLog("${server.name} failed. Failing over to ${ordered[position + 1].name}...")
+                onLog("${server.name} could not be reached before dispatch. Failing over to ${ordered[position + 1].name}...")
             }
         }
         throw lastError ?: IOException("All configured healthy cloud servers failed.")
