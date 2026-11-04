@@ -184,27 +184,27 @@ class CloudServerClient @Inject constructor(
                     .header("Authorization", "Bearer ${server.token}")
                     .post(ByteArray(0).toRequestBody(null))
                     .build()
+                var successfulBody: String? = null
+                var shouldTryNextServer = false
                 controlClient.newCall(request).execute().use { response ->
                     val responseBody = response.body?.string().orEmpty()
                     if (response.isSuccessful) {
-                        return runCatching {
+                        successfulBody = runCatching {
                             JSONObject(responseBody).put("_cloud_server_id", server.id).toString()
                         }.getOrDefault(responseBody)
-                    }
-                    if (response.code == 404 || response.code == 409) {
+                    } else if (response.code == 404 || response.code == 409 ||
+                        response.code in setOf(500, 503, 504)) {
                         lastError = IOException("HTTP ${response.code}: ${responseBody.take(250)}")
-                        if (targetId != null) break
-                        continue
+                        shouldTryNextServer = true
+                    } else {
+                        error(BrowserUseRemoteProtocol.httpError(response.code, responseBody))
                     }
-                    if (response.code in setOf(500, 503, 504)) {
-                        lastError = IOException("HTTP ${response.code}: ${responseBody.take(250)}")
-                        if (targetId != null) break
-                        continue
-                    }
-                    error(BrowserUseRemoteProtocol.httpError(response.code, responseBody))
                 }
+                if (successfulBody != null) return successfulBody!!
+                if (!shouldTryNextServer || targetId != null) break
             } catch (failure: IOException) {
                 lastError = failure
+                if (targetId != null) break
             }
         }
         throw lastError ?: IOException("No configured server owns cloud task $taskId.")
