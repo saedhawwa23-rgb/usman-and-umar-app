@@ -52,6 +52,13 @@ class CloudServerClient @Inject constructor(
         .callTimeout(65, TimeUnit.SECONDS)
         .build()
 
+    private val controlClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(180, TimeUnit.SECONDS)
+        .build()
+
     private val healthClient = OkHttpClient.Builder()
         .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(4, TimeUnit.SECONDS)
@@ -147,6 +154,61 @@ class CloudServerClient @Inject constructor(
         throw lastError ?: IOException("All configured healthy cloud servers failed.")
     }
 
+
+
+    /** Sends pause/cancel/resume to the server that owns the task; without a pin, finds it across the configured cluster. */
+    suspend fun controlTask(taskId: String, action: String, targetId: String? = null): String {
+        require(taskId.matches(Regex("[A-Za-z0-9._-]{1,128}"))) { "Invalid cloud task ID." }
+        require(action in setOf("pause", "cancel", "resume")) { "Unsupported cloud task control action." }
+        val configured = settingsRepository.cloudServers.first()
+            .filter { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
+        check(configured.isNotEmpty()) { "Enable and configure at least one cloud server in Remote settings." }
+        val healthy = probeServers(configured).filter { it.online }
+        check(healthy.isNotEmpty()) { "No enabled OpenSwarm server returned HTTP 200 from /health." }
+        val ordered = if (targetId != null) {
+            val selected = configured.firstOrNull { it.id == targetId }
+                ?: error("The original cloud server is no longer configured.")
+            check(healthy.any { it.serverId == selected.id }) {
+                "The original cloud server ${selected.name} is offline; task control will not move its local task state to another server."
+            }
+            listOf(selected)
+        } else {
+            healthy.mapNotNull { health -> configured.firstOrNull { it.id == health.serverId } }
+        }
+        var lastError: Throwable? = null
+        for (server in ordered) {
+            try {
+                val baseUrl = normalizeServerBase(server.url)
+                val request = Request.Builder()
+                    .url("$baseUrl/tasks/$taskId/$action")
+                    .header("Authorization", "Bearer ${server.token}")
+                    .post(ByteArray(0).toRequestBody(null))
+                    .build()
+                controlClient.newCall(request).execute().use { response ->
+                    val responseBody = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        return runCatching {
+                            JSONObject(responseBody).put("_cloud_server_id", server.id).toString()
+                        }.getOrDefault(responseBody)
+                    }
+                    if (response.code == 404 || response.code == 409) {
+                        lastError = IOException("HTTP ${response.code}: ${responseBody.take(250)}")
+                        if (targetId != null) break
+                        continue
+                    }
+                    if (response.code in setOf(500, 503, 504)) {
+                        lastError = IOException("HTTP ${response.code}: ${responseBody.take(250)}")
+                        if (targetId != null) break
+                        continue
+                    }
+                    error(BrowserUseRemoteProtocol.httpError(response.code, responseBody))
+                }
+            } catch (failure: IOException) {
+                lastError = failure
+            }
+        }
+        throw lastError ?: IOException("No configured server owns cloud task $taskId.")
+    }
 
     /** Reads the real agent roster and adapter readiness from the fastest healthy configured backend. */
     suspend fun fetchOpenSwarmAgents(): List<RemoteOpenSwarmAgent> {
