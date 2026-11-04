@@ -101,7 +101,7 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
             plan = {"summary": "Create a project note", "steps": [{
                 "id": "doc-1", "agent_id": "documents", "objective": "Create a project note",
                 "depends_on": [], "requires_approval": False, "capability_id": "documents.create",
-                "tool_input": {"path": "reports/project.md", "markdown": "# Project\\n\\nReviewed draft."},
+                "tool_input": {"path": "reports/project.md", "markdown": "# Project\n\nReviewed draft."},
             }]}
             with patch.object(openswarm_agent, "TASKS", store), \\
                  patch.object(openswarm_agent, "_manager_plan", return_value=plan):
@@ -118,7 +118,7 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(second["verified"])
                 self.assertEqual(store.get("document-task")["state"], "COMPLETED")
                 with open(os.path.join(directory, "reports", "project.md"), encoding="utf-8") as handle:
-                    self.assertEqual(handle.read(), "# Project\\n\\nReviewed draft.")
+                    self.assertEqual(handle.read(), "# Project\n\nReviewed draft.")
 
     async def test_csv_analysis_returns_numeric_summary_from_workspace(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"OPENSWARM_WORKSPACE": directory}):
