@@ -243,10 +243,10 @@ def build_default_capability_registry() -> CapabilityRegistry:
 
     async def github_read(payload: dict[str, Any]) -> dict[str, Any]:
         repo, path = github_repo_path(payload)
-        ref = str(payload.get("ref") or "HEAD")
+        ref = str(payload.get("ref") or "").strip()
         url = f"https://api.github.com/repos/{repo}/contents/{quote(path, safe='/')}"
         async with httpx.AsyncClient(timeout=25, headers=github_headers()) as client:
-            response = await client.get(url, params={"ref": ref})
+            response = await client.get(url, params={"ref": ref} if ref else None)
             response.raise_for_status()
         item = response.json()
         if item.get("type") != "file":
@@ -255,7 +255,7 @@ def build_default_capability_registry() -> CapabilityRegistry:
         content = base64.b64decode(encoded).decode("utf-8")
         if len(content.encode("utf-8")) > 1_000_000:
             raise ValueError("GitHub file exceeds the 1 MB text-read limit.")
-        return {"repo": repo, "path": path, "ref": ref, "sha": item.get("sha"),
+        return {"repo": repo, "path": path, "ref": ref or "default branch", "sha": item.get("sha"),
                 "content": content, "verified": True}
 
     async def github_write(payload: dict[str, Any]) -> dict[str, Any]:
