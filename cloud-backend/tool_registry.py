@@ -109,7 +109,7 @@ class _DuckDuckGoResultParser(HTMLParser):
             self.results[-1]["title"] += data
 
 
-def build_default_capability_registry() -> CapabilityRegistry:
+def build_default_capability_registry(memory_store: Any | None = None) -> CapabilityRegistry:
     registry = CapabilityRegistry()
 
     async def browser_extract(payload: dict[str, Any]) -> dict[str, Any]:
@@ -224,6 +224,27 @@ def build_default_capability_registry() -> CapabilityRegistry:
             raise ValueError("documents.create requires non-empty Markdown content.")
         return await file_write({"path": str(path.relative_to(_workspace_root())), "content": content})
 
+
+
+    async def memory_read(payload: dict[str, Any]) -> dict[str, Any]:
+        if memory_store is None:
+            raise RuntimeError("Persistent agent memory store is not configured.")
+        item = memory_store.memory_get(payload.get("key", ""))
+        return {"item": item, "verified": item is not None}
+
+    async def memory_write(payload: dict[str, Any]) -> dict[str, Any]:
+        if memory_store is None:
+            raise RuntimeError("Persistent agent memory store is not configured.")
+        if "value" not in payload:
+            raise ValueError("memory.write requires a value.")
+        item = memory_store.memory_set(payload.get("key", ""), payload["value"])
+        return {"item": item, "verified": True}
+
+    async def memory_search(payload: dict[str, Any]) -> dict[str, Any]:
+        if memory_store is None:
+            raise RuntimeError("Persistent agent memory store is not configured.")
+        items = memory_store.memory_search(str(payload.get("query") or ""), payload.get("limit", 10))
+        return {"items": items, "verified": True}
 
     def github_headers() -> dict[str, str]:
         token = os.getenv("GITHUB_TOKEN", "").strip()
@@ -345,6 +366,9 @@ def build_default_capability_registry() -> CapabilityRegistry:
         Capability("drive.upload", "Upload a file to an authorized Google Drive account.", "cloud", ("drive.write",), "high"),
         Capability("verification.check", "Verify an operation using independent execution evidence.", "cloud", (), "low"),
         Capability("delivery.package", "Package and report verified task artifacts.", "cloud", ("files",), "low"),
+        Capability("memory.read", "Read a named persistent agent memory entry.", "cloud", ("memory.read",), "low"),
+        Capability("memory.search", "Search persistent agent memory entries.", "cloud", ("memory.read",), "low"),
+        Capability("memory.write", "Create or update a persistent agent memory entry.", "cloud", ("memory.write",), "high"),
     )
     github_configured = bool(os.getenv("GITHUB_TOKEN", "").strip())
     for item in entries:
@@ -354,6 +378,9 @@ def build_default_capability_registry() -> CapabilityRegistry:
             "data.analyze": data_analyze, "documents.create": document_create,
             "github.read": github_read, "github.write": github_write,
             "github.pull_request": github_pull_request,
+            "memory.read": memory_read if memory_store is not None else None,
+            "memory.search": memory_search if memory_store is not None else None,
+            "memory.write": memory_write if memory_store is not None else None,
         }
         executor = executors.get(item.id)
         if item.id.startswith("github.") and not github_configured:
