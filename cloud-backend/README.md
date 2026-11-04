@@ -47,7 +47,7 @@ The Manager requests a bounded structured dependency graph and dispatches indepe
 - `POST /execute` — authenticated execution; retains the Android client's existing request/response contract.
 - `GET /tasks/{task_id}` — persisted task state, plan and result.
 - `GET /tasks/{task_id}/logs` — task event journal.
-- `POST /tasks/{task_id}/pause` — request a cooperative pause at the next specialist boundary.
+- `POST /tasks/{task_id}/pause` — request a cooperative pause; the server confirms `PAUSED` only after the in-flight specialist reaches a checkpoint.
 - `POST /tasks/{task_id}/resume` — resume a paused task from its saved completed steps.
 - `POST /tasks/{task_id}/cancel` — cancel a task at the next specialist boundary.
 
