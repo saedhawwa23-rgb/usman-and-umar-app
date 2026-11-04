@@ -149,7 +149,7 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_workspace_write_requires_approval_and_read_is_confined(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"OPENSWARM_WORKSPACE": directory}):
-                    registry = build_default_capability_registry()
+            registry = build_default_capability_registry()
             with self.assertRaises(PermissionError):
                 await registry.execute("files.write", {"path": "reports/summary.md", "content": "# Report"})
             written = await registry.execute(
