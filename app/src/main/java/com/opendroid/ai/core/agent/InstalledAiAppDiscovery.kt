@@ -3,6 +3,7 @@ package com.opendroid.ai.core.agent
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.core.content.edit
 
 /**
  * Discovers likely AI clients from Android's PackageManager instead of maintaining a
@@ -60,9 +61,8 @@ object InstalledAiAppPreferences {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_PACKAGE, null)
 
     fun setSelectedPackage(context: Context, packageName: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putString(KEY_PACKAGE, packageName)
-            .apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit {
+            putString(KEY_PACKAGE, packageName)
+        }
     }
 }
