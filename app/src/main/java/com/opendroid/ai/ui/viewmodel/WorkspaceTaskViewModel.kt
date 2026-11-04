@@ -385,12 +385,12 @@ class WorkspaceTaskViewModel @Inject constructor(
                     TaskState.RUNNING.name, TaskState.PAUSED.name,
                     TaskState.WAITING_APPROVAL.name, TaskState.WAITING_USER.name,
                 )) { "This task cannot be cancelled from its current state." }
-                val savedServerId = task.notes.substringAfter("OpenSwarm paused:\\n", "")
+                val savedServerId = task.notes.substringAfter("OpenSwarm paused:\n", "")
                     .takeIf { it != task.notes }
                     ?.let { runCatching { JSONObject(it).optString("_cloud_server_id") }.getOrNull() }
                     ?.takeIf { it.isNotBlank() }
                     ?: runCatching {
-                        val approval = task.notes.substringAfter("OpenSwarm approval request:\\n", "")
+                        val approval = task.notes.substringAfter("OpenSwarm approval request:\n", "")
                         if (approval == task.notes) "" else JSONObject(approval).optString("_cloud_server_id")
                     }.getOrNull()?.takeIf { it.isNotBlank() }
                 withContext(Dispatchers.IO) {
@@ -413,7 +413,7 @@ class WorkspaceTaskViewModel @Inject constructor(
                     "Only a cloud OpenSwarm task can be resumed remotely."
                 }
                 check(task.state == TaskState.PAUSED.name) { "Only a paused task can be resumed." }
-                val checkpoint = task.notes.substringAfter("OpenSwarm paused:\\n", "")
+                val checkpoint = task.notes.substringAfter("OpenSwarm paused:\n", "")
                 val savedServerId = checkpoint.takeIf { it != task.notes }
                     ?.let { runCatching { JSONObject(it).optString("_cloud_server_id") }.getOrNull() }
                     ?.takeIf { it.isNotBlank() }
