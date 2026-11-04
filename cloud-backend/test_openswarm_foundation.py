@@ -274,12 +274,13 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
     async def test_high_impact_agent_waits_for_explicit_approval_then_resumes_same_task(self):
         with tempfile.TemporaryDirectory() as directory:
             store = TaskStateStore(directory + "/approval.sqlite")
-            plan = {"summary": "Commit the reviewed change", "steps": [{
-                "id": "push-1", "agent_id": "terminal", "objective": "Run approved terminal action",
-                "depends_on": [], "requires_approval": False,
+            plan = {"summary": "Run the reviewed command", "steps": [{
+                "id": "terminal-1", "agent_id": "terminal", "objective": "Run approved terminal action",
+                "depends_on": [], "requires_approval": True, "capability_id": "terminal.execute",
+                "tool_input": {"argv": ["echo", "command completed"], "cwd": ".", "timeout_seconds": 10},
             }]}
             executor = AsyncMock(return_value={
-                "agent_id": "github", "status": "EXECUTED", "verified": True, "output": "command completed"
+                "agent_id": "terminal", "status": "EXECUTED", "verified": True, "output": "command completed"
             })
             with patch.object(openswarm_agent, "TASKS", store), \
                  patch.object(openswarm_agent, "_manager_plan", return_value=plan), \
@@ -294,7 +295,7 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
 
                 second = json.loads(await openswarm_agent.run_openswarm_task(
                     task_id="approval-task", prompt="Run approved terminal action", plugin_id=None,
-                    allowed_domains=[], max_steps=5, approved_step_ids=["push-1"],
+                    allowed_domains=[], max_steps=5, approved_step_ids=["terminal-1"],
                 ))
                 self.assertTrue(second["verified"])
                 self.assertEqual(store.get("approval-task")["state"], "COMPLETED")
