@@ -189,7 +189,7 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_coder_writes_generated_workspace_file_only_after_explicit_approval(self):
         class FakeModel:
             def invoke(self, _messages):
-                return type("Response", (), {"content": "print('hello from OpenSwarm')\\n"})()
+                return type("Response", (), {"content": "print('hello from OpenSwarm')\n"})()
 
         with tempfile.TemporaryDirectory() as directory, \
              patch.dict(os.environ, {"OPENSWARM_WORKSPACE": directory}):
@@ -214,7 +214,7 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
                 ))
             artifact = os.path.join(directory, "src", "hello.py")
             self.assertTrue(os.path.isfile(artifact))
-            self.assertEqual(open(artifact, encoding="utf-8").read(), "print('hello from OpenSwarm')\\n")
+            self.assertEqual(open(artifact, encoding="utf-8").read(), "print('hello from OpenSwarm')\n")
             self.assertTrue(second["verified"])
             self.assertEqual(second["results"][0]["status"], "GENERATED_AND_WRITTEN")
             self.assertEqual(second["results"][0]["artifact_path"], "src/hello.py")
