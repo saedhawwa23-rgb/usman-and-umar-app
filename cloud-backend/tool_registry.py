@@ -231,7 +231,7 @@ def build_default_capability_registry(memory_store: Any | None = None) -> Capabi
                 _public_http_url(target)
             except (ValueError, ImportError):
                 continue
-            candidates.append({"title": re.sub(r"\\s+", " ", item["title"]).strip(),
+            candidates.append({"title": re.sub(r"\s+", " ", item["title"]).strip(),
                                "url": target})
             if len(candidates) >= limit:
                 break
