@@ -152,6 +152,31 @@ class ResearchParserTests(unittest.TestCase):
         target = parse_qs(urlsplit(candidate).query)["uddg"][0]
         self.assertEqual(target, "https://example.com/article")
 
+class ResearchAdapterTests(unittest.IsolatedAsyncioTestCase):
+    async def test_search_retrieves_source_page_text_before_marking_research_verified(self):
+        html = '<a class="result__a" href="https://example.com/article">Example Article</a>'
+        transport = httpx.MockTransport(lambda _request: httpx.Response(200, text=html))
+        original_client = httpx.AsyncClient
+
+        def client_factory(*args, **kwargs):
+            return original_client(transport=transport, **kwargs)
+
+        browser_fetch = AsyncMock(return_value="Actual article body with source evidence.")
+        with patch("tool_registry.httpx.AsyncClient", side_effect=client_factory), \
+             patch("browser_scraper.run_playwright_task", new=browser_fetch):
+            registry = build_default_capability_registry()
+            result = await registry.execute("research.search", {"query": "example research", "limit": 1})
+
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["retrieved_count"], 1)
+        self.assertEqual(result["sources"][0]["url"], "https://example.com/article")
+        self.assertEqual(result["sources"][0]["content"], "Actual article body with source evidence.")
+        self.assertTrue(result["sources"][0]["retrieved"])
+        browser_fetch.assert_awaited_once_with(
+            "https://example.com/article", action="scrape", allowed_domains=["example.com"]
+        )
+
+
 class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
 
 
