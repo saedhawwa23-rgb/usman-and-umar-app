@@ -350,10 +350,10 @@ fun WorkspaceTaskScreen(
                     val overdue = tasks.filter { it.deadlineAt != null && it.deadlineAt < today && it.state != TaskState.SUCCEEDED.name }
                     item { SectionTitle("TODAY") }
                     if (todayTasks.isEmpty()) item { Text("Nothing due today.", color = AppTheme.colors.textSecondary) }
-                    items(todayTasks, key = { "today-${it.id}" }) { task -> TaskCard(task, viewModel::runTask, ::beginDriveUpload) }
+                    items(todayTasks, key = { "today-${it.id}" }) { task -> TaskCard(task, viewModel::runTask, ::beginDriveUpload, onPause = viewModel::pauseCloudTask, onCancel = viewModel::cancelCloudTask) }
                     item { SectionTitle("OVERDUE") }
                     if (overdue.isEmpty()) item { Text("No overdue tasks.", color = AppTheme.colors.textSecondary) }
-                    items(overdue, key = { "overdue-${it.id}" }) { task -> TaskCard(task, viewModel::runTask, ::beginDriveUpload) }
+                    items(overdue, key = { "overdue-${it.id}" }) { task -> TaskCard(task, viewModel::runTask, ::beginDriveUpload, onPause = viewModel::pauseCloudTask, onCancel = viewModel::cancelCloudTask) }
                 }
                 TaskuaryPage.BOARD -> {
                     item {
