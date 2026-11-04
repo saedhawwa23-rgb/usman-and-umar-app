@@ -1,3 +1,4 @@
+import base64
 import os
 import tempfile
 import unittest
@@ -8,6 +9,7 @@ from agent_registry import build_default_registry
 from task_state import TaskStateStore
 from tool_registry import Capability, CapabilityRegistry, build_default_capability_registry
 import openswarm_agent
+import httpx
 from tool_registry import _DuckDuckGoResultParser
 
 
@@ -73,6 +75,45 @@ class CapabilityTests(unittest.IsolatedAsyncioTestCase):
             await registry.execute("drive.upload", {"path": "file.bin"})
 
 
+
+
+class GitHubAdapterTests(unittest.IsolatedAsyncioTestCase):
+
+    async def test_github_write_requires_approval_and_verifies_readback(self):
+        stored = {}
+        def handler(request):
+            self.assertEqual(request.headers.get("Authorization"), "Bearer test-token")
+            if request.method == "GET" and request.url.path.endswith("/contents/src/demo.py"):
+                if "content" not in stored:
+                    return httpx.Response(404, json={"message": "Not Found"})
+                encoded = base64.b64encode(stored["content"]).decode("ascii")
+                return httpx.Response(200, json={"type": "file", "size": len(stored["content"]),
+                                                  "sha": "file-sha", "content": encoded})
+            if request.method == "PUT" and request.url.path.endswith("/contents/src/demo.py"):
+                body = json.loads(request.content.decode("utf-8"))
+                stored["content"] = base64.b64decode(body["content"])
+                return httpx.Response(200, json={
+                    "commit": {"sha": "commit-sha"},
+                    "content": {"sha": "file-sha", "html_url": "https://github.com/example/repo/blob/main/src/demo.py"},
+                })
+            return httpx.Response(404, json={"message": "Unexpected mocked route"})
+
+        transport = httpx.MockTransport(handler)
+        original_client = httpx.AsyncClient
+        def client_factory(*args, **kwargs):
+            return original_client(transport=transport, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {"GITHUB_TOKEN": "test-token"}), \\
+             patch("tool_registry.httpx.AsyncClient", side_effect=client_factory):
+            registry = build_default_capability_registry()
+            payload = {"repo": "example/repo", "path": "src/demo.py", "content": "print('hello')",
+                       "message": "Add demo", "branch": "main"}
+            with self.assertRaises(PermissionError):
+                await registry.execute("github.write", payload)
+            result = await registry.execute("github.write", payload, approved=True)
+            self.assertTrue(result["verified"])
+            read = await registry.execute("github.read", {"repo": "example/repo", "path": "src/demo.py"})
+            self.assertEqual(read["content"], "print('hello')")
 
 
 class ResearchParserTests(unittest.TestCase):
