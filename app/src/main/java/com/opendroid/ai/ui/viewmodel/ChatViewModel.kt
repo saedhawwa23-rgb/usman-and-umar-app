@@ -20,7 +20,9 @@ import com.opendroid.ai.core.agent.ChatErrorPrimaryAction
 import com.opendroid.ai.core.agent.ChatErrorUiState
 import com.opendroid.ai.core.agent.primaryAction
 import com.opendroid.ai.core.browser.BrowserUseRemoteProtocol
+import com.opendroid.ai.core.browser.CloudRequestException
 import com.opendroid.ai.core.browser.CloudServerClient
+import com.opendroid.ai.core.browser.sanitizeCloudDiagnostic
 import com.opendroid.ai.data.models.AutoMode
 import com.opendroid.ai.data.models.ChatMessage
 import com.opendroid.ai.data.models.LLMConfig
@@ -186,6 +188,9 @@ class ChatViewModel @Inject constructor(
         if (query.isBlank()) return
         val sessionId = pinTaskSessionSnapshot()
         if (target == ChatTarget.CLOUD_OPENSWARM) {
+            // Explicit cloud selection always stays on the cloud path. The local
+            // AutoMode toggle must never silently redirect a cloud task to an AI app.
+            android.util.Log.i("CloudOpenSwarm", "dispatch_route=cloud_openswarm manual_mode_does_not_redirect=true")
             viewModelScope.launch { runCloudOpenSwarm(query, sessionId ?: conversationRepository.ensureCurrentSessionId(), pluginIds, thinkHarder, imageBase64) }
         } else {
             agentLoop.processQuery(query, context, sessionId, imageBase64)
@@ -216,12 +221,16 @@ class ChatViewModel @Inject constructor(
             }
             if (result.isBlank()) conversationRepository.updateMessageText(assistantId, "Cloud OpenSwarm returned an empty result. Tap retry to run it again.")
         } catch (failure: Exception) {
-            val detail = if (failure.message?.contains("cloud server", ignoreCase = true) == true && pluginIds.isNotEmpty()) {
-                "This plugin requires a Cloud Server. Configure it in Remote settings."
-            } else {
-                "Cloud OpenSwarm failed: ${failure.message ?: "Try again."}"
+            val detail = (failure as? CloudRequestException)?.message.orEmpty().ifBlank {
+                "stage=response_processing exception_class=${failure.javaClass.simpleName} request_url=not-available http_status=none response_body=${sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank { "<empty>" }}"
             }
-            conversationRepository.updateMessageText(assistantId, detail)
+            android.util.Log.e("CloudOpenSwarm", detail)
+            val userDetail = if (failure is CloudRequestException) {
+                detail
+            } else {
+                "stage=response_processing exception_class=${failure.javaClass.simpleName} request_url=not-available http_status=none response_body=${sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank { "<empty>" }}"
+            }
+            conversationRepository.updateMessageText(assistantId, "Cloud OpenSwarm failed: $userDetail")
         }
     }
 

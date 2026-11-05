@@ -14,6 +14,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler as default_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from agent_registry import build_default_registry
@@ -33,6 +35,37 @@ _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _BLOCKED_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".test", ".invalid")
 _BLOCKED_HOSTS = {"localhost", "metadata.google.internal", "metadata"}
 AI_PACKAGES_WAITING_MESSAGE = "Playwright dependencies are still downloading. Please wait."
+
+
+@app.middleware("http")
+async def trace_execute_http_request(request: Request, call_next):
+    """Log execute arrival and final HTTP status; never log headers or request bodies."""
+    is_execute = request.method == "POST" and request.url.path == "/execute"
+    if is_execute:
+        logger.info("request_received method=POST path=/execute")
+    try:
+        response = await call_next(request)
+    except Exception:
+        if is_execute:
+            logger.exception("request_failed method=POST path=/execute stage=middleware")
+        raise
+    if is_execute:
+        logger.info("request_completed method=POST path=/execute http_status=%s", response.status_code)
+    return response
+
+
+@app.exception_handler(RequestValidationError)
+async def trace_request_validation_failure(request: Request, exc: RequestValidationError):
+    if request.method == "POST" and request.url.path == "/execute":
+        body = exc.body if isinstance(exc.body, dict) else {}
+        task_id = re.sub(r"[\r\n\t]", "_", str(body.get("task_id", "unknown")))[:128]
+        fields = ",".join(str(".".join(map(str, item.get("loc", ())))) for item in exc.errors())[:300]
+        logger.warning(
+            "execute_validation task_id=%s payload_validation=failed fields=%s",
+            task_id,
+            fields or "unknown",
+        )
+    return await default_validation_exception_handler(request, exc)
 
 # Test seams and optional caches. The heavy modules are intentionally not imported
 # here: /health and the FastAPI/Cloudflare startup path must work without them.
@@ -184,17 +217,22 @@ def _safe_exception_detail(exc: Exception) -> str:
 
 
 async def _execute_impl(request: ExecuteRequest, http_request: Request, authorization: str | None) -> dict[str, Any] | JSONResponse:
+    task_id = re.sub(r"[\r\n\t]", "_", request.task_id)[:128]
     expected_token = os.getenv("APP_CLIENT_TOKEN", "").strip()
     if not expected_token:
+        logger.warning("execute_auth task_id=%s auth=not_configured status=503", task_id)
         return _error_response(503, "APP_CLIENT_TOKEN is not configured on this Colab backend.")
     scheme, separator, supplied_token = (authorization or "").partition(" ")
     if not separator or scheme.lower() != "bearer" or not supplied_token.strip() or not hmac.compare_digest(supplied_token.strip(), expected_token):
+        logger.warning("execute_auth task_id=%s auth=failed status=401", task_id)
         return _error_response(401, "Invalid application token.")
+    logger.info("execute_auth task_id=%s auth=passed payload_validation=passed", task_id)
     client_ip = http_request.client.host if http_request.client else "unknown"
     now = time.monotonic()
     with _rate_lock:
         recent = [stamp for stamp in _request_times[client_ip] if now - stamp < _RATE_WINDOW_SECONDS]
         if len(recent) >= _RATE_LIMIT:
+            logger.warning("execute_status task_id=%s execution_status=rejected status=429 stage=rate_limit", task_id)
             return _error_response(429, "Request rate limit exceeded.")
         recent.append(now)
         _request_times[client_ip] = recent
@@ -209,10 +247,12 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
             require_url=not openswarm_requested and not github_requested,
         )
     except HTTPException as exc:
+        logger.warning("execute_status task_id=%s execution_status=rejected status=%s stage=payload_policy", task_id, exc.status_code)
         return _error_response(exc.status_code, str(exc.detail))
     try:
         _load_ai_execution_functions(openswarm_requested)
         async with _execution_semaphore:
+            logger.info("execute_started task_id=%s route=%s", task_id, "openswarm" if openswarm_requested else "playwright")
             max_steps = 30 if request.think_harder else request.browser_max_steps
             if openswarm_requested:
                 result = await asyncio.wait_for(run_openswarm_task(
@@ -235,19 +275,25 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
                 ), timeout=_EXECUTION_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         logger.exception("Agent execution timed out for task_id=%s", request.task_id)
+        logger.error("execute_status task_id=%s execution_status=failed status=504 stage=execution", task_id)
         return _error_response(504, "Agent execution timed out; inspect the Colab backend log for the traceback.")
     except RuntimeError as exc:
         if str(exc) == AI_PACKAGES_WAITING_MESSAGE:
+            logger.warning("execute_status task_id=%s execution_status=not_ready status=503 stage=dependency_load", task_id)
             return _error_response(503, AI_PACKAGES_WAITING_MESSAGE)
         logger.exception("Agent execution failed for task_id=%s", request.task_id)
+        logger.error("execute_status task_id=%s execution_status=failed status=500 stage=execution exception_class=%s", task_id, type(exc).__name__)
         label = "OpenSwarm execution" if openswarm_requested else "Playwright browser execution"
         return _error_response(500, f"{label} failed (RuntimeError): {_safe_exception_detail(exc)} Full traceback is in the Colab backend log.")
     except Exception as exc:
         logger.exception("Agent execution failed for task_id=%s", request.task_id)
+        logger.error("execute_status task_id=%s execution_status=failed status=500 stage=execution exception_class=%s", task_id, type(exc).__name__)
         label = "OpenSwarm execution" if openswarm_requested else "Playwright browser execution"
         return _error_response(500, f"{label} failed ({type(exc).__name__}): {_safe_exception_detail(exc)} Full traceback is in the Colab backend log.")
     if not isinstance(result, str) or not result.strip():
+        logger.error("execute_status task_id=%s execution_status=empty_result status=502 stage=result_validation", task_id)
         return _error_response(502, "Agent returned no result; no success was recorded.")
+    logger.info("execute_status task_id=%s execution_status=success status=200", task_id)
     return {"result": result}
 
 

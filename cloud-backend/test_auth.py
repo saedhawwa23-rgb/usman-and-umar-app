@@ -43,9 +43,24 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_authorization_header_is_rejected(self) -> None:
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
-            response = await self.post_execute()
+            with self.assertLogs("main", level="WARNING") as captured:
+                response = await self.post_execute()
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["status"], "error")
+        self.assertTrue(any("auth=failed status=401" in entry for entry in captured.output))
+        self.assertFalse(any("test-secret" in entry for entry in captured.output))
+
+    async def test_execute_payload_validation_failure_is_traced(self) -> None:
+        with self.assertLogs("main", level="WARNING") as captured:
+            response = await self.client.post(
+                "/execute",
+                headers={"Authorization": "Bearer validation-test-secret"},
+                json={"task_id": "missing-prompt"},
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertTrue(any("execute_validation task_id=missing-prompt payload_validation=failed" in entry for entry in captured.output))
+        self.assertFalse(any("validation-test-secret" in entry for entry in captured.output))
 
     async def test_wrong_bearer_token_is_rejected(self) -> None:
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
@@ -96,14 +111,25 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
             with patch("main.run_openswarm_task", new_callable=AsyncMock) as swarm:
                 swarm.return_value = "Manager delegated to a real specialist and returned this answer."
-                response = await self.client.post(
-                    "/execute",
-                    headers={"Authorization": "Bearer test-secret"},
-                    json={"task_id": "swarm-1", "prompt": "Write a Python function that reverses a string.", "plugin_id": "openswarm_agent"},
-                )
+                with self.assertLogs("main", level="INFO") as captured:
+                    response = await self.client.post(
+                        "/execute",
+                        headers={"Authorization": "Bearer test-secret"},
+                        json={
+                            "task_id": "swarm-1",
+                            "prompt": "Go to https://example.com and return the page title",
+                            "plugin_id": "openswarm_agent",
+                            "plugins": ["openswarm_agent"],
+                            "think_harder": True,
+                        },
+                    )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"result": "Manager delegated to a real specialist and returned this answer."})
         swarm.assert_awaited_once()
+        self.assertTrue(any("request_received method=POST path=/execute" in entry for entry in captured.output))
+        self.assertTrue(any("task_id=swarm-1 auth=passed payload_validation=passed" in entry for entry in captured.output))
+        self.assertTrue(any("task_id=swarm-1 execution_status=success status=200" in entry for entry in captured.output))
+        self.assertFalse(any("test-secret" in entry for entry in captured.output))
 
     async def test_multi_plugin_request_routes_to_swarm_with_fmhy_and_github_domains(self) -> None:
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):

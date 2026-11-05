@@ -2,10 +2,12 @@ package com.opendroid.ai.core.browser
 
 import com.opendroid.ai.data.repository.CloudServerConfig
 import com.opendroid.ai.data.repository.SettingsRepository
+import android.util.Log
 import java.io.IOException
 import java.net.ConnectException
 import java.net.UnknownHostException
 import java.net.SocketTimeoutException
+import java.net.URI
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -17,6 +19,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.first
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -44,29 +47,84 @@ data class RemoteOpenSwarmAgent(
     val adapterConfigured: Boolean,
 )
 
+internal const val CLOUD_LOG_TAG = "CloudOpenSwarm"
+
+/** Structured failure details shown to the user and written to Logcat without credentials. */
+internal class CloudRequestException(
+    val stage: String,
+    requestUrl: String?,
+    val httpStatus: Int? = null,
+    responseBody: String? = null,
+    cause: Throwable? = null,
+    secrets: List<String> = emptyList(),
+) : IOException(
+    buildString {
+        append("stage=").append(safeDiagnosticValue(stage))
+        append(" exception_class=").append(cause?.javaClass?.simpleName ?: "CloudRequestException")
+        append(" request_url=").append(requestUrl?.let(::safeDiagnosticUrl) ?: "not-built")
+        append(" http_status=").append(httpStatus?.toString() ?: "none")
+        append(" response_body=").append(sanitizeCloudDiagnostic(responseBody.orEmpty(), secrets).ifBlank { "<empty>" })
+    },
+    cause,
+)
+
+internal fun sanitizeCloudDiagnostic(value: String, secrets: List<String> = emptyList()): String {
+    var safe = value
+    secrets.filter { it.isNotBlank() }.forEach { secret -> safe = safe.replace(secret, "[REDACTED]", ignoreCase = false) }
+    safe = safe
+        .replace(Regex("(?i)bearer\\s+[^\\s\\\"']+"), "Bearer [REDACTED]")
+        .replace(Regex("(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|app_client_token|password|secret|token)(\\\"?\\s*[:=]\\s*\\\"?)[^\\s,\\\"}]+"), "$1$2[REDACTED]")
+        .replace(Regex("(?i)(https?://)[^/@\\s:]+:[^/@\\s]+@"), "$1[REDACTED]@")
+        .replace(Regex("[\\r\\n\\t]+"), " ")
+    return safe.take(1_200)
+}
+
+internal fun safeDiagnosticValue(value: String): String =
+    sanitizeCloudDiagnostic(value).replace(Regex("\\s+"), "_").take(160)
+
+internal fun safeDiagnosticUrl(raw: String): String = runCatching {
+    val parsed = URI(raw)
+    val port = if (parsed.port >= 0) ":${parsed.port}" else ""
+    "${parsed.scheme}://${parsed.host.orEmpty()}$port${parsed.path.orEmpty()}"
+}.getOrDefault(raw.substringBefore('?').substringBefore('#').take(300))
+
+internal object LocalTunnelReminderInterceptor : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): okhttp3.Response {
+        val request = chain.request().newBuilder()
+            .header("Bypass-Tunnel-Reminder", "true")
+            .build()
+        return chain.proceed(request)
+    }
+}
+
+internal fun cloudExecuteOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
+    .connectTimeout(60, TimeUnit.SECONDS)
+    .readTimeout(180, TimeUnit.SECONDS)
+    .writeTimeout(60, TimeUnit.SECONDS)
+    .callTimeout(200, TimeUnit.SECONDS)
+    .addInterceptor(LocalTunnelReminderInterceptor)
+    .build()
+
 /** Shared network path for cluster health checks, chat, and workspace cloud tasks. */
 @Singleton
 class CloudServerClient @Inject constructor(
     private val settingsRepository: SettingsRepository,
 ) {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(65, TimeUnit.SECONDS)
-        .readTimeout(65, TimeUnit.SECONDS)
-        .writeTimeout(65, TimeUnit.SECONDS)
-        .callTimeout(65, TimeUnit.SECONDS)
-        .build()
+    private val client = cloudExecuteOkHttpClient()
 
     private val controlClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(60, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
-        .callTimeout(180, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(200, TimeUnit.SECONDS)
+        .addInterceptor(LocalTunnelReminderInterceptor)
         .build()
 
     private val healthClient = OkHttpClient.Builder()
         .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(4, TimeUnit.SECONDS)
         .callTimeout(5, TimeUnit.SECONDS)
+        .addInterceptor(LocalTunnelReminderInterceptor)
         .build()
 
     /** Probes every enabled configured server concurrently and orders healthy servers by latency. */
@@ -84,14 +142,31 @@ class CloudServerClient @Inject constructor(
         imageBase64: String? = null,
         approvedStepIds: List<String> = emptyList(),
         onLog: (String) -> Unit = {},
-    ): String {
+    ): String = withContext(Dispatchers.IO) {
         val configured = settingsRepository.cloudServers.first()
         val candidates = configured.filter { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
-        check(candidates.isNotEmpty()) { "Enable and configure at least one cloud server in Remote settings." }
+        if (candidates.isEmpty()) {
+            throw CloudRequestException(
+                stage = "configuration",
+                requestUrl = null,
+                responseBody = "Enable and configure at least one cloud server in Remote settings.",
+            )
+        }
 
         val health = probeServers(candidates)
         val healthyIds = health.filter { it.online }.mapTo(hashSetOf()) { it.serverId }
-        check(healthyIds.isNotEmpty()) { "No enabled OpenSwarm server returned HTTP 200 from /health." }
+        if (healthyIds.isEmpty()) {
+            val selected = candidates.first()
+            val healthDetail = health.joinToString("; ") { result ->
+                "${result.serverName}: ${result.error ?: "offline"}${result.httpCode?.let { " (HTTP $it)" }.orEmpty()}"
+            }
+            throw CloudRequestException(
+                stage = "health_check",
+                requestUrl = "${normalizeServerBase(selected.url)}/health",
+                httpStatus = health.firstOrNull()?.httpCode,
+                responseBody = "No enabled OpenSwarm server returned HTTP 200 from /health. $healthDetail",
+            )
+        }
         val rankedHealthy = health.asSequence()
             .filter { it.online }
             .mapNotNull { result -> candidates.firstOrNull { it.id == result.serverId } }
@@ -115,60 +190,76 @@ class CloudServerClient @Inject constructor(
         } ?: rankedHealthy
 
         // Construct once, before failover, so every server receives byte-for-byte identical JSON.
-        val clientToken = settingsRepository.currentOpenSwarmClientToken()
-        val payload = buildOpenSwarmPayload(
-            taskId = taskId,
-            prompt = prompt,
-            pluginId = pluginId,
-            pluginIds = pluginIds,
-            thinkHarder = thinkHarder,
-            imageBase64 = imageBase64,
-            appClientToken = clientToken,
-            approvedStepIds = approvedStepIds,
-        ).toRequestBody("application/json; charset=utf-8".toMediaType())
+        val payload = try {
+            buildOpenSwarmPayload(
+                taskId = taskId,
+                prompt = prompt,
+                pluginId = pluginId,
+                pluginIds = pluginIds,
+                thinkHarder = thinkHarder,
+                imageBase64 = imageBase64,
+                approvedStepIds = approvedStepIds,
+            ).toRequestBody("application/json; charset=utf-8".toMediaType())
+        } catch (failure: Exception) {
+            throw CloudRequestException("request_serialization", null, cause = failure)
+        }
 
-        var lastError: Throwable? = null
+        var lastError: CloudRequestException? = null
         for ((position, server) in ordered.withIndex()) {
+            val baseUrl = normalizeServerBase(server.url)
+            val requestUrl = "$baseUrl/execute"
+            val safeUrl = safeDiagnosticUrl(requestUrl)
             try {
-                val baseUrl = normalizeServerBase(server.url)
                 val request = Request.Builder()
-                    .url("$baseUrl/execute")
+                    .url(requestUrl)
                     .header("Authorization", "Bearer ${server.token}")
                     .post(payload)
                     .build()
+                Log.i(CLOUD_LOG_TAG, "request_dispatch stage=http_dispatch method=POST url=$safeUrl task_id=${safeDiagnosticValue(taskId)}")
                 client.newCall(request).execute().use { response ->
                     val responseBody = response.body?.string().orEmpty()
+                    Log.i(CLOUD_LOG_TAG, "request_response stage=http_response url=$safeUrl task_id=${safeDiagnosticValue(taskId)} http_status=${response.code}")
                     if (response.isSuccessful) {
                         val enriched = runCatching {
                             JSONObject(responseBody).put("_cloud_server_id", server.id).toString()
                         }.getOrDefault(responseBody)
-                        return enriched
+                        return@withContext enriched
                     }
                     // A server response may follow partial task execution. Never replay a
                     // task on another node merely because this node returned 5xx.
-                    error(BrowserUseRemoteProtocol.httpError(response.code, responseBody))
+                    throw CloudRequestException(
+                        stage = "http_response",
+                        requestUrl = requestUrl,
+                        httpStatus = response.code,
+                        responseBody = responseBody,
+                        secrets = listOf(server.token),
+                    )
                 }
+            } catch (failure: CloudRequestException) {
+                Log.e(CLOUD_LOG_TAG, failure.message.orEmpty())
+                throw failure
             } catch (failure: ConnectException) {
                 // Connection refusal happens before the HTTP request is delivered.
-                lastError = failure
+                lastError = CloudRequestException("connect", requestUrl, cause = failure, secrets = listOf(server.token))
             } catch (failure: UnknownHostException) {
                 // DNS resolution failed before the request could be delivered.
-                lastError = failure
+                lastError = CloudRequestException("dns_resolution", requestUrl, cause = failure, secrets = listOf(server.token))
             } catch (failure: IOException) {
                 // Read timeouts and connection resets are ambiguous: the server may
                 // have accepted and executed the task. Fail closed to prevent duplicates.
-                throw IOException(
-                    "The request to ${server.name} failed after dispatch may have begun. " +
-                        "Automatic cross-server retry was stopped to avoid duplicate task execution. " +
-                        "Check this server's task history before retrying.",
-                    failure,
+                throw CloudRequestException(
+                    stage = "network_io",
+                    requestUrl = requestUrl,
+                    responseBody = "The request may have reached the server; automatic cross-server retry was stopped to avoid duplicate task execution. Check this server's task history before retrying.",
+                    cause = failure,
+                    secrets = listOf(server.token),
                 )
             }
             if (position < ordered.lastIndex) {
                 onLog("${server.name} could not be reached before dispatch. Failing over to ${ordered[position + 1].name}...")
             }
         }
-        throw lastError ?: IOException("All configured healthy cloud servers failed.")
+        throw lastError ?: CloudRequestException("dispatch", null, responseBody = "All configured healthy cloud servers failed.")
     }
 
 
@@ -367,7 +458,6 @@ internal fun buildOpenSwarmPayload(
     pluginIds: List<String>,
     thinkHarder: Boolean,
     imageBase64: String?,
-    appClientToken: String,
     approvedStepIds: List<String> = emptyList(),
 ): String = JSONObject()
     .put("task_id", taskId)
@@ -377,7 +467,6 @@ internal fun buildOpenSwarmPayload(
     .put("browser_max_steps", if (thinkHarder) 30 else 15)
     .put("think_harder", thinkHarder)
     .put("approved_step_ids", JSONArray(approvedStepIds.distinct().filter { it.isNotBlank() }))
-    .put("APP_CLIENT_TOKEN", appClientToken)
     .apply { imageBase64?.takeIf { it.isNotBlank() }?.let { put("image_base64", it) } }
     .toString()
 
