@@ -93,3 +93,10 @@ python -m unittest discover -v
 ```
 
 GitHub Actions runs backend syntax and unit/contract tests on changes to this directory.
+
+
+## Drive task lease prototype — important limitation
+
+`drive_task_lease.py` contains a Google Drive API v3 adapter that names lease records `task_{task_id}_lease.json` and stores `task_id`, `owner_server_id`, `owner_instance_id`, `lease_version`, `lease_expiry`, and `ownership_status` in Drive `appProperties`. A visible existing lease causes immediate conflict/backoff, and Drive read/create/renewal ambiguity fails closed. The adapter has focused unit tests.
+
+This is **best-effort coordination only**. Google Drive permits duplicate file names, and its file API does not provide atomic create-if-absent, transactions, or compare-and-swap. The list-then-create sequence can race, file listing may not immediately expose another creator's file, and updating/deleting metadata is not conditional on a version. Therefore the adapter does **not** guarantee that two servers can never execute concurrently, even when it detects ordinary conflicts. It is not yet wired into `/execute`, `/resume`, startup Drive authentication, or the task-step execution boundary. Do not describe this prototype as a safe distributed lock or use it as the sole mechanism for high-impact side effects. Strict mutual exclusion requires a transactional coordinator or another service with atomic conditional writes; absent that, callers must treat Drive ownership as advisory and execution as potentially overlapping.
