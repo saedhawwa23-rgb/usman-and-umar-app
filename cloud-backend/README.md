@@ -39,7 +39,7 @@ The Manager requests a bounded structured dependency graph and dispatches indepe
 
 ## Task state and API
 
-- `GET /health` — lightweight service health.
+- `GET /health` — readiness check for Firestore transactions, Drive checkpoint write/read/delete access, active tasks, runtime age, and draining state; returns HTTP 503 until ready or while draining.
 - `GET /agents` — registered specialist agents.
 - `GET /capabilities` — registered agents and adapter readiness.
 - `GET /tools` — shared capability registry with adapter availability and risk levels.
@@ -48,10 +48,10 @@ The Manager requests a bounded structured dependency graph and dispatches indepe
 - `GET /tasks/{task_id}` — persisted task state, plan and result.
 - `GET /tasks/{task_id}/logs` — task event journal.
 - `POST /tasks/{task_id}/pause` — request a cooperative pause; the server confirms `PAUSED` only after the in-flight specialist reaches a checkpoint.
-- `POST /tasks/{task_id}/resume` — resume a paused task from its saved completed steps.
+- `POST /tasks/{task_id}/resume` — resume a paused task from a validated local or Drive checkpoint; ambiguous side effects are blocked for reconciliation.
 - `POST /tasks/{task_id}/cancel` — cancel a task at the next specialist boundary.
 
-Task states include `PENDING`, `PLANNING`, `READY`, `RUNNING`, `VERIFYING`, `COMPLETED`, `WAITING_FOR_USER`, `PAUSED`, `FAILED`, `RETRYING`, and `CANCELLED`. The SQLite store defaults to `/tmp/usman-openswarm.sqlite3` and can be redirected with `OPENSWARM_DB_PATH`. Colab's local filesystem is ephemeral: this database survives process restarts only while the underlying runtime storage remains available. It is not a cross-runtime durable store. A task requiring high-impact action moves to `WAITING_FOR_USER`; the Android app displays the requested steps and resubmits the same task ID with `approved_step_ids`. Approval resume is pinned to the originating configured cloud server so the task is not accidentally continued on a different server's local SQLite database.
+Task states include `PENDING`, `PLANNING`, `READY`, `RUNNING`, `VERIFYING`, `COMPLETED`, `WAITING_FOR_USER`, `PAUSED`, `FAILED`, `RETRYING`, and `CANCELLED`. SQLite remains a local projection/event log and is not treated as cross-runtime authority. A task requiring high-impact action moves to `WAITING_FOR_USER`; the Android app displays the requested steps and resubmits the same task ID with `approved_step_ids`.
 
 `POST /execute` requires `Authorization: Bearer <APP_CLIENT_TOKEN>` and JSON with `task_id` and `prompt`. It returns the result string in the existing `{"result":"..." }` envelope. OpenSwarm results contain a JSON report with specialist outputs and verification state. The endpoint is request/response execution, not a background job queue; the app's existing persistent Task Manager remains the client-side task history. `OPENSWARM_WORKSPACE` selects the confined file/data/document workspace root (default `/content/usman-workspace`). Memory is stored in the same SQLite database as task state; it is persistent across backend process restarts only while that runtime's database file survives.
 
@@ -95,8 +95,21 @@ python -m unittest discover -v
 GitHub Actions runs backend syntax and unit/contract tests on changes to this directory.
 
 
-## Drive task lease prototype — important limitation
+## Transactional task ownership and durable checkpoints
 
-`drive_task_lease.py` contains a Google Drive API v3 adapter that names lease records `task_{task_id}_lease.json` and stores `task_id`, `owner_server_id`, `owner_instance_id`, `lease_version`, `lease_expiry`, and `ownership_status` in Drive `appProperties`. A visible existing lease causes immediate conflict/backoff, and Drive read/create/renewal ambiguity fails closed. The adapter has focused unit tests.
+The backend uses **Cloud Firestore transactions** as the authoritative task lease and version allocator; Drive is used only for immutable, versioned checkpoint files. It does not use a Drive file-create race as a lock. Firestore transactions serialize lease acquisition, heartbeat renewal, release, task-state pointer updates, and monotonic lease generations. See [Firestore transactions](https://firebase.google.com/docs/firestore/manage-data/transactions).
 
-This is **best-effort coordination only**. Google Drive permits duplicate file names, and its file API does not provide atomic create-if-absent, transactions, or compare-and-swap. The list-then-create sequence can race, file listing may not immediately expose another creator's file, and updating/deleting metadata is not conditional on a version. Therefore the adapter does **not** guarantee that two servers can never execute concurrently, even when it detects ordinary conflicts. It is not yet wired into `/execute`, `/resume`, startup Drive authentication, or the task-step execution boundary. Do not describe this prototype as a safe distributed lock or use it as the sole mechanism for high-impact side effects. Strict mutual exclusion requires a transactional coordinator or another service with atomic conditional writes; absent that, callers must treat Drive ownership as advisory and execution as potentially overlapping.
+Configure these Colab Secrets before starting the backend:
+
+- `FIRESTORE_PROJECT_ID`: Google Cloud/Firebase project with the Firestore Native database and API enabled. Firestore has a no-cost quota on the Spark plan within published limits; no paid service is hard-coded or required. If project config, credentials, service access, or quota is unavailable, readiness stays false and task execution fails closed. See current [Firestore pricing and quotas](https://cloud.google.com/firestore/pricing); quotas can change or be exhausted.
+- `DRIVE_CHECKPOINT_FOLDER_ID`: ID of a Drive folder accessible to the Colab-authenticated account. Startup performs a temporary upload/read/delete probe before advertising readiness.
+- `OPENSWARM_SERVER_ID`: stable unique identity for this logical server; different servers must not share it. Each process creates a distinct `server_instance_id`.
+- `APP_CLIENT_TOKEN`: strong random Bearer token, also configured in the Android app.
+
+The notebook authenticates with Colab and installs `requirements.txt` before AI dependencies and Playwright Chromium. It waits for HTTP 200 from `/health` and verifies `drive_ready`, `checkpoint_storage_ready`, and `lease_coordinator_ready` before opening a tunnel. See [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials).
+
+Lease defaults are 120 seconds, heartbeat every 20 seconds, and a 120-second recovery grace after unexpected expiry. The server refuses new work during its configured drain window (`DRAIN_THRESHOLD_SECONDS`, default 11h45m) and reports server/instance IDs, uptime, active local tasks, and remaining runtime. Firestore generations fence backend state mutations; a coordinator transaction cannot atomically fence an unrelated Drive, GitHub, or browser side effect.
+
+OpenSwarm steps use stable per-task/step idempotency keys and persist `PREPARED`, `EXECUTING`, `CONFIRMED`, `FAILED`, or `UNKNOWN` receipts in Drive checkpoints. Checkpoints are schema-validated, credential-like fields are filtered/redacted, limited to 8 MB, uploaded as immutable versioned files, and read back with SHA-256 verification before Firestore advances the authoritative checkpoint pointer. Recovery restores interrupted tasks as paused. `EXECUTING`, `UNKNOWN`, or `CONFIRMED` receipts without a completed result are not replayed automatically; they require reconciliation. A stable key is metadata unless the destination adapter itself accepts and enforces it, so exactly-once effects are not claimed.
+
+The simultaneous-acquisition test uses two independent coordinator instances against a serialized in-memory transaction runner. It validates adapter policy but is **not** a Firestore Emulator or live-project integration test. No live Colab-to-Firestore/Drive test was performed here; readiness and operation depend on the user's configured project, database, credentials, Drive-folder permissions, and quotas. `drive_task_lease.py` remains an advisory prototype only and is not the authoritative lock.

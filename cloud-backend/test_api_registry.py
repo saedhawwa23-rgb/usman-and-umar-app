@@ -1,6 +1,8 @@
 import os
 import unittest
 import tempfile
+import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -8,6 +10,26 @@ from main import app
 from task_state import TaskStateStore
 import main
 import openswarm_agent
+
+
+class FakeCoordinator:
+    def acquire(self, task_id): return SimpleNamespace(task_id=task_id, lease_version=1)
+    def validate(self, lease): return lease
+    def renew(self, lease): return lease
+    def update_task_state(self, lease, updates): return updates
+    def release(self, lease): return None
+    def get_task_state(self, task_id): return None
+    def get_lease(self, task_id):
+        if task_id == "does-not-exist": return None
+        return SimpleNamespace(status="ACTIVE", lease_expiry=time.time() + 300)
+    def request_control(self, task_id, command): return {"task_id": task_id, "command": command, "control_generation": 1}
+    def check_ready(self): return True
+    def get_control(self, task_id): return {"task_id": task_id, "command": "NONE"}
+
+
+class FakeCheckpointStore:
+    def readiness_check(self): return True
+    def upload(self, checkpoint): return {"file_id": "fake", "sha256": "fake"}
 
 
 class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
@@ -58,7 +80,9 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
                 store.transition(task_id, "PLANNING", "planning")
                 store.transition(task_id, "READY", "ready")
                 store.transition(task_id, "RUNNING", "running")
-            with patch.object(main, "_task_store", store), patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            with patch.object(main, "_task_store", store), \
+                 patch.object(main, "_get_lease_coordinator", return_value=FakeCoordinator()), \
+                 patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
                 headers = {"Authorization": "Bearer test-secret"}
                 paused = await self.client.post("/tasks/pause-api/pause", headers=headers)
                 store.transition("pause-api", "PAUSED", "test_checkpoint_reached")
@@ -69,7 +93,7 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(paused_again.json()["state"], "PAUSED")
             self.assertEqual(cancelled.status_code, 200)
             self.assertEqual(store.get("pause-api")["state"], "PAUSED")
-            self.assertEqual(store.get("cancel-api")["state"], "CANCELLED")
+            self.assertEqual(store.get("cancel-api")["state"], "CANCEL_REQUESTED")
 
     async def test_resume_endpoint_only_accepts_paused_tasks(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -84,6 +108,8 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
             store.save_result("resume-api", {"status": "PAUSED", "results": [], "approved_step_ids": []})
             with patch.object(main, "_task_store", store), \
                  patch.object(openswarm_agent, "run_openswarm_task", new=AsyncMock(return_value='{"status":"COMPLETED"}')), \
+                 patch.object(main, "_get_lease_coordinator", return_value=FakeCoordinator()), \
+                 patch.object(main, "_get_checkpoint_store", return_value=FakeCheckpointStore()), \
                  patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
                 response = await self.client.post(
                     "/tasks/resume-api/resume", headers={"Authorization": "Bearer test-secret"}
@@ -102,7 +128,8 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("no configured execution adapter", response.json()["detail"])
 
     async def test_task_inspection_returns_not_found_for_unknown_task(self):
-        with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+        with patch.object(main, "_get_lease_coordinator", return_value=FakeCoordinator()), \
+             patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
             response = await self.client.get(
                 "/tasks/does-not-exist",
                 headers={"Authorization": "Bearer test-secret"},

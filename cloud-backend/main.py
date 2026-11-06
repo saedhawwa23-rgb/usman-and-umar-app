@@ -3,12 +3,17 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
+import hashlib
 import ipaddress
 import logging
 import os
 import re
 import threading
 import time
+import socket
+import uuid
+from datetime import datetime, timezone
 from collections import defaultdict
 from typing import Any
 from urllib.parse import urlsplit
@@ -20,6 +25,8 @@ from fastapi.responses import JSONResponse
 
 from agent_registry import build_default_registry
 from task_state import TaskStateStore
+from firestore_task_lease import FirestoreTaskLeaseCoordinator, LeaseConflict, LeaseUnavailable
+from drive_checkpoint_store import GoogleDriveCheckpointStore, CheckpointError
 from tool_registry import build_default_capability_registry
 from pydantic import BaseModel, Field
 
@@ -31,6 +38,15 @@ _RATE_WINDOW_SECONDS = 60.0
 _RATE_LIMIT = 20
 _EXECUTION_TIMEOUT_SECONDS = 180.0
 _execution_semaphore = asyncio.Semaphore(1)
+_SERVER_ID = os.getenv("OPENSWARM_SERVER_ID", "server-" + socket.gethostname())
+_INSTANCE_ID = str(uuid.uuid4())
+_START_TIME = time.time()
+_MAX_RUNTIME_SECONDS = int(os.getenv("MAX_RUNTIME_SECONDS", str(12 * 60 * 60)))
+_DRAIN_THRESHOLD_SECONDS = int(os.getenv("DRAIN_THRESHOLD_SECONDS", str(11 * 60 * 60 + 45 * 60)))
+_lease_coordinator: FirestoreTaskLeaseCoordinator | None = None
+_lease_coordinator_lock = threading.Lock()
+_checkpoint_store: GoogleDriveCheckpointStore | None = None
+_checkpoint_store_lock = threading.Lock()
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _BLOCKED_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".test", ".invalid")
 _BLOCKED_HOSTS = {"localhost", "metadata.google.internal", "metadata"}
@@ -95,6 +111,23 @@ def _load_ai_execution_functions(openswarm_requested: bool) -> None:
     except ModuleNotFoundError as exc:
         logger.info("Browser dependency is not ready: %s", exc)
         raise RuntimeError(AI_PACKAGES_WAITING_MESSAGE) from exc
+
+
+def _get_lease_coordinator() -> FirestoreTaskLeaseCoordinator:
+    """Return the transactional coordinator or fail closed; never fall back to Drive/SQLite."""
+    global _lease_coordinator
+    with _lease_coordinator_lock:
+        if _lease_coordinator is None:
+            _lease_coordinator = FirestoreTaskLeaseCoordinator.from_env(_SERVER_ID, _INSTANCE_ID)
+        return _lease_coordinator
+
+
+def _get_checkpoint_store() -> GoogleDriveCheckpointStore:
+    global _checkpoint_store
+    with _checkpoint_store_lock:
+        if _checkpoint_store is None:
+            _checkpoint_store = GoogleDriveCheckpointStore.from_env()
+        return _checkpoint_store
 
 
 class ExecuteRequest(BaseModel):
@@ -216,7 +249,190 @@ def _safe_exception_detail(exc: Exception) -> str:
     return detail[:300] or "No exception detail was provided."
 
 
-async def _execute_impl(request: ExecuteRequest, http_request: Request, authorization: str | None) -> dict[str, Any] | JSONResponse:
+def _redact_checkpoint_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _redact_checkpoint_value(item) for key, item in value.items()
+                if not any(secret in str(key).lower() for secret in
+                           ("password", "access_token", "refresh_token", "api_key", "secret", "credential"))}
+    if isinstance(value, list):
+        return [_redact_checkpoint_value(item) for item in value]
+    if isinstance(value, str):
+        safe = re.sub(r"(?i)bearer\s+[^\s,;]+", "Bearer [REDACTED]", value)
+        safe = re.sub(r"(?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|token)(\s*[:=]\s*)[^\s,;]+", r"\1\2[REDACTED]", safe)
+        return safe
+    return value
+
+
+def _lease_error(status_code: int, error: str, message: str, task_id: str,
+                 operation: str, retryable: bool, recovery_action: str) -> JSONResponse:
+    return JSONResponse(status_code=status_code, content={
+        "error": error, "message": message, "task_id": task_id,
+        "server_id": _SERVER_ID, "instance_id": _INSTANCE_ID,
+        "operation": operation, "retryable": retryable,
+        "recovery_action": recovery_action,
+    })
+
+
+async def _execute_impl(request: ExecuteRequest, http_request: Request,
+                        authorization: str | None) -> dict[str, Any] | JSONResponse:
+    """Claim authoritative ownership before any task execution; fail closed."""
+    task_id = re.sub(r"[\r\n\t]", "_", request.task_id)[:128]
+    expected_token = os.getenv("APP_CLIENT_TOKEN", "").strip()
+    scheme, separator, supplied = (authorization or "").partition(" ")
+    if not expected_token:
+        logger.warning("execute_auth task_id=%s auth=not_configured status=503", task_id)
+        return _error_response(503, "APP_CLIENT_TOKEN is not configured on this backend.")
+    if not separator or scheme.lower() != "bearer" or not supplied.strip() or not hmac.compare_digest(supplied.strip(), expected_token):
+        logger.warning("execute_auth task_id=%s auth=failed status=401", task_id)
+        return _error_response(401, "Invalid application token.")
+    fmhy_requested = _fmhy_plugin_requested(request)
+    github_requested = "github_search" in _requested_plugins(request)
+    openswarm_requested = _openswarm_plugin_requested(request)
+    try:
+        _allowed_domains_from_prompt(request.prompt, include_fmhy=fmhy_requested,
+                                     include_github=github_requested,
+                                     require_url=not openswarm_requested and not github_requested)
+    except HTTPException as exc:
+        return _error_response(exc.status_code, str(exc.detail))
+    age = time.time() - _START_TIME
+    if age >= _DRAIN_THRESHOLD_SECONDS:
+        return _lease_error(503, "SERVER_DRAINING", "This server is draining and will not accept new tasks.", task_id, "execute", True, "route_to_healthy_server")
+    try:
+        checkpoint_store = _get_checkpoint_store()
+        await asyncio.to_thread(checkpoint_store.readiness_check)
+    except CheckpointError:
+        return _lease_error(503, "DRIVE_UNAVAILABLE", "Durable Google Drive checkpoint storage is unavailable; execution was not started.", task_id, "checkpoint_storage_readiness", True, "retry_after_storage_health_check")
+    try:
+        coordinator = _get_lease_coordinator()
+        lease = await asyncio.to_thread(coordinator.acquire, task_id)
+    except LeaseConflict as exc:
+        return _lease_error(409, "LEASE_CONFLICT", str(exc), task_id, "execute", False, "reconcile_task_owner")
+    except LeaseUnavailable:
+        return _lease_error(503, "COORDINATOR_UNAVAILABLE", "Transactional task ownership is unavailable; execution was not started.", task_id, "lease_acquire", True, "retry_after_coordinator_health_check")
+
+    stop_heartbeat = asyncio.Event()
+    body_task: asyncio.Task | None = None
+    async def ownership_guard() -> None:
+        try:
+            await asyncio.to_thread(coordinator.validate, lease)
+            control = await asyncio.to_thread(coordinator.get_control, task_id)
+            command = str(control.get("command", "NONE")).upper()
+            if command in {"PAUSE", "CANCEL"}:
+                try:
+                    task = _task_store.get(task_id)
+                    state = task["state"]
+                    if command == "PAUSE" and state == "RUNNING":
+                        _task_store.transition(task_id, "PAUSE_REQUESTED", "remote_pause_requested",
+                                               {"control_generation": control.get("control_generation")})
+                    elif command == "CANCEL" and state in {"PENDING", "PLANNING", "READY", "RUNNING", "VERIFYING",
+                                                              "WAITING_FOR_USER", "PAUSE_REQUESTED", "PAUSED", "RETRYING"}:
+                        _task_store.transition(task_id, "CANCEL_REQUESTED", "remote_cancel_requested",
+                                               {"control_generation": control.get("control_generation")})
+                except (KeyError, ValueError):
+                    pass
+        except LeaseConflict:
+            raise
+        except LeaseUnavailable as exc:
+            raise LeaseUnavailable("Task ownership could not be verified") from exc
+
+    checkpoint_lock = asyncio.Lock()
+    async def checkpoint_callback(snapshot: dict[str, Any]) -> dict[str, Any]:
+        async with checkpoint_lock:
+            await ownership_guard()
+            current_state = await asyncio.to_thread(coordinator.get_task_state, task_id)
+            checkpoint_version = int((current_state or {}).get("checkpoint_version", 0)) + 1
+            timestamp = datetime.now(timezone.utc).isoformat()
+            cleaned = _redact_checkpoint_value(snapshot)
+            checkpoint = {
+                "task_id": task_id,
+                "checkpoint_version": checkpoint_version,
+                "schema_version": 1,
+                "graph_name": "openswarm",
+                "graph_version": "1",
+                "original_prompt": _redact_checkpoint_value(request.prompt),
+                "current_step": cleaned.get("current_step", ""),
+                "completed_steps": cleaned.get("completed_steps", []),
+                "pending_steps": cleaned.get("pending_steps", []),
+                "graph_state": cleaned,
+                "execution_receipts": cleaned.get("execution_receipts", []),
+                "idempotency_keys": cleaned.get("idempotency_keys", []),
+                "task_status": cleaned.get("task_status", "RUNNING"),
+                "task_lease_version": lease.lease_version,
+                "server_id": _SERVER_ID,
+                "server_instance_id": _INSTANCE_ID,
+                "created_at": (current_state or {}).get("created_at", timestamp),
+                "updated_at": timestamp,
+                "recovery_metadata": {"checkpoint_store": "google_drive", "verified_readback": True},
+            }
+            uploaded = await asyncio.to_thread(checkpoint_store.upload, checkpoint)
+            await ownership_guard()
+            await asyncio.to_thread(coordinator.update_task_state, lease, {
+                "checkpoint_version": checkpoint_version,
+                "checkpoint_file_id": uploaded["file_id"],
+                "checkpoint_sha256": uploaded["sha256"],
+                "task_status": checkpoint["task_status"],
+                "current_step": checkpoint["current_step"],
+            })
+            return uploaded
+
+    async def heartbeat() -> None:
+        interval = int(os.getenv("TASK_LEASE_HEARTBEAT_SECONDS", "20"))
+        while not stop_heartbeat.is_set():
+            try:
+                await asyncio.wait_for(stop_heartbeat.wait(), timeout=interval)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await asyncio.to_thread(coordinator.renew, lease)
+            except Exception:
+                if body_task is not None and not body_task.done():
+                    body_task.cancel()
+                return
+
+    heartbeat_task = asyncio.create_task(heartbeat())
+    try:
+        await ownership_guard()
+        body_task = asyncio.create_task(_execute_body(request, http_request, authorization,
+                                                       ownership_guard, checkpoint_callback, lease))
+        result = await body_task
+        if isinstance(result, JSONResponse) and result.status_code >= 500:
+            # An execution error may have an uncertain external outcome. Keep
+            # the lease until expiry + recovery grace rather than immediately
+            # making the task available to another runtime.
+            return result
+        task_status = "COMPLETED"
+        if isinstance(result, dict) and isinstance(result.get("result"), str):
+            try:
+                task_status = str(json.loads(result["result"]).get("status", "COMPLETED")).upper()
+            except (ValueError, TypeError):
+                task_status = "COMPLETED"
+        if isinstance(result, JSONResponse):
+            task_status = "REJECTED"
+        await ownership_guard()
+        await asyncio.to_thread(coordinator.update_task_state, lease, {
+            "task_status": task_status,
+            "server_id": _SERVER_ID, "server_instance_id": _INSTANCE_ID,
+        })
+        await asyncio.to_thread(coordinator.release, lease)
+        return result
+    except LeaseConflict as exc:
+        return _lease_error(409, "STALE_FENCING_TOKEN", str(exc), task_id, "execute", False, "reconcile_task_owner")
+    except LeaseUnavailable:
+        return _lease_error(503, "COORDINATOR_UNAVAILABLE", "Task ownership could not be verified; execution stopped.", task_id, "lease_validation", True, "reconcile_task_owner")
+    except asyncio.CancelledError:
+        return _lease_error(503, "EXECUTION_OUTCOME_UNKNOWN", "Ownership heartbeat was lost; task outcome requires reconciliation.", task_id, "execution", True, "inspect_execution_receipt")
+    finally:
+        stop_heartbeat.set()
+        heartbeat_task.cancel()
+        await asyncio.gather(heartbeat_task, return_exceptions=True)
+
+
+async def _execute_body(request: ExecuteRequest, http_request: Request,
+                        authorization: str | None,
+                        ownership_guard: Any = None,
+                        checkpoint_callback: Any = None,
+                        lease: Any = None) -> dict[str, Any] | JSONResponse:
     task_id = re.sub(r"[\r\n\t]", "_", request.task_id)[:128]
     expected_token = os.getenv("APP_CLIENT_TOKEN", "").strip()
     if not expected_token:
@@ -263,36 +479,83 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
                     allowed_domains=allowed_domains,
                     max_steps=max_steps,
                     approved_step_ids=request.approved_step_ids,
+                    ownership_guard=ownership_guard,
+                    checkpoint_callback=checkpoint_callback,
+                    server_id=_SERVER_ID,
+                    instance_id=_INSTANCE_ID,
+                    fencing_token=lease.lease_version,
                 ), timeout=_EXECUTION_TIMEOUT_SECONDS)
             else:
                 url = _browser_url_from_prompt(request.prompt, fmhy_requested)
                 link_text = _click_target_from_prompt(request.prompt)
+                idempotency_key = hashlib.sha256(f"{task_id}:browser:1".encode("utf-8")).hexdigest()
+                browser_receipt = {
+                    "task_id": task_id, "step_id": "browser-1", "action_id": "browser.navigate",
+                    "idempotency_key": idempotency_key, "server_id": _SERVER_ID,
+                    "instance_id": _INSTANCE_ID, "started_at": time.time(),
+                    "fencing_token": getattr(lease, "lease_version", None), "status": "EXECUTING",
+                    "completed_at": None, "external_reference": None,
+                    "result_hash": None, "error_details": None,
+                }
+                if checkpoint_callback is not None:
+                    await checkpoint_callback({
+                        "current_step": "browser-1", "completed_steps": [], "pending_steps": ["browser-1"],
+                        "graph_state": {"summary": "Direct browser task", "plan": [], "results": [],
+                                        "approved_step_ids": []},
+                        "execution_receipts": [browser_receipt], "idempotency_keys": [idempotency_key],
+                        "task_status": "RUNNING",
+                    })
+                if ownership_guard is not None:
+                    await ownership_guard()
                 result = await asyncio.wait_for(run_playwright_task(
                     url,
                     allowed_domains=allowed_domains,
                     action="click" if link_text else "scrape",
                     link_text=link_text,
                 ), timeout=_EXECUTION_TIMEOUT_SECONDS)
+                if ownership_guard is not None:
+                    await ownership_guard()
+                browser_receipt = {**browser_receipt, "status": "CONFIRMED", "completed_at": time.time(),
+                                   "result_hash": hashlib.sha256(str(result).encode("utf-8")).hexdigest()}
+                if checkpoint_callback is not None:
+                    await checkpoint_callback({
+                        "current_step": "", "completed_steps": ["browser-1"], "pending_steps": [],
+                        "graph_state": {"summary": "Direct browser task", "plan": [],
+                                        "results": [{"step_id": "browser-1", "agent_id": "browser",
+                                                     "status": "COMPLETED", "output": str(result)}],
+                                        "approved_step_ids": []},
+                        "execution_receipts": [browser_receipt], "idempotency_keys": [idempotency_key],
+                        "task_status": "COMPLETED",
+                    })
     except asyncio.TimeoutError:
         logger.exception("Agent execution timed out for task_id=%s", request.task_id)
         logger.error("execute_status task_id=%s execution_status=failed status=504 stage=execution", task_id)
-        return _error_response(504, "Agent execution timed out; inspect the Colab backend log for the traceback.")
+        return _lease_error(504, "EXECUTION_OUTCOME_UNKNOWN", "Execution timed out; inspect the receipt before retrying.", task_id, "execution", True, "inspect_execution_receipt")
+    except LeaseConflict as exc:
+        code = "LEASE_EXPIRED" if "expired" in str(exc).lower() else "STALE_FENCING_TOKEN"
+        return _lease_error(409, code, str(exc), task_id, "execution", False, "reconcile_task_owner")
+    except LeaseUnavailable:
+        return _lease_error(503, "COORDINATOR_UNAVAILABLE", "Task ownership could not be revalidated.", task_id, "lease_validation", True, "retry_after_coordinator_health_check")
+    except CheckpointError as exc:
+        detail = _safe_exception_detail(exc)
+        error_code = "CHECKPOINT_INVALID" if any(term in detail.lower() for term in ("checksum", "schema", "read-back did not match", "invalid")) else "DRIVE_UNAVAILABLE"
+        return _lease_error(503, error_code, detail, task_id, "checkpoint_write", True, "inspect_checkpoint_storage")
     except RuntimeError as exc:
         if str(exc) == AI_PACKAGES_WAITING_MESSAGE:
             logger.warning("execute_status task_id=%s execution_status=not_ready status=503 stage=dependency_load", task_id)
-            return _error_response(503, AI_PACKAGES_WAITING_MESSAGE)
+            return _lease_error(503, "SERVER_NOT_READY", AI_PACKAGES_WAITING_MESSAGE, task_id, "dependency_load", True, "retry_after_backend_readiness")
         logger.exception("Agent execution failed for task_id=%s", request.task_id)
         logger.error("execute_status task_id=%s execution_status=failed status=500 stage=execution exception_class=%s", task_id, type(exc).__name__)
         label = "OpenSwarm execution" if openswarm_requested else "Playwright browser execution"
-        return _error_response(500, f"{label} failed (RuntimeError): {_safe_exception_detail(exc)} Full traceback is in the Colab backend log.")
+        return _lease_error(500, "EXECUTION_FAILED", f"{label} failed: {_safe_exception_detail(exc)}", task_id, "browser_execution" if not openswarm_requested else "openswarm_execution", False, "inspect_execution_receipt")
     except Exception as exc:
         logger.exception("Agent execution failed for task_id=%s", request.task_id)
         logger.error("execute_status task_id=%s execution_status=failed status=500 stage=execution exception_class=%s", task_id, type(exc).__name__)
         label = "OpenSwarm execution" if openswarm_requested else "Playwright browser execution"
-        return _error_response(500, f"{label} failed ({type(exc).__name__}): {_safe_exception_detail(exc)} Full traceback is in the Colab backend log.")
+        return _lease_error(500, "EXECUTION_FAILED", f"{label} failed: {_safe_exception_detail(exc)}", task_id, "browser_execution" if not openswarm_requested else "openswarm_execution", False, "inspect_execution_receipt")
     if not isinstance(result, str) or not result.strip():
         logger.error("execute_status task_id=%s execution_status=empty_result status=502 stage=result_validation", task_id)
-        return _error_response(502, "Agent returned no result; no success was recorded.")
+        return _lease_error(502, "EXECUTION_FAILED", "Agent returned no result; no success was recorded.", task_id, "result_validation", False, "inspect_execution_receipt")
     logger.info("execute_status task_id=%s execution_status=success status=200", task_id)
     return {"result": result}
 
@@ -302,9 +565,43 @@ def root() -> dict[str, str]:
     return {"service": "USMAN AND UMAR OpenSwarm Task Backend", "status": "ok", "health": "/health"}
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+@app.get("/health", response_model=None)
+async def health() -> dict[str, Any] | JSONResponse:
+    now = time.time()
+    uptime = max(0.0, now - _START_TIME)
+    draining = uptime >= _DRAIN_THRESHOLD_SECONDS
+    try:
+        coordinator = _get_lease_coordinator()
+        await asyncio.to_thread(coordinator.check_ready)
+        coordinator_ready = True
+    except LeaseUnavailable:
+        coordinator_ready = False
+    try:
+        checkpoint_store = _get_checkpoint_store()
+        await asyncio.to_thread(checkpoint_store.readiness_check)
+        drive_ready = True
+    except CheckpointError:
+        drive_ready = False
+    active_ids = _task_store.active_tasks()
+    ready = coordinator_ready and drive_ready and not draining
+    payload = {
+        "status": "draining" if draining else ("ready" if ready else "not_ready"),
+        "server_id": _SERVER_ID,
+        "instance_id": _INSTANCE_ID,
+        "start_time": _START_TIME,
+        "current_time": now,
+        "uptime_seconds": uptime,
+        "maximum_runtime_seconds": _MAX_RUNTIME_SECONDS,
+        "remaining_runtime_seconds": max(0, _MAX_RUNTIME_SECONDS - uptime),
+        "accepting_new_tasks": ready,
+        "draining": draining,
+        "drive_ready": drive_ready,
+        "checkpoint_storage_ready": drive_ready,
+        "lease_coordinator_ready": coordinator_ready,
+        "active_task_count": len(active_ids),
+        "active_task_ids": active_ids,
+    }
+    return payload if ready else JSONResponse(status_code=503, content=payload)
 
 @app.get("/agents")
 def agents(authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
@@ -328,13 +625,51 @@ def capabilities(authorization: str | None = Header(default=None, alias="Authori
     ], "tools": _capability_registry.describe()}
 
 
-@app.get("/tasks/{task_id}")
-def get_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
+@app.get("/tasks/{task_id}", response_model=None)
+async def get_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any] | JSONResponse:
     _require_bearer_token(authorization)
     try:
-        return _task_store.get(task_id)
+        local = _task_store.get(task_id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        local = None
+    try:
+        coordinator = _get_lease_coordinator()
+        distributed = await asyncio.to_thread(coordinator.get_task_state, task_id)
+        lease = await asyncio.to_thread(coordinator.get_lease, task_id)
+    except LeaseUnavailable:
+        if local is not None:
+            local["distributed_state_available"] = False
+            return local
+        return _lease_error(503, "COORDINATOR_UNAVAILABLE", "Cross-instance task state cannot be verified.", task_id, "task_status", True, "retry_after_coordinator_health_check")
+    if local is None and distributed is None and lease is None:
+        raise HTTPException(status_code=404, detail=f"Unknown task: {task_id}")
+    response = dict(local or {})
+    if distributed or lease:
+        distributed = distributed or {}
+        response.update({
+            "task_id": task_id,
+            "state": distributed.get("task_status", response.get("state", "RUNNING" if lease and lease.status == "ACTIVE" else "UNKNOWN")),
+            "server_id": distributed.get("server_id", lease.owner_server_id if lease else None),
+            "server_instance_id": distributed.get("server_instance_id", lease.owner_instance_id if lease else None),
+            "lease_version": lease.lease_version if lease else distributed.get("lease_version"),
+            "lease_expiry": lease.lease_expiry if lease else None,
+            "last_heartbeat": lease.last_heartbeat if lease else None,
+            "lease_status": lease.status if lease else "NONE",
+            "checkpoint_version": distributed.get("checkpoint_version"),
+            "checkpoint_file_id": distributed.get("checkpoint_file_id"),
+            "distributed_state_available": True,
+        })
+        if local is None:
+            response["checkpoint_receipts"] = []
+            if distributed.get("checkpoint_file_id"):
+                try:
+                    store = _get_checkpoint_store()
+                    checkpoint = await asyncio.to_thread(store.download,
+                        distributed["checkpoint_file_id"], expected_sha256=distributed.get("checkpoint_sha256"))
+                    response["checkpoint_receipts"] = checkpoint.get("execution_receipts", [])
+                except CheckpointError:
+                    response["checkpoint_available"] = False
+    return response
 
 
 @app.get("/tasks/{task_id}/logs")
@@ -350,58 +685,108 @@ def get_task_logs(task_id: str, authorization: str | None = Header(default=None,
 
 
 
-@app.post("/tasks/{task_id}/pause")
-def pause_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
+@app.post("/tasks/{task_id}/pause", response_model=None)
+async def pause_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any] | JSONResponse:
     _require_bearer_token(authorization)
     try:
-        task = _task_store.get(task_id)
-        if task["state"] in {"PAUSE_REQUESTED", "PAUSED"}:
-            return task
-        if task["state"] != "RUNNING":
-            raise HTTPException(status_code=409, detail=f"Only a RUNNING task can be paused; current state is {task['state']}.")
-        return _task_store.transition(task_id, "PAUSE_REQUESTED", "user_requested_pause")
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        coordinator = _get_lease_coordinator()
+        lease = await asyncio.to_thread(coordinator.get_lease, task_id)
+        if lease is None or lease.status != "ACTIVE" or lease.lease_expiry <= time.time():
+            raise HTTPException(status_code=409, detail="No active owner can acknowledge this pause request.")
+        try:
+            task = _task_store.get(task_id)
+            state = task["state"]
+        except KeyError:
+            task = None
+            distributed = await asyncio.to_thread(coordinator.get_task_state, task_id)
+            state = (distributed or {}).get("task_status", "RUNNING")
+        if state in {"PAUSE_REQUESTED", "PAUSED"}:
+            return task or {"task_id": task_id, "state": state, "server_id": lease.owner_server_id,
+                            "server_instance_id": lease.owner_instance_id}
+        if state != "RUNNING":
+            raise HTTPException(status_code=409, detail=f"Only a RUNNING task can be paused; current state is {state}.")
+        control = await asyncio.to_thread(coordinator.request_control, task_id, "PAUSE")
+        if task is not None:
+            return _task_store.transition(task_id, "PAUSE_REQUESTED", "user_requested_pause", control)
+        return {"task_id": task_id, "state": "PAUSE_REQUESTED", "server_id": lease.owner_server_id,
+                "server_instance_id": lease.owner_instance_id, **control}
+    except LeaseUnavailable:
+        return _lease_error(503, "COORDINATOR_UNAVAILABLE", "Pause could not be safely recorded.", task_id, "pause", True, "retry_after_coordinator_health_check")
 
 
-@app.post("/tasks/{task_id}/cancel")
-def cancel_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
+@app.post("/tasks/{task_id}/cancel", response_model=None)
+async def cancel_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any] | JSONResponse:
     _require_bearer_token(authorization)
     cancellable = {"PENDING", "PLANNING", "READY", "RUNNING", "VERIFYING",
                    "WAITING_FOR_USER", "PAUSE_REQUESTED", "PAUSED", "RETRYING"}
     try:
-        task = _task_store.get(task_id)
-        if task["state"] not in cancellable:
-            raise HTTPException(status_code=409, detail=f"Task cannot be cancelled from {task['state']}.")
-        return _task_store.transition(task_id, "CANCELLED", "user_requested_cancel")
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        coordinator = _get_lease_coordinator()
+        lease = await asyncio.to_thread(coordinator.get_lease, task_id)
+        if lease is None or lease.status != "ACTIVE" or lease.lease_expiry <= time.time():
+            raise HTTPException(status_code=409, detail="No active owner can acknowledge this cancel request.")
+        try:
+            task = _task_store.get(task_id)
+            state = task["state"]
+        except KeyError:
+            task = None
+            distributed = await asyncio.to_thread(coordinator.get_task_state, task_id)
+            state = (distributed or {}).get("task_status", "RUNNING")
+        if state not in cancellable:
+            raise HTTPException(status_code=409, detail=f"Task cannot be cancelled from {state}.")
+        control = await asyncio.to_thread(coordinator.request_control, task_id, "CANCEL")
+        if task is not None:
+            return _task_store.transition(task_id, "CANCEL_REQUESTED", "user_requested_cancel", control)
+        return {"task_id": task_id, "state": "CANCEL_REQUESTED", "server_id": lease.owner_server_id,
+                "server_instance_id": lease.owner_instance_id, **control}
+    except LeaseUnavailable:
+        return _lease_error(503, "COORDINATOR_UNAVAILABLE", "Cancel could not be safely recorded.", task_id, "cancel", True, "retry_after_coordinator_health_check")
 
 
-@app.post("/tasks/{task_id}/resume")
-async def resume_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
+@app.post("/tasks/{task_id}/resume", response_model=None)
+async def resume_task(task_id: str, http_request: Request,
+                     authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any] | JSONResponse:
     _require_bearer_token(authorization)
     try:
         task = _task_store.get(task_id)
-        if task["state"] != "PAUSED":
-            raise HTTPException(status_code=409, detail=f"Only a PAUSED task can be resumed; current state is {task['state']}.")
-        from openswarm_agent import run_openswarm_task
-        saved_result = task.get("result") or {}
-        result = await asyncio.wait_for(run_openswarm_task(
-            task_id=task_id, prompt=task["prompt"], plugin_id=None, plugin_ids=[],
-            allowed_domains=_allowed_domains_from_prompt(task["prompt"], require_url=False),
-            max_steps=30, approved_step_ids=saved_result.get("approved_step_ids", []),
-        ), timeout=_EXECUTION_TIMEOUT_SECONDS)
-        return {"result": result}
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except asyncio.TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="Task resume exceeded the server execution timeout.") from exc
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Task resume failed for task_id=%s", task_id)
-        raise HTTPException(status_code=500, detail=_safe_exception_detail(exc)) from exc
+    except KeyError:
+        try:
+            coordinator = _get_lease_coordinator()
+            task_state = await asyncio.to_thread(coordinator.get_task_state, task_id)
+            if not task_state or not task_state.get("checkpoint_file_id"):
+                raise HTTPException(status_code=404, detail=f"No durable checkpoint is available for task {task_id}.")
+            saved_status = str(task_state.get("task_status", "")).upper()
+            if saved_status in {"COMPLETED", "FAILED", "CANCELLED", "REJECTED"}:
+                raise HTTPException(status_code=409, detail=f"A {saved_status} task cannot be resumed.")
+            if saved_status == "WAITING_FOR_USER":
+                raise HTTPException(status_code=409, detail="This task requires explicit approval before it can resume.")
+            if not task_state.get("checkpoint_sha256") or not task_state.get("checkpoint_version"):
+                raise HTTPException(status_code=409, detail="The authoritative checkpoint pointer lacks version/checksum metadata.")
+            checkpoint_store = _get_checkpoint_store()
+            checkpoint = await asyncio.to_thread(
+                checkpoint_store.download, task_state["checkpoint_file_id"],
+                expected_sha256=task_state.get("checkpoint_sha256"),
+            )
+            if checkpoint.get("task_id") != task_id or int(checkpoint.get("checkpoint_version", 0)) != int(task_state.get("checkpoint_version", -1)):
+                raise HTTPException(status_code=409, detail="Checkpoint pointer/version mismatch; recovery was refused.")
+            completed = set(checkpoint.get("completed_steps", []))
+            for receipt in checkpoint.get("execution_receipts", []):
+                state = str(receipt.get("status", "")).upper()
+                if state in {"EXECUTING", "UNKNOWN"} or (state == "CONFIRMED" and receipt.get("step_id") not in completed):
+                    return _lease_error(409, "EXECUTION_OUTCOME_UNKNOWN",
+                                        "A side-effect outcome is ambiguous; reconcile it before resuming to avoid duplicate execution.",
+                                        task_id, "checkpoint_recovery", False, "reconcile_external_effect")
+            await asyncio.to_thread(_task_store.restore_from_checkpoint, checkpoint)
+            task = _task_store.get(task_id)
+        except LeaseUnavailable:
+            return _lease_error(503, "COORDINATOR_UNAVAILABLE", "Durable task state is unavailable; recovery was refused.", task_id, "checkpoint_recovery", True, "retry_after_storage_health_check")
+        except CheckpointError:
+            return _lease_error(503, "CHECKPOINT_UNAVAILABLE", "The Drive checkpoint could not be verified; recovery was refused.", task_id, "checkpoint_recovery", True, "inspect_checkpoint_storage")
+    if task["state"] != "PAUSED":
+        raise HTTPException(status_code=409, detail=f"Only a PAUSED task can be resumed; current state is {task['state']}.")
+    saved_result = task.get("result") or {}
+    request = ExecuteRequest(task_id=task_id, prompt=task["prompt"], plugins=["openswarm_agent"],
+                            approved_step_ids=saved_result.get("approved_step_ids", []))
+    return await _execute_impl(request, http_request, authorization)
 
 
 @app.get("/tools")

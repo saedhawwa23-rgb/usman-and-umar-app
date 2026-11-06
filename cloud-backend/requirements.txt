@@ -7,3 +7,6 @@ openai>=2.45.0,<3
 langchain-openai>=1,<2
 langgraph>=1,<2
 playwright>=1.51.0,<2
+google-cloud-firestore>=2.19,<3
+google-api-python-client>=2.160,<3
+google-auth>=2.38,<3

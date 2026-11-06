@@ -1,9 +1,11 @@
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
 
+import main
 from main import app
 from model_provider import (
     NVIDIA_BASE_URL,
@@ -13,8 +15,46 @@ from model_provider import (
 )
 
 
+class FakeLeaseCoordinator:
+    def acquire(self, task_id):
+        return SimpleNamespace(task_id=task_id, lease_version=1)
+
+    def validate(self, lease):
+        return lease
+
+    def renew(self, lease):
+        return lease
+
+    def update_task_state(self, lease, updates):
+        return updates
+
+    def release(self, lease):
+        return None
+
+    def get_task_state(self, task_id):
+        return None
+
+    def check_ready(self):
+        return True
+
+    def get_control(self, task_id):
+        return {"task_id": task_id, "command": "NONE"}
+
+
+class FakeCheckpointStore:
+    def readiness_check(self):
+        return True
+
+    def upload(self, checkpoint):
+        return {"file_id": "fake-checkpoint", "sha256": "fake-sha256"}
+
+
 class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
+        self._coordinator_patch = patch.object(main, "_get_lease_coordinator", return_value=FakeLeaseCoordinator())
+        self._checkpoint_patch = patch.object(main, "_get_checkpoint_store", return_value=FakeCheckpointStore())
+        self._coordinator_patch.start()
+        self._checkpoint_patch.start()
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
             base_url="http://testserver",
@@ -22,12 +62,14 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self) -> None:
         await self.client.aclose()
+        self._coordinator_patch.stop()
+        self._checkpoint_patch.stop()
 
     async def test_root_and_health_are_available_without_backend_secrets(self) -> None:
         for path in ("/", "/health"):
             response = await self.client.get(path)
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json()["status"], "ok")
+            self.assertEqual(response.json()["status"], "ok" if path == "/" else "ready")
 
     async def post_execute(
         self,
@@ -235,8 +277,11 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
                 response = await self.post_execute("Bearer test-secret")
         self.assertEqual(response.status_code, 500)
         self.assertEqual(response.headers["content-type"].split(";")[0], "application/json")
-        self.assertIn("Playwright browser execution failed (RuntimeError)", response.json()["error"])
-        self.assertIn("full traceback is in the colab backend log", response.json()["error"].lower())
+        self.assertEqual(response.json()["error"], "EXECUTION_FAILED")
+        self.assertIn("Playwright browser execution failed", response.json()["message"])
+        self.assertEqual(response.json()["operation"], "browser_execution")
+        self.assertEqual(response.json()["retryable"], False)
+        self.assertNotIn("full traceback", response.json()["message"].lower())
         self.assertNotIn("Traceback", response.text)
 
 
