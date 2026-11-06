@@ -203,10 +203,10 @@ class ChatViewModel @Inject constructor(
             // Explicit cloud selection always stays on the cloud path. The local
             // AutoMode toggle must never silently redirect a cloud task to an AI app.
             android.util.Log.i("CloudOpenSwarm", "dispatch_route=cloud_openswarm manual_mode_does_not_redirect=true")
-            val pinnedSession = sessionId ?: conversationRepository.ensureCurrentSessionId()
             val taskId = "chat-${UUID.randomUUID()}"
-            _cloudTaskState.value = CloudTaskUiState(taskId, pinnedSession, "RUNNING")
             cloudTaskJob = viewModelScope.launch {
+                val pinnedSession = sessionId ?: conversationRepository.ensureCurrentSessionId()
+                _cloudTaskState.value = CloudTaskUiState(taskId, pinnedSession, "RUNNING")
                 runCloudOpenSwarm(taskId, query, pinnedSession, pluginIds, thinkHarder, imageBase64)
             }
         } else {
