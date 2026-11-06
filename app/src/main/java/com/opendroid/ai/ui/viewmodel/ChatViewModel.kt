@@ -1,13 +1,28 @@
 package com.opendroid.ai.ui.viewmodel
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import androidx.core.net.toUri
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
+import android.os.Build
+import android.provider.Settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.opendroid.ai.accessibility.LocalAiAppExecutor
 import com.opendroid.ai.core.agent.AgentLoop
 import com.opendroid.ai.core.agent.AgentState
+import com.opendroid.ai.core.agent.ChatToolCall
 import com.opendroid.ai.core.agent.ChatErrorPrimaryAction
 import com.opendroid.ai.core.agent.ChatErrorUiState
 import com.opendroid.ai.core.agent.primaryAction
+import com.opendroid.ai.core.browser.BrowserUseRemoteProtocol
+import com.opendroid.ai.core.browser.CloudRequestException
+import com.opendroid.ai.core.browser.CloudServerClient
+import com.opendroid.ai.core.browser.sanitizeCloudDiagnostic
 import com.opendroid.ai.data.models.AutoMode
 import com.opendroid.ai.data.models.ChatMessage
 import com.opendroid.ai.data.models.LLMConfig
@@ -15,20 +30,41 @@ import com.opendroid.ai.data.models.resolvedAutoMode
 import com.opendroid.ai.data.repository.ChatSession
 import com.opendroid.ai.data.repository.ConversationRepository
 import com.opendroid.ai.data.repository.SettingsRepository
+import com.opendroid.ai.core.termux.TermuxIntegration
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import javax.inject.Inject
+import java.util.UUID
+
+enum class ChatTarget { API_MODEL, CLOUD_OPENSWARM }
+
+data class CloudTaskUiState(
+    val taskId: String,
+    val sessionId: String,
+    val status: String,
+    val serverId: String? = null,
+    val message: String? = null,
+)
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val agentLoop: AgentLoop,
     private val conversationRepository: ConversationRepository,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val termuxIntegration: TermuxIntegration,
+    private val cloudServerClient: CloudServerClient,
+    private val localAiAppExecutor: LocalAiAppExecutor,
 ) : ViewModel() {
 
     val llmConfig: StateFlow<LLMConfig> = settingsRepository.llmConfig
@@ -104,6 +140,9 @@ class ChatViewModel @Inject constructor(
     // task start" rule so [agentState], which is a single field shared by every chat,
     // can be attributed back to the chat it actually belongs to. See [visibleAgentState].
     private val _taskSessionId = MutableStateFlow<String?>(null)
+    private val _cloudTaskState = MutableStateFlow<CloudTaskUiState?>(null)
+    val cloudTaskState: StateFlow<CloudTaskUiState?> = _cloudTaskState
+    private var cloudTaskJob: Job? = null
 
     /**
      * [agentState], but forced to [AgentState.Idle] whenever it actually describes a
@@ -133,11 +172,11 @@ class ChatViewModel @Inject constructor(
      * running" indicator, which must stay visible for that chat even while the user has
      * switched away from it.
      */
-    val runningSessionId: StateFlow<String?> = combine(agentState, _taskSessionId) { state, sessionId ->
-        if (sessionId != null && (state is AgentState.Thinking || state is AgentState.ExecutingPlan)) {
-            sessionId
-        } else {
-            null
+    val runningSessionId: StateFlow<String?> = combine(agentState, _taskSessionId, _cloudTaskState) { state, sessionId, cloud ->
+        when {
+            cloud != null && cloud.status in setOf("RUNNING", "CANCEL_REQUESTED", "UNKNOWN") -> cloud.sessionId
+            sessionId != null && (state is AgentState.Thinking || state is AgentState.ExecutingPlan) -> sessionId
+            else -> null
         }
     }.stateIn(
         scope = viewModelScope,
@@ -157,10 +196,264 @@ class ChatViewModel @Inject constructor(
         return sessionId
     }
 
-    fun sendMessage(query: String, context: Context) {
+    fun sendMessage(query: String, context: Context, imageBase64: String? = null, target: ChatTarget = ChatTarget.API_MODEL, pluginIds: List<String> = emptyList(), thinkHarder: Boolean = false) {
         if (query.isBlank()) return
         val sessionId = pinTaskSessionSnapshot()
-        agentLoop.processQuery(query, context, sessionId)
+        if (target == ChatTarget.CLOUD_OPENSWARM) {
+            // Explicit cloud selection always stays on the cloud path. The local
+            // AutoMode toggle must never silently redirect a cloud task to an AI app.
+            android.util.Log.i("CloudOpenSwarm", "dispatch_route=cloud_openswarm manual_mode_does_not_redirect=true")
+            val taskId = "chat-${UUID.randomUUID()}"
+            cloudTaskJob = viewModelScope.launch {
+                val pinnedSession = sessionId ?: conversationRepository.ensureCurrentSessionId()
+                _cloudTaskState.value = CloudTaskUiState(taskId, pinnedSession, "RUNNING")
+                runCloudOpenSwarm(taskId, query, pinnedSession, pluginIds, thinkHarder, imageBase64)
+            }
+        } else {
+            agentLoop.processQuery(query, context, sessionId, imageBase64)
+        }
+    }
+
+    private suspend fun runCloudOpenSwarm(taskId: String, query: String, sessionId: String, pluginIds: List<String>, thinkHarder: Boolean, imageBase64: String?) {
+        val userMessage = ChatMessage(UUID.randomUUID().toString(), query, ChatMessage.Sender.USER)
+        conversationRepository.insertMessage(sessionId, userMessage)
+        val assistantId = UUID.randomUUID().toString()
+        conversationRepository.insertMessage(sessionId, ChatMessage(assistantId, "", ChatMessage.Sender.AGENT, modelBadge = "Cloud OpenSwarm"))
+        try {
+            val body = cloudServerClient.execute(
+                taskId = taskId,
+                prompt = query,
+                pluginId = pluginIds.firstOrNull() ?: "openswarm_agent",
+                pluginIds = pluginIds.ifEmpty { listOf("openswarm_agent") },
+                thinkHarder = thinkHarder,
+                imageBase64 = imageBase64,
+                onLog = { log -> android.util.Log.i("CloudOpenSwarm", log) },
+                onDispatch = { serverId ->
+                    _cloudTaskState.value = _cloudTaskState.value?.copy(serverId = serverId)
+                },
+            )
+            val result = BrowserUseRemoteProtocol.parseSuccess(body).result
+            val streamed = StringBuilder()
+            result.chunked(48).forEach { chunk ->
+                streamed.append(chunk)
+                conversationRepository.updateMessageText(assistantId, streamed.toString())
+                delay(18)
+            }
+            if (result.isBlank()) conversationRepository.updateMessageText(assistantId, "Cloud OpenSwarm returned an empty result. Tap retry to run it again.")
+            val resultStatus = runCatching { org.json.JSONObject(result).optString("status").uppercase() }.getOrDefault("")
+            val finalStatus = when (resultStatus) {
+                "CANCELLED" -> "CANCELLED"
+                "PAUSED", "WAITING_FOR_USER" -> resultStatus
+                "FAILED" -> "FAILED"
+                else -> "COMPLETED"
+            }
+            _cloudTaskState.value = _cloudTaskState.value?.copy(status = finalStatus)
+        } catch (failure: Exception) {
+            val detail = (failure as? CloudRequestException)?.message.orEmpty().ifBlank {
+                "stage=response_processing exception_class=${failure.javaClass.simpleName} request_url=not-available http_status=none response_body=${sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank { "<empty>" }}"
+            }
+            android.util.Log.e("CloudOpenSwarm", detail)
+            val userDetail = if (failure is CloudRequestException) {
+                val diagnostics = failure.technicalDetails()
+                "Cloud OpenSwarm failed: ${failure.userFacingSummary()}\n\n[cloud-technical-details]\n$diagnostics"
+            } else {
+                "Cloud OpenSwarm failed: ${sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank { "The task result could not be verified." }}"
+            }
+            conversationRepository.updateMessageText(assistantId, userDetail)
+            val state = when {
+                failure.message.orEmpty().contains("UNKNOWN", ignoreCase = true) ||
+                    failure is java.net.SocketTimeoutException ||
+                    ((failure as? CloudRequestException)?.stage == "network_io") ||
+                    ((failure as? CloudRequestException)?.errorCode == "EXECUTION_OUTCOME_UNKNOWN") -> "UNKNOWN"
+                _cloudTaskState.value?.status == "CANCEL_REQUESTED" -> "CANCEL_REQUESTED"
+                else -> "FAILED"
+            }
+            _cloudTaskState.value = _cloudTaskState.value?.copy(status = state, message = sanitizeCloudDiagnostic(failure.message.orEmpty()))
+        }
+    }
+
+    /** Runs only after the user presses the per-message approval button. */
+    fun approveChatToolCall(call: ChatToolCall, context: Context) {
+        val targetSession = sessions.value.firstOrNull { it.isCurrent }?.id
+        viewModelScope.launch {
+            val result = runCatching { withContext(Dispatchers.IO) { executeApprovedChatTool(call, context) } }
+                .fold(onSuccess = { it }, onFailure = { "Action failed: ${it.message ?: "Unknown error."}" })
+            val sessionId = targetSession ?: conversationRepository.ensureCurrentSessionId()
+            conversationRepository.insertMessage(
+                sessionId,
+                ChatMessage(id = UUID.randomUUID().toString(), text = result.take(12_000), sender = ChatMessage.Sender.AGENT),
+            )
+            if (call.action == "use_local_app" && !result.startsWith("Action failed:")) {
+                _taskSessionId.value = sessionId
+                agentLoop.processQuery(
+                    "The local AI app tool completed. Original prompt: ${call.prompt.orEmpty()}\n\n" +
+                        "Tool result from ${call.appName ?: call.packageName ?: "the selected local AI app"}:\n$result\n\n" +
+                        "Continue the user's workflow using this real result. Do not claim actions that were not completed.",
+                    context,
+                    sessionId,
+                    null,
+                )
+            }
+        }
+    }
+
+    private suspend fun executeApprovedChatTool(call: ChatToolCall, context: Context): String {
+        val packageManager = context.packageManager
+        return when (call.action) {
+            "shell" -> {
+                val command = call.command?.trim().orEmpty()
+                require(command.isNotBlank()) { "The proposed shell action has no command." }
+                when {
+                    Regex("^pm\\s+list\\s+packages(?:\\s+-3)?$").matches(command) -> {
+                        val thirdPartyOnly = command.endsWith("-3")
+                        val apps = installedApplications(packageManager)
+                            .filter { !thirdPartyOnly || it.flags and ApplicationInfo.FLAG_SYSTEM == 0 }
+                            .map { it.packageName }.sorted()
+                        "Native PackageManager result (${apps.size} package(s)):\n" +
+                            apps.take(500).joinToString("\n").ifBlank { "No packages found." }
+                    }
+                    command in setOf("getprop ro.build.version.release", "getprop ro.build.version.sdk", "getprop ro.product.model") ->
+                        nativeDeviceProperty(command)
+                    command == "dumpsys battery" -> nativeBatteryStatus(context)
+                    command == "settings get system screen_brightness" -> {
+                        val value = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
+                        "Screen brightness setting: ${if (value >= 0) value else "unavailable"} (0–255 scale)."
+                    }
+                    command == "wm size" -> {
+                        val metrics = context.resources.displayMetrics
+                        "Current app display metrics: ${metrics.widthPixels} x ${metrics.heightPixels} pixels."
+                    }
+                    Regex("^(python3?|python[0-9.]*|git|npm|node)(?:\\s|$)", RegexOption.IGNORE_CASE).containsMatchIn(command) -> {
+                        require(!Regex("[;&|<>`\\n\\r$]").containsMatchIn(command)) {
+                            "Only one simple Linux command may be approved at a time; shell chaining and redirection are blocked."
+                        }
+                        executeExplicitLinuxTask(command)
+                    }
+                    command.startsWith("open app ", ignoreCase = true) ->
+                        openInstalledApp(context, command.substringAfter("open app ").trim())
+                    command.startsWith("open url ", ignoreCase = true) ->
+                        openUrl(context, command.substringAfter("open url ").trim())
+                    else -> error("Unsupported shell action. Native mode supports read-only Android queries, 'pm list packages', 'open app …', and 'open url …'. Python/Git/npm/Node tasks require Termux.")
+                }
+            }
+            "pm_list_packages", "list_packages" -> {
+                val apps = installedApplications(packageManager).map { it.packageName }.sorted()
+                "Native PackageManager result (${apps.size} package(s)):\n" +
+                    apps.take(500).joinToString("\n").ifBlank { "No packages found." }
+            }
+            "open_app", "launch_app" -> {
+                val target = call.packageName ?: call.appName
+                require(!target.isNullOrBlank()) { "Specify an app name or package name." }
+                openInstalledApp(context, target)
+            }
+            "open_url", "open_uri" -> {
+                val url = call.url ?: call.appName
+                require(!url.isNullOrBlank()) { "Specify an HTTP or HTTPS URL." }
+                openUrl(context, url)
+            }
+            "use_local_app" -> localAiAppExecutor.execute(
+                context = context,
+                appName = call.appName,
+                packageName = call.packageName,
+                prompt = call.prompt ?: call.command ?: error("Specify the prompt to send to the local AI app."),
+            )
+            "device_info", "android_device_info" -> nativeDeviceProperty("getprop ro.build.version.release")
+            "battery_status", "get_battery_status" -> nativeBatteryStatus(context)
+            "network_status", "get_network_status" -> nativeNetworkStatus(context)
+            "screen_brightness" -> {
+                val value = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
+                "Screen brightness setting: ${if (value >= 0) value else "unavailable"} (0–255 scale)."
+            }
+            else -> error("Unsupported tool action '${call.action}'. No action was executed.")
+        }
+    }
+
+    private fun nativeDeviceProperty(command: String): String = when (command) {
+        "getprop ro.build.version.release" -> "Android release: ${Build.VERSION.RELEASE}."
+        "getprop ro.build.version.sdk" -> "Android API level: ${Build.VERSION.SDK_INT}."
+        "getprop ro.product.model" -> "Device model: ${Build.MANUFACTURER} ${Build.MODEL}."
+        else -> error("Unsupported Android property query.")
+    }
+
+    private fun nativeBatteryStatus(context: Context): String {
+        val manager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            ?: error("Battery status is unavailable on this device.")
+        val percent = manager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val status = manager.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS)
+        val statusLabel = when (status) {
+            BatteryManager.BATTERY_STATUS_CHARGING -> "charging"
+            BatteryManager.BATTERY_STATUS_DISCHARGING -> "discharging"
+            BatteryManager.BATTERY_STATUS_FULL -> "full"
+            BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "not charging"
+            else -> "unknown status"
+        }
+        return "Battery: ${if (percent in 0..100) "$percent%" else "unavailable"}, $statusLabel."
+    }
+
+    private fun nativeNetworkStatus(context: Context): String {
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: error("Network status is unavailable on this device.")
+        val network = connectivity.activeNetwork ?: return "No active network connection."
+        val capabilities = connectivity.getNetworkCapabilities(network)
+            ?: return "An active network is present, but its capabilities could not be read."
+        val transport = when {
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "Wi-Fi"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+            else -> "other"
+        }
+        val validated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        return "Active network: $transport; internet validated: ${if (validated) "yes" else "no"}."
+    }
+
+    private fun installedApplications(packageManager: PackageManager): List<ApplicationInfo> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getInstalledApplications(0)
+        }
+
+    private suspend fun openInstalledApp(context: Context, target: String): String {
+        val packageManager = context.packageManager
+        val installed = installedApplications(packageManager)
+        val application = installed.firstOrNull { it.packageName.equals(target, ignoreCase = true) }
+            ?: installed.filter { packageManager.getApplicationLabel(it).toString().equals(target, ignoreCase = true) }
+                .singleOrNull()
+            ?: error("No installed app matched '$target' uniquely. Use its exact package name if multiple apps share that label.")
+        val intent = packageManager.getLaunchIntentForPackage(application.packageName)
+            ?: error("${application.packageName} has no launchable activity.")
+        withContext(Dispatchers.Main) { context.startActivity(intent) }
+        return "Opened ${packageManager.getApplicationLabel(application)} (${application.packageName}) using an Android launch intent."
+    }
+
+    private suspend fun openUrl(context: Context, rawUrl: String): String {
+        val uri = rawUrl.trim().toUri()
+        require(uri.scheme.equals("https", true) || uri.scheme.equals("http", true)) {
+            "Only HTTP and HTTPS URLs can be opened."
+        }
+        require(!uri.host.isNullOrBlank() && uri.userInfo == null) { "The URL is invalid or contains embedded credentials." }
+        val intent = Intent(Intent.ACTION_VIEW, uri)
+        require(intent.resolveActivity(context.packageManager) != null) { "No installed app can open this URL." }
+        withContext(Dispatchers.Main) { context.startActivity(intent) }
+        return "Opened URL: $uri"
+    }
+
+    private suspend fun executeExplicitLinuxTask(command: String): String {
+        check(termuxIntegration.isInstalled()) {
+            "This explicitly requested Linux task needs Termux. Install Termux, then approve the action again."
+        }
+        val id = termuxIntegration.runCode("bash", command).getOrElse { throw it }
+        val result = withTimeoutOrNull(120_000) {
+            termuxIntegration.results.first { rows -> rows.any { it.executionId == id } }
+                .first { it.executionId == id }
+        } ?: error("Termux did not return a result before timeout.")
+        return buildString {
+            append("Termux result · exitCode=").append(result.exitCode ?: "unknown")
+            if (result.stdout.isNotBlank()) append("\nstdout:\n").append(result.stdout)
+            if (result.stderr.isNotBlank()) append("\nstderr:\n").append(result.stderr)
+            result.error?.let { append("\nerror:\n").append(it) }
+        }
     }
 
     /**
@@ -170,14 +463,21 @@ class ChatViewModel @Inject constructor(
      * current session so the conversation visibly rewinds, then sends the edited text
      * as a fresh query.
      */
-    fun editAndResend(messageId: String, newText: String, context: Context) {
+    fun editAndResend(messageId: String, newText: String, context: Context, imageBase64: String? = null) {
         if (newText.isBlank()) return
         agentLoop.cancelCurrentTask()
         viewModelScope.launch {
             val sessionId = conversationRepository.ensureCurrentSessionId()
             conversationRepository.deleteMessageAndAfter(sessionId, messageId)
             _taskSessionId.value = sessionId
-            agentLoop.processQuery(newText, context, sessionId)
+            agentLoop.processQuery(newText, context, sessionId, imageBase64)
+        }
+    }
+
+    /** Deletes one visible message without affecting the rest of the conversation. */
+    fun deleteMessage(messageId: String) {
+        viewModelScope.launch {
+            conversationRepository.deleteMessage(messageId)
         }
     }
 
@@ -258,7 +558,7 @@ class ChatViewModel @Inject constructor(
      */
     fun deleteChat(sessionId: String) {
         if (isCurrentSession(sessionId) || runningSessionId.value == sessionId) {
-            agentLoop.cancelCurrentTask()
+            if (_cloudTaskState.value?.sessionId == sessionId) stopTask() else agentLoop.cancelCurrentTask()
         }
         agentLoop.forgetSession(sessionId)
         viewModelScope.launch {
@@ -281,6 +581,27 @@ class ChatViewModel @Inject constructor(
      * conversation history. Shared by the Plan tab and the chat UI's stop control.
      */
     fun stopTask() {
-        agentLoop.cancelCurrentTask()
+        val cloud = _cloudTaskState.value
+        if (cloud != null && cloud.status in setOf("RUNNING", "CANCEL_REQUESTED", "UNKNOWN")) {
+            if (cloud.status == "CANCEL_REQUESTED") return
+            _cloudTaskState.value = cloud.copy(status = "CANCEL_REQUESTED", message = "Cancellation requested; waiting for a safe checkpoint.")
+            viewModelScope.launch {
+                try {
+                    val response = cloudServerClient.controlTask(cloud.taskId, "cancel", cloud.serverId)
+                    val state = runCatching { org.json.JSONObject(response).optString("state") }.getOrDefault("")
+                    _cloudTaskState.value = _cloudTaskState.value?.copy(
+                        status = if (state == "CANCELLED") "CANCELLED" else if (state == "CANCEL_REQUESTED") "CANCEL_REQUESTED" else "UNKNOWN",
+                        message = if (state == "CANCELLED") "Cancellation confirmed at a safe checkpoint." else "Cancellation requested; server status is ${state.ifBlank { "unknown" }}.",
+                    )
+                } catch (failure: Exception) {
+                    _cloudTaskState.value = _cloudTaskState.value?.copy(
+                        status = "UNKNOWN",
+                        message = "Cancellation could not be confirmed. The task may still be running. ${sanitizeCloudDiagnostic(failure.message.orEmpty())}",
+                    )
+                }
+            }
+        } else {
+            agentLoop.cancelCurrentTask()
+        }
     }
 }

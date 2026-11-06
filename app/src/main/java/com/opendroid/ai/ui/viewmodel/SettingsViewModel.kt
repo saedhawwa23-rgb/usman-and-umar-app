@@ -34,6 +34,10 @@ import com.opendroid.ai.core.security.CredentialStoreResult
 import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
 import com.opendroid.ai.core.security.ProviderCredentialStore
 import com.opendroid.ai.data.repository.ProviderCredentialPersistenceState
+import com.opendroid.ai.data.repository.CloudServerConfig
+import com.opendroid.ai.core.browser.CloudServerClient
+import com.opendroid.ai.core.browser.CloudServerHealth
+import com.opendroid.ai.core.service.CloudServerKeepAliveService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -42,6 +46,7 @@ import com.opendroid.ai.data.models.ChatMessage
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
 
@@ -52,8 +57,61 @@ class SettingsViewModel @Inject constructor(
     private val llmProviderFactory: Lazy<com.opendroid.ai.core.llm.LLMProviderFactory>,
     private val modelFetcher: Lazy<com.opendroid.ai.core.llm.ModelFetcher>,
     private val okHttpClient: OkHttpClient,
-    private val providerCredentialStore: ProviderCredentialStore
+    private val providerCredentialStore: ProviderCredentialStore,
+    private val cloudServerClient: CloudServerClient,
+    @ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
+
+    val cloudServers: StateFlow<List<CloudServerConfig>> = settingsRepository.cloudServers
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private val mutableCloudServerHealth = MutableStateFlow<Map<String, CloudServerHealth>>(emptyMap())
+    val cloudServerHealth: StateFlow<Map<String, CloudServerHealth>> = mutableCloudServerHealth.asStateFlow()
+    private val mutablePingingCloudServers = MutableStateFlow(false)
+    val pingingCloudServers: StateFlow<Boolean> = mutablePingingCloudServers.asStateFlow()
+    val cloudKeepAliveEnabled: StateFlow<Boolean> = settingsRepository.cloudKeepAliveEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    private var cloudHealthJob: Job? = null
+
+    fun addCloudServer(name: String, url: String, token: String) = viewModelScope.launch {
+        runCatching { settingsRepository.addCloudServer(name, url, token) }
+    }
+    fun saveCloudServer(server: CloudServerConfig, token: String) = viewModelScope.launch {
+        runCatching { settingsRepository.saveCloudServer(server, token) }
+    }
+    fun removeCloudServer(id: String) = viewModelScope.launch { settingsRepository.removeCloudServer(id) }
+    fun setCloudServerEnabled(id: String, enabled: Boolean) = viewModelScope.launch { settingsRepository.setCloudServerEnabled(id, enabled) }
+
+    fun pingAllCloudServers() {
+        if (cloudHealthJob?.isActive == true) return
+        cloudHealthJob = viewModelScope.launch(Dispatchers.IO) {
+            mutablePingingCloudServers.value = true
+            try {
+                mutableCloudServerHealth.value = cloudServerClient.pingAll(includeDisabled = true)
+                    .associateBy { it.serverId }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val error = failure.message ?: "Health check failed"
+                mutableCloudServerHealth.value = cloudServers.value.associate { server ->
+                    server.id to CloudServerHealth(
+                        serverId = server.id,
+                        serverName = server.name,
+                        online = false,
+                        error = error,
+                    )
+                }
+            } finally {
+                mutablePingingCloudServers.value = false
+            }
+        }
+    }
+
+    fun setCloudKeepAliveEnabled(enabled: Boolean) = viewModelScope.launch {
+        settingsRepository.setCloudKeepAliveEnabled(enabled)
+        if (enabled) CloudServerKeepAliveService.start(appContext)
+        else CloudServerKeepAliveService.stop(appContext)
+    }
 
     private val _llmConfig = MutableStateFlow(LLMConfig())
     val llmConfig: StateFlow<LLMConfig> = _llmConfig

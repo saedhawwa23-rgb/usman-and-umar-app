@@ -51,6 +51,7 @@ class OpenRouterProvider @Inject constructor(
         )
         if (request.responseFormat == ResponseFormat.JSON) {
             requestBodyMap["response_format"] = mapOf("type" to "json_object")
+            requestBodyMap["plugins"] = listOf(mapOf("id" to "response-healing"))
         }
         if (!request.tools.isNullOrEmpty()) {
             requestBodyMap["tools"] = request.tools.map { tool ->
@@ -91,7 +92,7 @@ class OpenRouterProvider @Inject constructor(
                 ?: throw IOException("OpenRouter response did not contain choices")
             val messageObj = choices.firstOrNull()?.asJsonObject?.getAsJsonObject("message")
                 ?: throw IOException("OpenRouter response contained no assistant message")
-            val content = messageObj.get("content")?.takeUnless { it.isJsonNull }?.asString.orEmpty()
+            val content = assistantContent(messageObj)
             val toolCalls = messageObj.getAsJsonArray("tool_calls")?.mapNotNull { item ->
                 runCatching {
                     val call = item.asJsonObject
@@ -117,6 +118,23 @@ class OpenRouterProvider @Inject constructor(
             )
         }
         } // withContext
+    }
+
+    /** OpenAI-compatible gateways may return content as a string or typed parts. */
+    private fun assistantContent(message: JsonObject): String {
+        val element = message.get("content")?.takeUnless { it.isJsonNull } ?: return ""
+        if (element.isJsonPrimitive) return runCatching { element.asString }.getOrDefault("")
+        if (element.isJsonArray) return element.asJsonArray.joinToString("") { part ->
+            when {
+                part.isJsonPrimitive -> runCatching { part.asString }.getOrDefault("")
+                part.isJsonObject -> {
+                    val obj = part.asJsonObject
+                    obj.get("text")?.asString ?: obj.get("content")?.asString ?: ""
+                }
+                else -> ""
+            }
+        }
+        return ""
     }
 
     override fun streamComplete(request: LLMRequest): Flow<String> = flow {

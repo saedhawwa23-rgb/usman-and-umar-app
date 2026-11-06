@@ -7,6 +7,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -38,6 +40,8 @@ import com.opendroid.ai.data.models.LLMConfig
 import com.opendroid.ai.data.models.effectiveGrantedActions
 import com.opendroid.ai.data.models.resolvedAutoMode
 import com.opendroid.ai.core.llm.ConnectionTestState
+import com.opendroid.ai.core.llm.AIModel
+import com.opendroid.ai.core.llm.ProviderCatalog
 import com.opendroid.ai.core.llm.error.LLMError
 import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
 import com.opendroid.ai.data.repository.ProviderCredentialPersistenceState
@@ -51,7 +55,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.ui.platform.LocalContext
 import android.content.Context
 import kotlinx.coroutines.launch
@@ -75,12 +78,22 @@ fun SettingsScreen(
     onNavigateToDiscovery: () -> Unit = {},
     onNavigateToGitHubDiscovery: () -> Unit = {},
     onNavigateToTermux: () -> Unit = {},
+    onNavigateToGoogleDrive: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val config by viewModel.llmConfig.collectAsState()
     val connectionResults by viewModel.connectionResults.collectAsState()
     val providerCredentialRecoveryState by viewModel.providerCredentialRecoveryState.collectAsState()
     val providerCredentialPersistenceState by viewModel.providerCredentialPersistenceState.collectAsState()
+    val cloudServerUrls by viewModel.settingsRepository.cloudServerUrls.collectAsState(initial = listOf("", "", ""))
+    val cloudServerEnabled by viewModel.settingsRepository.cloudServerEnabled.collectAsState(initial = listOf(true, false, false))
+    val cloudServerTokens by viewModel.settingsRepository.cloudServerTokens.collectAsState()
+    val cloudServers by viewModel.cloudServers.collectAsState()
+    val cloudServerHealth by viewModel.cloudServerHealth.collectAsState()
+    val pingingCloudServers by viewModel.pingingCloudServers.collectAsState()
+    val cloudKeepAliveEnabled by viewModel.cloudKeepAliveEnabled.collectAsState()
+    var expandedCloudServerIds by remember { mutableStateOf(emptySet<String>()) }
 
     val providers = listOf(
         "Google Gemini",
@@ -89,6 +102,7 @@ fun SettingsScreen(
         "Groq",
         "Mistral AI",
         "OpenRouter",
+        "NVIDIA NIM",
         "Together AI",
         "Cohere",
         "DeepSeek",
@@ -200,40 +214,167 @@ fun SettingsScreen(
 
             item {
                 Card(
-                    modifier = Modifier.fillMaxWidth().clickable { onNavigateToDiscovery() },
+                    modifier = Modifier.fillMaxWidth().clickable { onNavigateToGoogleDrive() },
                     colors = CardDefaults.cardColors(containerColor = CardBackground)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("DISCOVER EXTENSIONS", fontWeight = FontWeight.Bold, color = AccentCyan)
-                            Spacer(Modifier.height(4.dp))
-                            Text("Search AI providers and GitHub projects without a fixed list.", color = TextSecondary, fontSize = 12.sp)
-                        }
-                        Icon(Icons.Default.ArrowForward, contentDescription = "Open discovery", tint = AccentCyan)
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        Text("GOOGLE DRIVE", fontWeight = FontWeight.Bold, color = AccentCyan)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Connect or switch the Google account used to save completed task outputs.",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = onNavigateToGoogleDrive) { Text("Open Drive settings") }
                     }
                 }
             }
 
             item {
-                Card(
-                    modifier = Modifier.fillMaxWidth().clickable { onNavigateToTermux() },
-                    colors = CardDefaults.cardColors(containerColor = CardBackground)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("LOCAL TERMUX", fontWeight = FontWeight.Bold, color = AccentCyan)
-                            Spacer(Modifier.height(4.dp))
-                            Text("Optional local terminal tasks with visible results; cloud execution is separate.", color = TextSecondary, fontSize = 12.sp)
+                Card(modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = CardBackground)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        Text("OPENSWARM CLOUD SERVERS", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
+                        Text("Room-backed cluster profiles. Auto mode probes /health concurrently and routes only to the fastest server reporting full readiness, then fails over in ranked order.", color = TextSecondary, fontSize = 12.sp)
+                        Spacer(Modifier.height(8.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Button(onClick = viewModel::pingAllCloudServers, enabled = !pingingCloudServers && cloudServers.isNotEmpty()) {
+                                if (pingingCloudServers) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = TextPrimary,
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = null)
+                                }
+                                Text(if (pingingCloudServers) " Checking…" else " Ping All")
+                            }
+                            Text("${cloudServers.size}/10 configured", color = TextSecondary, fontSize = 12.sp)
                         }
-                        Icon(Icons.Default.ArrowForward, contentDescription = "Open local Termux", tint = AccentCyan)
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Switch(checked = cloudKeepAliveEnabled, onCheckedChange = viewModel::setCloudKeepAliveEnabled)
+                            Column {
+                                Text("Five-minute keep-alive", color = TextPrimary, fontSize = 13.sp)
+                                Text("Foreground checks for enabled servers", color = TextSecondary, fontSize = 11.sp)
+                            }
+                        }
+                        if (cloudKeepAliveEnabled) {
+                            Text("The foreground service continues five-minute /health checks while the app is minimized, with an ongoing notification. This cannot override Android restrictions or guarantee that Google Colab keeps a runtime alive; Colab may still disconnect it.", color = TextSecondary, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+
+            items(
+                items = cloudServers.sortedWith(
+                    compareBy<com.opendroid.ai.data.repository.CloudServerConfig> {
+                        if (cloudServerHealth[it.id]?.online == true) 0 else 1
+                    }.thenBy { it.name.lowercase(Locale.ROOT) },
+                ),
+                key = { it.id },
+            ) { server ->
+                var name by remember(server.id, server.name) { mutableStateOf(server.name) }
+                var url by remember(server.id, server.url) { mutableStateOf(server.url) }
+                var token by remember(server.id, server.token) { mutableStateOf(server.token) }
+                val health = cloudServerHealth[server.id]
+                val expanded = server.id in expandedCloudServerIds
+                Card(
+                    modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(10.dp)),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground),
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(9.dp).clip(CircleShape).background(
+                                when {
+                                    health?.online == true -> Color(0xFF35C759)
+                                    health?.online == false -> Color(0xFFE5484D)
+                                    else -> Color(0xFF8A8A8A)
+                                },
+                            ))
+                            Spacer(Modifier.width(9.dp))
+                            Column(
+                                Modifier.weight(1f).clickable {
+                                    expandedCloudServerIds = if (expanded) expandedCloudServerIds - server.id else expandedCloudServerIds + server.id
+                                },
+                            ) {
+                                Text(server.name.ifBlank { "Cloud Server" }, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(
+                                    when {
+                                        health == null -> "Not checked"
+                                        health.online -> "Ready · ${health.latencyMs} ms"
+                                        health.httpCode == 200 -> "Not schedulable${health.backendStatus?.let { " · $it" }.orEmpty()}"
+                                        else -> "Offline${health.httpCode?.let { " · HTTP $it" }.orEmpty()}"
+                                    },
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                            Switch(checked = server.enabled, onCheckedChange = { viewModel.setCloudServerEnabled(server.id, it) })
+                            IconButton(onClick = { viewModel.removeCloudServer(server.id) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete ${server.name}", tint = AccentRed)
+                            }
+                            IconButton(onClick = {
+                                expandedCloudServerIds = if (expanded) expandedCloudServerIds - server.id else expandedCloudServerIds + server.id
+                            }) {
+                                Icon(
+                                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = if (expanded) "Collapse server" else "Expand server",
+                                    tint = TextSecondary,
+                                )
+                            }
+                        }
+                        AnimatedVisibility(visible = expanded) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                if (health != null) {
+                                    Text(
+                                        "Backend: ${health.backendStatus ?: "unknown"} · ${if (health.online) "eligible" else "not eligible"}",
+                                        color = if (health.online) Color(0xFF35C759) else Color(0xFFE5A23B),
+                                        fontSize = 11.sp,
+                                    )
+                                    Text(
+                                        "Server ID: ${health.reportedServerId ?: "not reported"} · Instance: ${health.instanceId ?: "not reported"}",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                    )
+                                    Text(
+                                        "Tasks: ${health.activeTasks?.toString() ?: "unknown"} active · Uptime: ${health.uptimeSeconds?.let { "${it}s" } ?: "unknown"}",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                    )
+                                    Text(
+                                        "Readiness: accepting=${health.acceptingNewTasks?.toString() ?: "missing"}, draining=${health.draining?.toString() ?: "missing"}, Drive=${health.driveReady?.toString() ?: "missing"}, checkpoint=${health.checkpointStorageReady?.toString() ?: "missing"}, lease=${health.leaseCoordinatorReady?.toString() ?: "missing"}",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                    )
+                                    Text(
+                                        "Recovery: ${health.recoveryState ?: "not reported"}${health.recoveryReason?.let { " · $it" }.orEmpty()}",
+                                        color = if (health.recoveryReason.isNullOrBlank()) TextSecondary else Color(0xFFE5A23B),
+                                        fontSize = 11.sp,
+                                    )
+                                }
+                                OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Server name") })
+                                OutlinedTextField(value = url, onValueChange = { url = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("HTTPS backend URL") })
+                                OutlinedTextField(value = token, onValueChange = { token = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("Bearer token") })
+                                Button(onClick = { viewModel.saveCloudServer(server.copy(name = name, url = url), token) }) { Text("Save server") }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = CardBackground)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("ADD CLUSTER SERVER · ${cloudServers.size}/10", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
+                        Text("Add up to ten Colab/OpenSwarm servers. Ping All checks every configured server in parallel.", color = TextSecondary, fontSize = 11.sp)
+                        var newName by remember { mutableStateOf("") }
+                        var newUrl by remember { mutableStateOf("") }
+                        var newToken by remember { mutableStateOf("") }
+                        OutlinedTextField(value = newName, onValueChange = { newName = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server name") })
+                        OutlinedTextField(value = newUrl, onValueChange = { newUrl = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server HTTPS URL") })
+                        OutlinedTextField(value = newToken, onValueChange = { newToken = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("New server token") })
+                        Button(onClick = { viewModel.addCloudServer(newName, newUrl, newToken); newName = ""; newUrl = ""; newToken = "" }, enabled = newUrl.isNotBlank() && cloudServers.size < 10) { Text(if (cloudServers.size < 10) "+ Add Cloud Server" else "Cluster Full") }
                     }
                 }
             }
@@ -328,6 +469,19 @@ fun SettingsScreen(
                         val modelsLoading by viewModel.modelsLoading.collectAsState()
                         val modelFetchNotice by viewModel.modelFetchNotice.collectAsState()
                         val fetchedModels = config.modelCache[config.activeProvider] ?: emptyList()
+                        val modelChoices = if (config.activeProvider == "NVIDIA NIM") {
+                            val pinnedModel = ProviderCatalog.defaultModel("NVIDIA NIM")
+                            listOf(
+                                AIModel(
+                                    id = pinnedModel,
+                                    displayName = "Nemotron 3.5 Bolt E4B",
+                                    provider = "NVIDIA NIM",
+                                    isRecommended = true,
+                                )
+                            )
+                        } else {
+                            fetchedModels
+                        }
                         var modelDropdownExpanded by remember { mutableStateOf(false) }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -371,6 +525,7 @@ fun SettingsScreen(
                             OutlinedTextField(
                                 value = config.activeModel,
                                 onValueChange = { viewModel.updateActiveModel(it) },
+                                readOnly = config.activeProvider == "NVIDIA NIM",
                                 label = { Text("Active LLM Model", fontSize = 12.sp) },
                                 singleLine = true,
                                 trailingIcon = {
@@ -391,7 +546,7 @@ fun SettingsScreen(
                                 modifier = Modifier.fillMaxWidth()
                             )
 
-                        if (fetchedModels.isNotEmpty()) {
+                        if (modelChoices.isNotEmpty()) {
                                 DropdownMenu(
                                     expanded = modelDropdownExpanded,
                                     onDismissRequest = { modelDropdownExpanded = false },
@@ -400,7 +555,7 @@ fun SettingsScreen(
                                         .background(CardBackground)
                                         .border(1.dp, BorderColor)
                                 ) {
-                                    fetchedModels.forEach { model ->
+                                    modelChoices.forEach { model ->
                                         DropdownMenuItem(
                                             text = {
                                                 Row(

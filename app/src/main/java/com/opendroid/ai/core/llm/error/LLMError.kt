@@ -201,7 +201,8 @@ object LLMErrorMapper {
             error = error,
             provider = provider,
             model = model,
-            retryable = error == LLMError.Network && isConnectFailure,
+            retryable = error == LLMError.MalformedResponse ||
+                (error == LLMError.Network && isConnectFailure),
             detail = null
         )
     }

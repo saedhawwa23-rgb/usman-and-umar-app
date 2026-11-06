@@ -2,12 +2,17 @@ package com.opendroid.ai.data.db
 
 import android.app.Application
 import android.content.Context
+import androidx.room.Room
 import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.platform.app.InstrumentationRegistry
+import com.opendroid.ai.data.db.entities.CloudServerEntity
+import com.opendroid.ai.data.repository.normalizeCloudServerUrl
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -218,6 +223,120 @@ class OpenDroidDatabaseMigrationTest {
         migrated.query("SELECT `value` FROM memories WHERE `key`='keep-me'").use { cursor ->
             assertTrue(cursor.moveToFirst())
             assertEquals("user-data", cursor.getString(0))
+        }
+    }
+
+    @Test
+    fun `migration to version 12 adds Room-backed cluster servers and preserves existing data`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.deleteDatabase(TEST_DATABASE)
+        helper.createDatabase(databasePath, 10).use { db ->
+            db.execSQL(
+                "INSERT INTO memories (`key`, `value`, `type`, `timestamp`, `ttlHours`, `category`) " +
+                    "VALUES ('before-cluster', 'preserved', 'PREFERENCE', 55, -1, 'FACT')"
+            )
+        }
+
+        val migrated = helper.runMigrationsAndValidate(
+            databasePath,
+            12,
+            true,
+            OpenDroidDatabase.MIGRATION_10_11,
+            OpenDroidDatabase.MIGRATION_11_12,
+        )
+        migrated.execSQL(
+            "INSERT INTO cloud_servers (id, name, url, enabled, position) " +
+                "VALUES ('server-10', 'Colab 10', 'https://cluster.example', 1, 9)"
+        )
+        migrated.query("SELECT `value` FROM memories WHERE `key`='before-cluster'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("preserved", cursor.getString(0))
+        }
+        migrated.query("SELECT `name`, `position` FROM cloud_servers WHERE `id`='server-10'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Colab 10", cursor.getString(0))
+            assertEquals(9, cursor.getInt(1))
+        }
+    }
+
+    @Test
+    fun `migration 12 to 13 adds independent Drive account rows and preserves cluster servers`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.deleteDatabase(TEST_DATABASE)
+        helper.createDatabase(databasePath, 12).use { db ->
+            db.execSQL(
+                "INSERT INTO cloud_servers (id, name, url, enabled, position) " +
+                    "VALUES ('server-1', 'Colab 1', 'https://cluster.example', 1, 0)"
+            )
+        }
+
+        val migrated = helper.runMigrationsAndValidate(
+            databasePath, 13, true, OpenDroidDatabase.MIGRATION_12_13
+        )
+        migrated.execSQL(
+            "INSERT INTO google_drive_accounts (id, email, displayName, connectedAtMillis, quotaLimitBytes, quotaUsageBytes, quotaUpdatedAtMillis, quotaError) " +
+                "VALUES ('one@example.com', 'one@example.com', 'one', 10, 16106127360, 2147483648, 11, NULL)"
+        )
+        migrated.execSQL(
+            "INSERT INTO google_drive_accounts (id, email, displayName, connectedAtMillis, quotaLimitBytes, quotaUsageBytes, quotaUpdatedAtMillis, quotaError) " +
+                "VALUES ('two@example.com', 'two@example.com', 'two', 12, 16106127360, 3221225472, 13, NULL)"
+        )
+
+        migrated.query("SELECT COUNT(*) FROM google_drive_accounts").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(2, cursor.getInt(0))
+        }
+        migrated.query("SELECT quotaUsageBytes FROM google_drive_accounts WHERE id='two@example.com'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(3221225472L, cursor.getLong(0))
+        }
+        migrated.query("SELECT name FROM cloud_servers WHERE id='server-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Colab 1", cursor.getString(0))
+        }
+    }
+
+    @Test
+    fun `Room preserves ten Colab server rows and long tunnel URLs without truncation`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val providedTunnelUrls = listOf(
+            "https://colab-node-1.trycloudflare.com",
+            "https://colab-node-2.trycloudflare.com",
+            "https://colab-node-3.trycloudflare.com",
+        )
+        val sourceUrls = (1..10).map { serverNumber ->
+            when (serverNumber) {
+                1, 2, 3 -> providedTunnelUrls[serverNumber - 1]
+                10 -> "https://colab-node-10.trycloudflare.com/${"runtime-segment/".repeat(24)}health-base/"
+                else -> "https://colab-node-$serverNumber.trycloudflare.com"
+            }
+        }
+        val normalizedUrls = sourceUrls.map(::normalizeCloudServerUrl)
+        assertEquals(10, normalizedUrls.size)
+        assertTrue(normalizedUrls.last().length > 300)
+
+        val database = Room.inMemoryDatabaseBuilder(context, OpenDroidDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            database.cloudServerDao().upsertAll(
+                normalizedUrls.mapIndexed { index, url ->
+                    CloudServerEntity(
+                        id = "colab-server-${index + 1}",
+                        name = "Colab Server ${index + 1}",
+                        url = url,
+                        enabled = true,
+                        position = index,
+                    )
+                }
+            )
+
+            val persisted = database.cloudServerDao().observeAll().first()
+            assertEquals(10, persisted.size)
+            assertEquals(normalizedUrls, persisted.map { it.url })
+            assertTrue(persisted.last().url.length > 300)
+        } finally {
+            database.close()
         }
     }
 

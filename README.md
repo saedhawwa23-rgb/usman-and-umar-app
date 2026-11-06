@@ -18,7 +18,7 @@ GitHub and Termux capabilities require connectivity or an installed/configured T
 |---|---|
 | Minimum Android SDK | 28 (Android 9) |
 | Target Android SDK | 34 (Android 14) |
-| Current app version | `3.0.0-cloud-ai` (versionCode 23) |
+| Current app version | `3.6.0` (versionCode 24) |
 | Packaging | Android application; no model asset or inference JNI module |
 
 Build with JDK 21 and the Android SDK installed:

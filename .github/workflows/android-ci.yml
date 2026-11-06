@@ -7,14 +7,21 @@ on:
     paths-ignore:
       - 'website/**'
       - 'docs/**'
+      - 'cloud-backend/**'
+      - 'USMAN_COLAB_BACKEND.ipynb'
       - '**.md'
   push:
     branches:
       - main
+      - feature/hybrid-task-orchestrator
     paths-ignore:
       - 'website/**'
       - 'docs/**'
+      - 'cloud-backend/**'
+      - 'USMAN_COLAB_BACKEND.ipynb'
       - '**.md'
+
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -53,6 +60,15 @@ jobs:
 
       - name: Run unit tests and build debug APK
         run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
+
+      - name: Upload installable debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: usman-and-umar-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload test reports
         if: always()

@@ -51,6 +51,7 @@ class ProviderErrorDetail private constructor(
         COHERE("Cohere"),
         DEEPSEEK("DeepSeek"),
         OPENROUTER("OpenRouter"),
+        NVIDIA_NIM("NVIDIA NIM"),
         TOGETHER_AI("Together AI"),
         CUSTOM_OPENAI("Custom OpenAI Compatible"),
         COPILOT("Copilot API"),

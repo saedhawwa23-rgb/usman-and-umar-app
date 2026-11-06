@@ -1,15 +1,22 @@
 package com.opendroid.ai.ui.screens
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,12 +29,25 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -46,7 +66,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.opendroid.ai.core.agent.AgentState
+import com.opendroid.ai.core.agent.ChatToolCall
+import com.opendroid.ai.core.agent.ChatToolCallParser
 import com.opendroid.ai.core.agent.AutoApprovalPolicy
+import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.opendroid.ai.core.agent.ChatErrorPrimaryAction
 import com.opendroid.ai.core.agent.ChatErrorUiState
 import com.opendroid.ai.core.agent.guidance
@@ -61,27 +84,38 @@ import com.opendroid.ai.data.repository.ChatSession
 import com.opendroid.ai.ui.components.ContactPickerCard
 import com.opendroid.ai.ui.theme.*
 import com.opendroid.ai.ui.viewmodel.ChatViewModel
+import com.opendroid.ai.ui.viewmodel.ChatTarget
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenProjects: () -> Unit = {},
+    onOpenRemote: () -> Unit = {},
+    onOpenScheduled: () -> Unit = {},
+    onOpenPlugins: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val installedAiApps = remember(context.packageManager) {
+        InstalledAiAppDiscovery.scan(context.packageManager)
+    }
     val history by viewModel.conversationHistory.collectAsState()
     // Scoped to whichever chat is on screen right now - a task that's actually running
     // in a DIFFERENT chat (safe since the pinned-session fix: it keeps writing there,
     // not wherever the user has navigated to) must never be displayed as if it were
     // happening here. See ChatViewModel.visibleAgentState.
     val visibleAgentState by viewModel.visibleAgentState.collectAsState()
+    val cloudTaskState by viewModel.cloudTaskState.collectAsState()
     val chatError by viewModel.chatError.collectAsState()
     // Id of whichever chat (if any) has a task actively running, regardless of which
     // chat is currently displayed - drives the chat-picker's "still running" indicator.
@@ -102,6 +136,46 @@ fun ChatScreen(
     var renameText by remember { mutableStateOf("") }
     var editingMessageId by remember { mutableStateOf<String?>(null) }
     var textBeforeEdit by remember { mutableStateOf("") }
+    var thinkEnabled by remember { mutableStateOf(false) }
+    var chatTarget by remember { mutableStateOf(ChatTarget.API_MODEL) }
+    var targetMenuExpanded by remember { mutableStateOf(false) }
+    var smartAiSelection by remember { mutableStateOf(false) }
+    var searchEnabled by remember { mutableStateOf(false) }
+    var showAttachmentSheet by remember { mutableStateOf(false) }
+    var showPluginSelector by remember { mutableStateOf(false) }
+    val attachmentSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var selectedPluginIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedLocalAppPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedAttachment by remember { mutableStateOf<PendingChatAttachment?>(null) }
+    var attachmentToRead by remember { mutableStateOf<Pair<Uri, Boolean>?>(null) }
+    var messageForActions by remember { mutableStateOf<ChatMessage?>(null) }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> uri?.let { attachmentToRead = it to false } }
+    val documentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { attachmentToRead = it to true } }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicturePreview()
+    ) { bitmap ->
+        if (bitmap != null) {
+            runCatching { bitmapToBase64(bitmap) }
+                .onSuccess { selectedAttachment = PendingChatAttachment("camera-photo.jpg", imageBase64 = it) }
+                .onFailure { Toast.makeText(context, "The camera photo could not be attached.", Toast.LENGTH_LONG).show() }
+        }
+    }
+
+    LaunchedEffect(attachmentToRead) {
+        val pending = attachmentToRead ?: return@LaunchedEffect
+        val result = runCatching {
+            withContext(Dispatchers.IO) { readChatAttachment(context, pending.first, pending.second) }
+        }
+        result.onSuccess { selectedAttachment = it }
+            .onFailure { Toast.makeText(context, it.message ?: "The attachment could not be read.", Toast.LENGTH_LONG).show() }
+        attachmentToRead = null
+    }
 
     // Merges a piece of dictated text into whatever the user already typed, so review/edit
     // never clobbers text entered before dictation started.
@@ -135,17 +209,48 @@ fun ChatScreen(
     // Single submit path for both a normal send and an edit-resend, wired to both the
     // keyboard "Send" action and the send button below.
     fun submitInput() {
-        val text = inputQuery
-        if (text.isBlank()) return
+        val attachment = selectedAttachment
+        val attachmentText = when {
+            attachment == null -> ""
+            attachment.imageBase64 != null -> if (inputQuery.isBlank()) {
+                "Please analyze the attached image (${attachment.displayName})."
+            } else {
+                "\n[Attached image: ${attachment.displayName}]"
+            }
+            else -> "\n\n[Attached document: ${attachment.displayName}]\n${attachment.textContent.orEmpty()}"
+        }
+        val modeInstructions = buildString {
+            if (thinkEnabled) append("\n[Use deeper internal reasoning before answering; do not reveal private chain-of-thought.]\n")
+            if (searchEnabled) append("\n[Use the web-search capability when current or externally verifiable information is needed.]\n")
+            if (selectedPluginIds.isNotEmpty()) append("\n[Use plugins: ${selectedPluginIds.joinToString(", ")}]\n")
+            if (selectedLocalAppPackages.isNotEmpty()) {
+                val apps = installedAiApps.filter { it.packageName in selectedLocalAppPackages }
+                    .joinToString("; ") { "${it.displayName} (${it.packageName})" }
+                append("\n[Local AI apps available through USE_LOCAL_APP: $apps. Use the real tool when their response is needed.]\n")
+            }
+            if (smartAiSelection) {
+                val apps = installedAiApps.joinToString(", ") { "${it.displayName} (${it.packageName})" }
+                append("\n[Smart AI Selection is ON. Choose the best installed local AI app for this task using its real capabilities. Prefer coding specialists for code, research assistants for current/web research, and tool-oriented agents for browser/automation tasks. Verify the candidate is installed from this list before calling USE_LOCAL_APP; omit appName/packageName only when auto-selection is intended. Installed candidates: $apps]\n")
+            }
+        }
+        val text = inputQuery + attachmentText + modeInstructions
+        if (inputQuery.isBlank() && attachment == null) return
         val editing = editingMessageId
         if (editing != null) {
-            viewModel.editAndResend(editing, text, context)
+            viewModel.editAndResend(editing, text, context, attachment?.imageBase64)
             editingMessageId = null
             textBeforeEdit = ""
         } else {
-            viewModel.sendMessage(text, context)
+            viewModel.sendMessage(text, context, attachment?.imageBase64, chatTarget, selectedPluginIds.toList(), thinkEnabled)
         }
         inputQuery = ""
+        selectedAttachment = null
+        thinkEnabled = false
+        searchEnabled = false
+        selectedPluginIds = emptySet()
+        selectedLocalAppPackages = emptySet()
+        smartAiSelection = false
+        chatTarget = ChatTarget.API_MODEL
     }
 
     // Scroll to bottom on history change. Keyed on currentSessionId too: keying on
@@ -192,18 +297,57 @@ fun ChatScreen(
         }
     }
 
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = DarkSurface,
+                drawerContentColor = TextPrimary,
+            ) {
+                Text(
+                    "USMAN AND UMAR",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    modifier = Modifier.padding(24.dp, 28.dp, 24.dp, 16.dp)
+                )
+                Text("WORKSPACE", color = TextSecondary, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+                DrawerDestination("Projects", Icons.Default.Folder) {
+                    scope.launch { drawerState.close() }
+                    onOpenProjects()
+                }
+                DrawerDestination("Remote", Icons.Default.Cloud) {
+                    scope.launch { drawerState.close() }
+                    onOpenRemote()
+                }
+                DrawerDestination("Scheduled", Icons.Default.Schedule) {
+                    scope.launch { drawerState.close() }
+                    onOpenScheduled()
+                }
+                DrawerDestination("Plugins", Icons.Default.Extension) {
+                    scope.launch { drawerState.close() }
+                    showPluginSelector = true
+                    showAttachmentSheet = true
+                    onOpenPlugins()
+                }
+            }
+        }
+    ) {
     Scaffold(
         topBar = {
             TopAppBar(
+                navigationIcon = {
+                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        Icon(Icons.Default.Menu, contentDescription = "Open navigation", tint = TextPrimary)
+                    }
+                },
                 title = {
                     Column {
                         Text(
                             text = "USMAN AND UMAR",
-                            fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary,
                             fontSize = 20.sp,
-                            letterSpacing = 2.sp
                         )
                         AgentStatusSubtitle(visibleAgentState, runningElsewhere)
                     }
@@ -369,12 +513,39 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp)
                 ) {
+                    if (history.isEmpty()) {
+                        item(key = "welcome") {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(top = 96.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text("How can I help?", color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+                                Spacer(Modifier.height(18.dp))
+                                val suggestions = listOf(
+                                    "Find free video editors on FMHY",
+                                    "Research latest Python updates",
+                                    "Launch OpenSwarm to build a script",
+                                )
+                                suggestions.forEach { suggestion ->
+                                    AssistChip(
+                                        onClick = { inputQuery = suggestion },
+                                        label = { Text(suggestion, color = TextPrimary, fontSize = 12.sp) },
+                                        modifier = Modifier.padding(vertical = 4.dp),
+                                        colors = AssistChipDefaults.assistChipColors(containerColor = DarkSurface),
+                                        border = BorderStroke(1.dp, BorderColor),
+                                    )
+                                }
+                            }
+                        }
+                    }
                     items(history) { msg ->
                         ChatBubble(
                             message = msg,
                             viewModel = viewModel,
                             context = context,
-                            onEditRequested = { startEditingMessage(it) }
+                            onEditRequested = { startEditingMessage(it) },
+                            onMessageLongPressed = { messageForActions = it },
+                            onToolApproved = { call -> viewModel.approveChatToolCall(call, context) },
                         )
                     }
                     
@@ -383,6 +554,49 @@ fun ChatScreen(
                     if (visibleAgentState is AgentState.Thinking) {
                         item {
                             ThinkingBubble("${llmConfig.activeProvider} is thinking…")
+                        }
+                    }
+
+                    cloudTaskState?.takeIf { it.sessionId == currentSessionId }?.let { cloudTask ->
+                        item(key = "cloud-task-${cloudTask.taskId}") {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                if (cloudTask.status in setOf("RUNNING", "CANCEL_REQUESTED")) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = AccentCyan,
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Filled.Warning,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (cloudTask.status in setOf("FAILED", "UNKNOWN")) AccentRed else AccentCyan,
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = when (cloudTask.status) {
+                                            "RUNNING" -> "Browsing…"
+                                            "CANCEL_REQUESTED" -> "Cancellation requested; waiting for a safe checkpoint…"
+                                            "CANCELLED" -> "Cancelled at a safe checkpoint."
+                                            "UNKNOWN" -> "Task outcome unknown; check the task before retrying."
+                                            "FAILED" -> "Cloud task failed."
+                                            else -> "Cloud task completed."
+                                        },
+                                        color = if (cloudTask.status in setOf("FAILED", "UNKNOWN")) AccentRed else TextSecondary,
+                                        fontSize = 12.sp,
+                                    )
+                                    cloudTask.message?.let { Text(it, color = TextSecondary, fontSize = 10.sp) }
+                                }
+                                if (cloudTask.status == "RUNNING") {
+                                    TextButton(onClick = { viewModel.stopTask() }) { Text("Cancel", color = AccentRed) }
+                                }
+                            }
                         }
                     }
 
@@ -492,9 +706,57 @@ fun ChatScreen(
                         )
                     }
                     Row(
+                        modifier = Modifier.fillMaxWidth().padding(start = 4.dp, bottom = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box {
+                            FilterChip(
+                                selected = chatTarget == ChatTarget.CLOUD_OPENSWARM,
+                                onClick = { targetMenuExpanded = true },
+                                label = { Text(if (chatTarget == ChatTarget.CLOUD_OPENSWARM) "Cloud OpenSwarm" else "API Model", fontSize = 11.sp) },
+                            )
+                            DropdownMenu(expanded = targetMenuExpanded, onDismissRequest = { targetMenuExpanded = false }) {
+                                DropdownMenuItem(text = { Text("API Model") }, onClick = { chatTarget = ChatTarget.API_MODEL; targetMenuExpanded = false })
+                                DropdownMenuItem(text = { Text("Cloud OpenSwarm") }, onClick = { chatTarget = ChatTarget.CLOUD_OPENSWARM; targetMenuExpanded = false })
+                            }
+                        }
+                        FilterChip(
+                            selected = thinkEnabled,
+                            onClick = { thinkEnabled = !thinkEnabled },
+                            label = { Text("Think", fontSize = 11.sp) }
+                        )
+                        FilterChip(
+                            selected = searchEnabled,
+                            onClick = { searchEnabled = !searchEnabled },
+                            label = { Text("Search", fontSize = 11.sp) }
+                        )
+                        selectedAttachment?.let { attachment ->
+                            Text(
+                                "Attached: ${attachment.displayName}",
+                                color = AccentCyan,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(onClick = { selectedAttachment = null }, modifier = Modifier.size(28.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "Remove attachment", tint = TextSecondary)
+                            }
+                        }
+                    }
+                    Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        IconButton(
+                            onClick = { showPluginSelector = false; showAttachmentSheet = true },
+                            modifier = Modifier.size(42.dp)
+                        ) {
+                            Icon(Icons.Default.AttachFile, contentDescription = "Add attachment", tint = TextSecondary)
+                        }
+
+                        Spacer(modifier = Modifier.width(2.dp))
+
                         // Floating Orb for Speech
                         FloatingOrb(
                             isListening = isListening,
@@ -584,7 +846,7 @@ fun ChatScreen(
                         }
 
                         AnimatedVisibility(
-                            visible = !isListening && inputQuery.isNotBlank(),
+                            visible = !isListening && (inputQuery.isNotBlank() || selectedAttachment != null),
                             enter = fadeIn(animationSpec = tween(150)) + scaleIn(initialScale = 0.8f),
                             exit = fadeOut(animationSpec = tween(150)) + scaleOut(targetScale = 0.8f)
                         ) {
@@ -595,12 +857,12 @@ fun ChatScreen(
                                     modifier = Modifier
                                         .size(48.dp)
                                         .clip(CircleShape)
-                                        .background(TextPrimary)
+                                        .background(Color(0xFF2F80ED))
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Send,
                                         contentDescription = "Send",
-                                        tint = DarkBackground
+                                        tint = Color.White
                                     )
                                 }
                             }
@@ -609,6 +871,7 @@ fun ChatScreen(
                 }
             }
         }
+    }
     }
 
     sessionPendingDelete?.let { session ->
@@ -674,6 +937,160 @@ fun ChatScreen(
             }
         )
     }
+
+    if (showAttachmentSheet) {
+        ModalBottomSheet(
+            onDismissRequest = {
+                showAttachmentSheet = false
+                showPluginSelector = false
+            },
+            sheetState = attachmentSheetState,
+            containerColor = DarkSurface,
+        ) {
+            if (showPluginSelector) {
+                PluginSelectorSheetContent(
+                    installedApps = installedAiApps,
+                    smartAiSelection = smartAiSelection,
+                    onSmartAiSelectionChange = { enabled ->
+                        smartAiSelection = enabled
+                        if (enabled) selectedLocalAppPackages = emptySet()
+                    },
+                    selectedLocalAppPackages = selectedLocalAppPackages,
+                    onLocalAppCheckedChange = { packageName, checked ->
+                        selectedLocalAppPackages = if (checked) {
+                            selectedLocalAppPackages + packageName
+                        } else {
+                            selectedLocalAppPackages - packageName
+                        }
+                    },
+                    selectedPluginIds = selectedPluginIds,
+                    onPluginCheckedChange = { pluginId, checked ->
+                        selectedPluginIds = if (checked) {
+                            selectedPluginIds + pluginId
+                        } else {
+                            selectedPluginIds - pluginId
+                        }
+                        if (checked) chatTarget = ChatTarget.CLOUD_OPENSWARM
+                    },
+                    onBack = { showPluginSelector = false },
+                    onConfirm = {
+                        scope.launch {
+                            attachmentSheetState.hide()
+                            showAttachmentSheet = false
+                            showPluginSelector = false
+                        }
+                    },
+                )
+            } else {
+                Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+                    Text(
+                        "Add an attachment",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                    )
+                    AttachmentOption("Camera", Icons.Default.CameraAlt) {
+                        scope.launch {
+                            attachmentSheetState.hide()
+                            showAttachmentSheet = false
+                            cameraLauncher.launch(null)
+                        }
+                    }
+                    AttachmentOption("Photos", Icons.Default.PhotoLibrary) {
+                        scope.launch {
+                            attachmentSheetState.hide()
+                            showAttachmentSheet = false
+                            galleryLauncher.launch("image/*")
+                        }
+                    }
+                    AttachmentOption("Files", Icons.Default.Description) {
+                        scope.launch {
+                            attachmentSheetState.hide()
+                            showAttachmentSheet = false
+                            documentLauncher.launch(arrayOf("text/*", "application/json", "application/xml", "application/csv", "application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+                        }
+                    }
+                    AttachmentOption("Plugins & AI apps", Icons.Default.Extension) { showPluginSelector = true }
+                    ListItem(
+                        headlineContent = { Text("Think Harder", color = TextPrimary) },
+                        supportingContent = { Text("Use the selected provider for up to 30 agent steps", color = TextSecondary, fontSize = 12.sp) },
+                        trailingContent = { Switch(checked = thinkEnabled, onCheckedChange = { thinkEnabled = it }) },
+                        leadingContent = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = AccentCyan) },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    )
+                }
+            }
+        }
+    }
+
+    messageForActions?.let { message ->
+        AlertDialog(
+            onDismissRequest = { messageForActions = null },
+            containerColor = DarkSurface,
+            title = { Text("Message actions", color = TextPrimary) },
+            text = { Text(message.text.take(180), color = TextSecondary, maxLines = 4) },
+            confirmButton = {
+                TextButton(onClick = {
+                    val clipboard = context.getSystemService(ClipboardManager::class.java)
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Chat message", message.text))
+                    Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+                    messageForActions = null
+                }) { Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(6.dp)); Text("Copy") }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (message.sender == ChatMessage.Sender.USER) {
+                        TextButton(onClick = { startEditingMessage(message); messageForActions = null }) {
+                            Icon(Icons.Default.Edit, null); Spacer(Modifier.width(4.dp)); Text("Edit")
+                        }
+                    }
+                    TextButton(onClick = {
+                        viewModel.deleteMessage(message.id)
+                        messageForActions = null
+                    }) { Icon(Icons.Default.Delete, null, tint = AccentRed); Spacer(Modifier.width(4.dp)); Text("Delete", color = AccentRed) }
+                    TextButton(onClick = {
+                        val share = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, message.text)
+                        }
+                        context.startActivity(Intent.createChooser(share, "Share message"))
+                        messageForActions = null
+                    }) { Icon(Icons.Default.Share, null); Spacer(Modifier.width(4.dp)); Text("Share") }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun AttachmentOption(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(label, color = TextPrimary) },
+        leadingContent = { Icon(icon, contentDescription = null, tint = AccentCyan) },
+        modifier = Modifier.clickable(onClick = onClick),
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent)
+    )
+}
+
+@Composable
+private fun DrawerDestination(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit,
+) {
+    NavigationDrawerItem(
+        label = { Text(label, color = TextPrimary) },
+        selected = false,
+        onClick = onClick,
+        icon = { Icon(icon, contentDescription = null, tint = AccentCyan) },
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+        colors = NavigationDrawerItemDefaults.colors(
+            unselectedContainerColor = Color.Transparent,
+            unselectedTextColor = TextPrimary,
+            unselectedIconColor = AccentCyan,
+        )
+    )
 }
 
 @Composable
@@ -726,21 +1143,39 @@ fun ChatBubble(
     message: ChatMessage,
     viewModel: ChatViewModel? = null,
     context: android.content.Context? = null,
-    onEditRequested: ((ChatMessage) -> Unit)? = null
+    onEditRequested: ((ChatMessage) -> Unit)? = null,
+    onMessageLongPressed: ((ChatMessage) -> Unit)? = null,
+    onToolApproved: ((ChatToolCall) -> Unit)? = null,
 ) {
     val isAgent = message.sender == ChatMessage.Sender.AGENT
+    val toolCall = remember(message.id, message.text) {
+        if (isAgent) ChatToolCallParser.parse(message.text) else null
+    }
+    var toolApproved by remember(message.id) { mutableStateOf(false) }
     val alignment = if (isAgent) Alignment.Start else Alignment.End
+    val isCloudError = isAgent && (
+        message.text.startsWith("Cloud OpenSwarm failed") ||
+            message.text.startsWith("This plugin requires a Cloud Server")
+        )
+    val cloudDetailsMarker = "\n\n[cloud-technical-details]\n"
+    val cloudErrorSummary = remember(message.id, message.text) {
+        if (isCloudError) message.text.substringBefore(cloudDetailsMarker) else message.text
+    }
+    val cloudTechnicalDetails = remember(message.id, message.text) {
+        message.text.substringAfter(cloudDetailsMarker, "").takeIf { isCloudError && it.isNotBlank() }
+    }
+    var showCloudTechnicalDetails by remember(message.id) { mutableStateOf(false) }
     val bubbleColor = if (isAgent) {
-        CardBackground
+        if (isCloudError) AccentRed.copy(alpha = 0.12f) else CardBackground
     } else {
         if (AppTheme.colors.isDark) Color(0xFF1E1E22) else Color(0xFFF1F3F5)
     }
     val bubbleBorder = if (isAgent) {
-        BorderColor
+        if (isCloudError) AccentRed.copy(alpha = 0.65f) else BorderColor
     } else {
         if (AppTheme.colors.isDark) Color(0xFF2E2E34) else Color(0xFFE2E8F0)
     }
-    val textColor = TextPrimary
+    val textColor = if (isCloudError) AccentRed else TextPrimary
     val timeFormat = remember { SimpleDateFormat("h:mm a", Locale.getDefault()) }
 
     // If this is a contact picker message, render the ContactPickerCard instead
@@ -780,7 +1215,7 @@ fun ChatBubble(
         ) {
             Column(
                 modifier = Modifier
-                    .widthIn(max = 290.dp)
+                    .widthIn(max = 348.dp)
                     .clip(
                         RoundedCornerShape(
                             topStart = 18.dp,
@@ -800,6 +1235,10 @@ fun ChatBubble(
                             bottomEnd = if (isAgent) 18.dp else 4.dp
                         )
                     )
+                    .combinedClickable(
+                        onClick = {},
+                        onLongClick = { onMessageLongPressed?.invoke(message) }
+                    )
                     .padding(14.dp)
             ) {
                 if (isAgent && message.modelBadge != null) {
@@ -814,12 +1253,67 @@ fun ChatBubble(
                     )
                 }
 
-                Text(
-                    text = message.text,
-                    fontSize = 14.sp,
-                    color = textColor,
-                    lineHeight = 20.sp
-                )
+                if (toolCall != null) {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = DarkBackground),
+                        border = BorderStroke(1.dp, AccentCyan.copy(alpha = 0.5f)),
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text("PROPOSED TOOL ACTION", color = AccentCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                text = toolCall.command ?: toolCall.url ?: toolCall.packageName ?: toolCall.appName ?: toolCall.action,
+                                color = TextPrimary,
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp,
+                            )
+                            Text(
+                                text = when (toolCall.action) {
+                                    "shell" -> "Only allow-listed read-only Android queries and app/URL intents run natively. No arbitrary shell is started; Python/Git/npm/Node explicitly route through Termux."
+                                    "open_app", "launch_app", "open_url", "open_uri", "pm_list_packages", "list_packages", "device_info", "android_device_info", "battery_status", "get_battery_status", "network_status", "get_network_status", "screen_brightness" -> "Uses Android PackageManager or read-only Android APIs after your approval."
+                                    else -> "This action is unsupported and will return an error without executing."
+                                },
+                                color = TextSecondary,
+                                fontSize = 11.sp,
+                            )
+                            if (toolApproved) {
+                                Text("Approved. The result or error will be posted as the next chat message.", color = TextSecondary, fontSize = 11.sp)
+                            }
+                            Button(
+                                onClick = {
+                                    if (!toolApproved) {
+                                        toolApproved = true
+                                        onToolApproved?.invoke(toolCall)
+                                    }
+                                },
+                                enabled = !toolApproved && onToolApproved != null,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(if (toolApproved) "Approved" else "Approve & Run")
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        text = cloudErrorSummary,
+                        fontSize = 14.sp,
+                        color = textColor,
+                        lineHeight = 20.sp
+                    )
+                    cloudTechnicalDetails?.let { details ->
+                        TextButton(
+                            onClick = { showCloudTechnicalDetails = !showCloudTechnicalDetails },
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
+                        ) {
+                            Text(if (showCloudTechnicalDetails) "Hide technical details" else "Technical details", color = AccentRed, fontSize = 11.sp)
+                        }
+                        if (showCloudTechnicalDetails) {
+                            Text(details, color = TextSecondary, fontSize = 11.sp, lineHeight = 15.sp)
+                        }
+                    }
+                }
                 
                 Spacer(modifier = Modifier.height(4.dp))
 

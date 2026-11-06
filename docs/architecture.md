@@ -1,6 +1,6 @@
 # USMAN AND UMAR — Cloud-First Android Architecture
 
-This document describes the current `3.0.0-cloud-ai` application. The app uses configured cloud LLM providers for reasoning; it does not bundle a local LLM or model artifact.
+This document describes the current `3.6.0` application. The app uses configured cloud LLM providers for reasoning; it does not bundle a local LLM or model artifact.
 
 ## 1. Architecture at a glance
 
@@ -82,7 +82,7 @@ The current app has no bundled GGUF model, llama.cpp Gradle module, local infere
 
 - Minimum Android version: API 28 (Android 9).
 - Target SDK: API 34.
-- Version: `3.0.0-cloud-ai`, versionCode 23.
+- Version: `3.6.0`, versionCode 24.
 - JVM suite: `./gradlew :app:testDebugUnitTest`.
 - Unsigned validation release: `./gradlew clean :app:assembleRelease -PallowUnsignedRelease=true`.
 
