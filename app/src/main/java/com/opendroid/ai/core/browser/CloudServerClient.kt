@@ -56,7 +56,7 @@ internal class CloudRequestException(
     val httpStatus: Int? = null,
     responseBody: String? = null,
     cause: Throwable? = null,
-    secrets: List<String> = emptyList(),
+    private val secrets: List<String> = emptyList(),
 ) : IOException(
     buildString {
         append("stage=").append(safeDiagnosticValue(stage))
@@ -66,7 +66,41 @@ internal class CloudRequestException(
         append(" response_body=").append(sanitizeCloudDiagnostic(responseBody.orEmpty(), secrets).ifBlank { "<empty>" })
     },
     cause,
-)
+) {
+    private val responseJson = runCatching { JSONObject(responseBody.orEmpty()) }.getOrNull()
+    val errorCode: String? = responseJson?.optString("error")?.takeIf { it.isNotBlank() && it != "null" }
+        ?.let { sanitizeCloudDiagnostic(it, secrets) }
+    val userMessage: String = responseJson?.optString("message")?.takeIf { it.isNotBlank() && it != "null" }
+        ?.let { sanitizeCloudDiagnostic(it, secrets) }
+        ?: responseJson?.optString("error")?.takeIf { it.isNotBlank() && it != "null" }
+            ?.let { sanitizeCloudDiagnostic(it, secrets) }
+        ?: "Cloud request failed${httpStatus?.let { " (HTTP $it)" }.orEmpty()}."
+    val taskId: String? = responseJson?.optString("task_id")?.takeIf { it.isNotBlank() && it != "null" }
+        ?.let { sanitizeCloudDiagnostic(it, secrets) }
+    val serverId: String? = responseJson?.optString("server_id")?.takeIf { it.isNotBlank() && it != "null" }
+        ?.let { sanitizeCloudDiagnostic(it, secrets) }
+    val operation: String? = responseJson?.optString("operation")?.takeIf { it.isNotBlank() && it != "null" }
+        ?.let { sanitizeCloudDiagnostic(it, secrets) }
+    val recoveryAction: String? = responseJson?.optString("recovery_action")?.takeIf { it.isNotBlank() && it != "null" }
+        ?.let { sanitizeCloudDiagnostic(it, secrets) }
+    val retryable: Boolean? = if (responseJson?.has("retryable") == true) responseJson.optBoolean("retryable") else null
+
+    fun userFacingSummary(): String = buildString {
+        append("Error: ").append(userMessage)
+        errorCode?.let { append("\nCode: ").append(it) }
+    }
+
+    fun technicalDetails(): String = buildList {
+        errorCode?.let { add("Code: $it") }
+        httpStatus?.let { add("HTTP status: $it") }
+        operation?.let { add("Operation: $it") }
+        serverId?.let { add("Server: $it") }
+        taskId?.let { add("Task: $it") }
+        retryable?.let { add("Retryable: $it") }
+        recoveryAction?.let { add("Recovery action: $it") }
+        add("Stage: ${safeDiagnosticValue(stage)}")
+    }.joinToString("\n")
+}
 
 internal fun sanitizeCloudDiagnostic(value: String, secrets: List<String> = emptyList()): String {
     var safe = value
@@ -142,6 +176,7 @@ class CloudServerClient @Inject constructor(
         imageBase64: String? = null,
         approvedStepIds: List<String> = emptyList(),
         onLog: (String) -> Unit = {},
+        onDispatch: (serverId: String) -> Unit = {},
     ): String = withContext(Dispatchers.IO) {
         val configured = settingsRepository.cloudServers.first()
         val candidates = configured.filter { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
@@ -215,6 +250,7 @@ class CloudServerClient @Inject constructor(
                     .header("Authorization", "Bearer ${server.token}")
                     .post(payload)
                     .build()
+                onDispatch(server.id)
                 Log.i(CLOUD_LOG_TAG, "request_dispatch stage=http_dispatch method=POST url=$safeUrl task_id=${safeDiagnosticValue(taskId)}")
                 client.newCall(request).execute().use { response ->
                     val responseBody = response.body?.string().orEmpty()
@@ -315,6 +351,12 @@ class CloudServerClient @Inject constructor(
                     ) {
                         completedBody = awaitPausedCheckpoint(server, taskId)
                     }
+                    if (action == "cancel" && runCatching {
+                            JSONObject(completedBody).optString("state") == "CANCEL_REQUESTED"
+                        }.getOrDefault(false)
+                    ) {
+                        completedBody = awaitCancellationConfirmation(server, taskId)
+                    }
                     return runCatching {
                         JSONObject(completedBody).put("_cloud_server_id", server.id).toString()
                     }.getOrDefault(completedBody)
@@ -367,6 +409,37 @@ class CloudServerClient @Inject constructor(
         throw SocketTimeoutException(
             "Pause was accepted, but the current specialist did not reach a checkpoint within 180 seconds. The task may still be running; do not resume it yet."
         )
+    }
+
+    /** A successful control POST is only a request; cancellation is confirmed by task status. */
+    private suspend fun awaitCancellationConfirmation(server: CloudServerConfig, taskId: String): String {
+        val baseUrl = normalizeServerBase(server.url)
+        repeat(180) {
+            delay(1_000)
+            val request = Request.Builder()
+                .url("$baseUrl/tasks/$taskId")
+                .header("Authorization", "Bearer ${server.token}")
+                .get()
+                .build()
+            val body = withContext(Dispatchers.IO) {
+                controlClient.newCall(request).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        if (response.code in setOf(500, 502, 503, 504)) return@withContext null
+                        throw IOException("Could not confirm cancellation status (HTTP ${response.code}).")
+                    }
+                    text
+                }
+            } ?: return@repeat
+            val state = runCatching { JSONObject(body).optString("state") }.getOrDefault("")
+            when (state) {
+                "CANCELLED" -> return body
+                "CANCEL_REQUESTED", "RUNNING", "PAUSE_REQUESTED" -> Unit
+                "COMPLETED", "FAILED", "PAUSED" -> throw IOException("Cancellation was not confirmed; task ended in state $state.")
+                else -> throw IOException("Cancellation outcome is unknown; task status could not confirm a safe terminal state.")
+            }
+        }
+        throw SocketTimeoutException("Cancellation was requested, but the server did not confirm a safe checkpoint within 180 seconds. The task may still be running; its outcome is UNKNOWN.")
     }
 
     /** Reads the real agent roster and adapter readiness from the fastest healthy configured backend. */
@@ -424,13 +497,26 @@ class CloudServerClient @Inject constructor(
             server.token.takeIf { it.isNotBlank() }?.let { builder.header("Authorization", "Bearer $it") }
             healthClient.newCall(builder.build()).execute().use { response ->
                 val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+                val body = response.body?.string().orEmpty()
+                val json = runCatching { JSONObject(body) }.getOrNull()
+                val status = json?.optString("status")?.lowercase()
+                val explicitNotReady = status in setOf("draining", "not_ready", "starting") ||
+                    json?.optBoolean("accepting_new_tasks", true) == false ||
+                    json?.optBoolean("drive_ready", true) == false ||
+                    json?.optBoolean("checkpoint_storage_ready", true) == false ||
+                    json?.optBoolean("lease_coordinator_ready", true) == false
+                val online = response.code == 200 && !explicitNotReady
                 CloudServerHealth(
                     serverId = server.id,
                     serverName = server.name,
-                    online = response.code == 200,
+                    online = online,
                     latencyMs = elapsed,
                     httpCode = response.code,
-                    error = if (response.code == 200) null else "HTTP ${response.code}",
+                    error = when {
+                        response.code != 200 -> "HTTP ${response.code}"
+                        explicitNotReady -> "Backend reports ${status ?: "required capability unavailable"}"
+                        else -> null
+                    },
                 )
             }
         } catch (failure: Exception) {

@@ -115,6 +115,7 @@ fun ChatScreen(
     // not wherever the user has navigated to) must never be displayed as if it were
     // happening here. See ChatViewModel.visibleAgentState.
     val visibleAgentState by viewModel.visibleAgentState.collectAsState()
+    val cloudTaskState by viewModel.cloudTaskState.collectAsState()
     val chatError by viewModel.chatError.collectAsState()
     // Id of whichever chat (if any) has a task actively running, regardless of which
     // chat is currently displayed - drives the chat-picker's "still running" indicator.
@@ -553,6 +554,49 @@ fun ChatScreen(
                     if (visibleAgentState is AgentState.Thinking) {
                         item {
                             ThinkingBubble("${llmConfig.activeProvider} is thinking…")
+                        }
+                    }
+
+                    cloudTaskState?.takeIf { it.sessionId == currentSessionId }?.let { cloudTask ->
+                        item(key = "cloud-task-${cloudTask.taskId}") {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                if (cloudTask.status in setOf("RUNNING", "CANCEL_REQUESTED")) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = AccentCyan,
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Filled.Warning,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (cloudTask.status in setOf("FAILED", "UNKNOWN")) AccentRed else AccentCyan,
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = when (cloudTask.status) {
+                                            "RUNNING" -> "Browsing…"
+                                            "CANCEL_REQUESTED" -> "Cancellation requested; waiting for a safe checkpoint…"
+                                            "CANCELLED" -> "Cancelled at a safe checkpoint."
+                                            "UNKNOWN" -> "Task outcome unknown; check the task before retrying."
+                                            "FAILED" -> "Cloud task failed."
+                                            else -> "Cloud task completed."
+                                        },
+                                        color = if (cloudTask.status in setOf("FAILED", "UNKNOWN")) AccentRed else TextSecondary,
+                                        fontSize = 12.sp,
+                                    )
+                                    cloudTask.message?.let { Text(it, color = TextSecondary, fontSize = 10.sp) }
+                                }
+                                if (cloudTask.status == "RUNNING") {
+                                    TextButton(onClick = { viewModel.stopTask() }) { Text("Cancel", color = AccentRed) }
+                                }
+                            }
                         }
                     }
 
@@ -1113,6 +1157,14 @@ fun ChatBubble(
         message.text.startsWith("Cloud OpenSwarm failed") ||
             message.text.startsWith("This plugin requires a Cloud Server")
         )
+    val cloudDetailsMarker = "\n\n[cloud-technical-details]\n"
+    val cloudErrorSummary = remember(message.id, message.text) {
+        if (isCloudError) message.text.substringBefore(cloudDetailsMarker) else message.text
+    }
+    val cloudTechnicalDetails = remember(message.id, message.text) {
+        message.text.substringAfter(cloudDetailsMarker, "").takeIf { isCloudError && it.isNotBlank() }
+    }
+    var showCloudTechnicalDetails by remember(message.id) { mutableStateOf(false) }
     val bubbleColor = if (isAgent) {
         if (isCloudError) AccentRed.copy(alpha = 0.12f) else CardBackground
     } else {
@@ -1245,11 +1297,22 @@ fun ChatBubble(
                     }
                 } else {
                     Text(
-                        text = message.text,
+                        text = cloudErrorSummary,
                         fontSize = 14.sp,
                         color = textColor,
                         lineHeight = 20.sp
                     )
+                    cloudTechnicalDetails?.let { details ->
+                        TextButton(
+                            onClick = { showCloudTechnicalDetails = !showCloudTechnicalDetails },
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
+                        ) {
+                            Text(if (showCloudTechnicalDetails) "Hide technical details" else "Technical details", color = AccentRed, fontSize = 11.sp)
+                        }
+                        if (showCloudTechnicalDetails) {
+                            Text(details, color = TextSecondary, fontSize = 11.sp, lineHeight = 15.sp)
+                        }
+                    }
                 }
                 
                 Spacer(modifier = Modifier.height(4.dp))

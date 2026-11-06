@@ -43,10 +43,19 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import javax.inject.Inject
 import java.util.UUID
 
 enum class ChatTarget { API_MODEL, CLOUD_OPENSWARM }
+
+data class CloudTaskUiState(
+    val taskId: String,
+    val sessionId: String,
+    val status: String,
+    val serverId: String? = null,
+    val message: String? = null,
+)
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
@@ -131,6 +140,9 @@ class ChatViewModel @Inject constructor(
     // task start" rule so [agentState], which is a single field shared by every chat,
     // can be attributed back to the chat it actually belongs to. See [visibleAgentState].
     private val _taskSessionId = MutableStateFlow<String?>(null)
+    private val _cloudTaskState = MutableStateFlow<CloudTaskUiState?>(null)
+    val cloudTaskState: StateFlow<CloudTaskUiState?> = _cloudTaskState
+    private var cloudTaskJob: Job? = null
 
     /**
      * [agentState], but forced to [AgentState.Idle] whenever it actually describes a
@@ -160,11 +172,11 @@ class ChatViewModel @Inject constructor(
      * running" indicator, which must stay visible for that chat even while the user has
      * switched away from it.
      */
-    val runningSessionId: StateFlow<String?> = combine(agentState, _taskSessionId) { state, sessionId ->
-        if (sessionId != null && (state is AgentState.Thinking || state is AgentState.ExecutingPlan)) {
-            sessionId
-        } else {
-            null
+    val runningSessionId: StateFlow<String?> = combine(agentState, _taskSessionId, _cloudTaskState) { state, sessionId, cloud ->
+        when {
+            cloud != null && cloud.status in setOf("RUNNING", "CANCEL_REQUESTED", "UNKNOWN") -> cloud.sessionId
+            sessionId != null && (state is AgentState.Thinking || state is AgentState.ExecutingPlan) -> sessionId
+            else -> null
         }
     }.stateIn(
         scope = viewModelScope,
@@ -191,26 +203,34 @@ class ChatViewModel @Inject constructor(
             // Explicit cloud selection always stays on the cloud path. The local
             // AutoMode toggle must never silently redirect a cloud task to an AI app.
             android.util.Log.i("CloudOpenSwarm", "dispatch_route=cloud_openswarm manual_mode_does_not_redirect=true")
-            viewModelScope.launch { runCloudOpenSwarm(query, sessionId ?: conversationRepository.ensureCurrentSessionId(), pluginIds, thinkHarder, imageBase64) }
+            val pinnedSession = sessionId ?: conversationRepository.ensureCurrentSessionId()
+            val taskId = "chat-${UUID.randomUUID()}"
+            _cloudTaskState.value = CloudTaskUiState(taskId, pinnedSession, "RUNNING")
+            cloudTaskJob = viewModelScope.launch {
+                runCloudOpenSwarm(taskId, query, pinnedSession, pluginIds, thinkHarder, imageBase64)
+            }
         } else {
             agentLoop.processQuery(query, context, sessionId, imageBase64)
         }
     }
 
-    private suspend fun runCloudOpenSwarm(query: String, sessionId: String, pluginIds: List<String>, thinkHarder: Boolean, imageBase64: String?) {
+    private suspend fun runCloudOpenSwarm(taskId: String, query: String, sessionId: String, pluginIds: List<String>, thinkHarder: Boolean, imageBase64: String?) {
         val userMessage = ChatMessage(UUID.randomUUID().toString(), query, ChatMessage.Sender.USER)
         conversationRepository.insertMessage(sessionId, userMessage)
         val assistantId = UUID.randomUUID().toString()
         conversationRepository.insertMessage(sessionId, ChatMessage(assistantId, "", ChatMessage.Sender.AGENT, modelBadge = "Cloud OpenSwarm"))
         try {
             val body = cloudServerClient.execute(
-                taskId = "chat-${System.currentTimeMillis()}",
+                taskId = taskId,
                 prompt = query,
                 pluginId = pluginIds.firstOrNull() ?: "openswarm_agent",
                 pluginIds = pluginIds.ifEmpty { listOf("openswarm_agent") },
                 thinkHarder = thinkHarder,
                 imageBase64 = imageBase64,
                 onLog = { log -> android.util.Log.i("CloudOpenSwarm", log) },
+                onDispatch = { serverId ->
+                    _cloudTaskState.value = _cloudTaskState.value?.copy(serverId = serverId)
+                },
             )
             val result = BrowserUseRemoteProtocol.parseSuccess(body).result
             val streamed = StringBuilder()
@@ -220,17 +240,35 @@ class ChatViewModel @Inject constructor(
                 delay(18)
             }
             if (result.isBlank()) conversationRepository.updateMessageText(assistantId, "Cloud OpenSwarm returned an empty result. Tap retry to run it again.")
+            val resultStatus = runCatching { org.json.JSONObject(result).optString("status").uppercase() }.getOrDefault("")
+            val finalStatus = when (resultStatus) {
+                "CANCELLED" -> "CANCELLED"
+                "PAUSED", "WAITING_FOR_USER" -> resultStatus
+                "FAILED" -> "FAILED"
+                else -> "COMPLETED"
+            }
+            _cloudTaskState.value = _cloudTaskState.value?.copy(status = finalStatus)
         } catch (failure: Exception) {
             val detail = (failure as? CloudRequestException)?.message.orEmpty().ifBlank {
                 "stage=response_processing exception_class=${failure.javaClass.simpleName} request_url=not-available http_status=none response_body=${sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank { "<empty>" }}"
             }
             android.util.Log.e("CloudOpenSwarm", detail)
             val userDetail = if (failure is CloudRequestException) {
-                detail
+                val diagnostics = failure.technicalDetails()
+                "Cloud OpenSwarm failed: ${failure.userFacingSummary()}\n\n[cloud-technical-details]\n$diagnostics"
             } else {
-                "stage=response_processing exception_class=${failure.javaClass.simpleName} request_url=not-available http_status=none response_body=${sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank { "<empty>" }}"
+                "Cloud OpenSwarm failed: ${sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank { "The task result could not be verified." }}"
             }
-            conversationRepository.updateMessageText(assistantId, "Cloud OpenSwarm failed: $userDetail")
+            conversationRepository.updateMessageText(assistantId, userDetail)
+            val state = when {
+                failure.message.orEmpty().contains("UNKNOWN", ignoreCase = true) ||
+                    failure is java.net.SocketTimeoutException ||
+                    ((failure as? CloudRequestException)?.stage == "network_io") ||
+                    ((failure as? CloudRequestException)?.errorCode == "EXECUTION_OUTCOME_UNKNOWN") -> "UNKNOWN"
+                _cloudTaskState.value?.status == "CANCEL_REQUESTED" -> "CANCEL_REQUESTED"
+                else -> "FAILED"
+            }
+            _cloudTaskState.value = _cloudTaskState.value?.copy(status = state, message = sanitizeCloudDiagnostic(failure.message.orEmpty()))
         }
     }
 
@@ -520,7 +558,7 @@ class ChatViewModel @Inject constructor(
      */
     fun deleteChat(sessionId: String) {
         if (isCurrentSession(sessionId) || runningSessionId.value == sessionId) {
-            agentLoop.cancelCurrentTask()
+            if (_cloudTaskState.value?.sessionId == sessionId) stopTask() else agentLoop.cancelCurrentTask()
         }
         agentLoop.forgetSession(sessionId)
         viewModelScope.launch {
@@ -543,6 +581,27 @@ class ChatViewModel @Inject constructor(
      * conversation history. Shared by the Plan tab and the chat UI's stop control.
      */
     fun stopTask() {
-        agentLoop.cancelCurrentTask()
+        val cloud = _cloudTaskState.value
+        if (cloud != null && cloud.status in setOf("RUNNING", "CANCEL_REQUESTED", "UNKNOWN")) {
+            if (cloud.status == "CANCEL_REQUESTED") return
+            _cloudTaskState.value = cloud.copy(status = "CANCEL_REQUESTED", message = "Cancellation requested; waiting for a safe checkpoint.")
+            viewModelScope.launch {
+                try {
+                    val response = cloudServerClient.controlTask(cloud.taskId, "cancel", cloud.serverId)
+                    val state = runCatching { org.json.JSONObject(response).optString("state") }.getOrDefault("")
+                    _cloudTaskState.value = _cloudTaskState.value?.copy(
+                        status = if (state == "CANCELLED") "CANCELLED" else if (state == "CANCEL_REQUESTED") "CANCEL_REQUESTED" else "UNKNOWN",
+                        message = if (state == "CANCELLED") "Cancellation confirmed at a safe checkpoint." else "Cancellation requested; server status is ${state.ifBlank { "unknown" }}.",
+                    )
+                } catch (failure: Exception) {
+                    _cloudTaskState.value = _cloudTaskState.value?.copy(
+                        status = "UNKNOWN",
+                        message = "Cancellation could not be confirmed. The task may still be running. ${sanitizeCloudDiagnostic(failure.message.orEmpty())}",
+                    )
+                }
+            }
+        } else {
+            agentLoop.cancelCurrentTask()
+        }
     }
 }
