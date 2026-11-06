@@ -21,7 +21,7 @@ from drive_task_lease import (
 )
 
 DEFAULT_FOLDER_NAME = "USMAN_UMAR_CHECKPOINTS"
-DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
 
 
 class DriveRuntimeError(RuntimeError):
