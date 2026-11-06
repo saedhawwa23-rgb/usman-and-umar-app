@@ -26,7 +26,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Result of a live `/health` probe. A healthy server is strictly an HTTP 200 response. */
+/** Result of a live `/health` probe. Only explicit full backend readiness is eligible for work. */
 data class CloudServerHealth(
     val serverId: String,
     val serverName: String,
@@ -34,7 +34,80 @@ data class CloudServerHealth(
     val latencyMs: Long? = null,
     val httpCode: Int? = null,
     val error: String? = null,
+    val backendStatus: String? = null,
+    val reportedServerId: String? = null,
+    val instanceId: String? = null,
+    val uptimeSeconds: Long? = null,
+    val acceptingNewTasks: Boolean? = null,
+    val draining: Boolean? = null,
+    val driveReady: Boolean? = null,
+    val checkpointStorageReady: Boolean? = null,
+    val leaseCoordinatorReady: Boolean? = null,
+    val activeTasks: Int? = null,
+    val recoveryState: String? = null,
+    val recoveryReason: String? = null,
 )
+
+/** Strictly parses `/health`; absent or mistyped readiness flags always make a server ineligible. */
+internal fun parseCloudServerHealth(
+    serverId: String,
+    serverName: String,
+    httpCode: Int,
+    body: String,
+    latencyMs: Long? = null,
+    secrets: List<String> = emptyList(),
+): CloudServerHealth {
+    val json = runCatching { JSONObject(body) }.getOrNull()
+    fun text(key: String): String? = (json?.opt(key) as? String)?.trim()
+        ?.takeIf { it.isNotBlank() }?.let { sanitizeCloudDiagnostic(it, secrets) }
+    fun bool(key: String): Boolean? = json?.opt(key) as? Boolean
+    fun long(key: String): Long? = (json?.opt(key) as? Number)?.toLong()
+    fun int(key: String): Int? = (json?.opt(key) as? Number)?.toInt()
+
+    val backendStatus = text("status")
+    val reportedServerId = text("server_id")
+    val instanceId = text("instance_id")
+    val accepting = bool("accepting_new_tasks")
+    val draining = bool("draining")
+    val driveReady = bool("drive_ready")
+    val checkpointReady = bool("checkpoint_storage_ready")
+    val leaseReady = bool("lease_coordinator_ready")
+    val recoveryState = text("recovery_state")
+    val recoveryReason = text("recovery_reason")
+    val ready = httpCode == 200 && backendStatus == "ready" && accepting == true && draining == false &&
+        driveReady == true && checkpointReady == true && leaseReady == true
+    val readinessIssues = buildList {
+        if (httpCode != 200) add("HTTP $httpCode")
+        if (backendStatus != "ready") add("status=${backendStatus ?: "missing"}")
+        if (accepting != true) add("accepting_new_tasks=${accepting ?: "missing"}")
+        if (draining != false) add("draining=${draining ?: "missing"}")
+        if (driveReady != true) add("drive_ready=${driveReady ?: "missing"}")
+        if (checkpointReady != true) add("checkpoint_storage_ready=${checkpointReady ?: "missing"}")
+        if (leaseReady != true) add("lease_coordinator_ready=${leaseReady ?: "missing"}")
+    }
+    val reportedError = text("error")
+    val reason = recoveryReason ?: reportedError ?: readinessIssues.joinToString(", ").takeIf { it.isNotEmpty() }
+    return CloudServerHealth(
+        serverId = serverId,
+        serverName = serverName,
+        online = ready,
+        latencyMs = latencyMs,
+        httpCode = httpCode,
+        error = reason?.takeIf { !ready } ?: if (ready) null else readinessIssues.joinToString(", "),
+        backendStatus = backendStatus,
+        reportedServerId = reportedServerId,
+        instanceId = instanceId,
+        uptimeSeconds = long("uptime_seconds"),
+        acceptingNewTasks = accepting,
+        draining = draining,
+        driveReady = driveReady,
+        checkpointStorageReady = checkpointReady,
+        leaseCoordinatorReady = leaseReady,
+        activeTasks = int("active_tasks"),
+        recoveryState = recoveryState,
+        recoveryReason = reason,
+    )
+}
 
 
 /** Agent metadata returned by a live OpenSwarm backend. */
@@ -56,7 +129,7 @@ internal class CloudRequestException(
     val httpStatus: Int? = null,
     responseBody: String? = null,
     cause: Throwable? = null,
-    private val secrets: List<String> = emptyList(),
+    secrets: List<String> = emptyList(),
 ) : IOException(
     buildString {
         append("stage=").append(safeDiagnosticValue(stage))
@@ -66,41 +139,7 @@ internal class CloudRequestException(
         append(" response_body=").append(sanitizeCloudDiagnostic(responseBody.orEmpty(), secrets).ifBlank { "<empty>" })
     },
     cause,
-) {
-    private val responseJson = runCatching { JSONObject(responseBody.orEmpty()) }.getOrNull()
-    val errorCode: String? = responseJson?.optString("error")?.takeIf { it.isNotBlank() && it != "null" }
-        ?.let { sanitizeCloudDiagnostic(it, secrets) }
-    val userMessage: String = responseJson?.optString("message")?.takeIf { it.isNotBlank() && it != "null" }
-        ?.let { sanitizeCloudDiagnostic(it, secrets) }
-        ?: responseJson?.optString("error")?.takeIf { it.isNotBlank() && it != "null" }
-            ?.let { sanitizeCloudDiagnostic(it, secrets) }
-        ?: "Cloud request failed${httpStatus?.let { " (HTTP $it)" }.orEmpty()}."
-    val taskId: String? = responseJson?.optString("task_id")?.takeIf { it.isNotBlank() && it != "null" }
-        ?.let { sanitizeCloudDiagnostic(it, secrets) }
-    val serverId: String? = responseJson?.optString("server_id")?.takeIf { it.isNotBlank() && it != "null" }
-        ?.let { sanitizeCloudDiagnostic(it, secrets) }
-    val operation: String? = responseJson?.optString("operation")?.takeIf { it.isNotBlank() && it != "null" }
-        ?.let { sanitizeCloudDiagnostic(it, secrets) }
-    val recoveryAction: String? = responseJson?.optString("recovery_action")?.takeIf { it.isNotBlank() && it != "null" }
-        ?.let { sanitizeCloudDiagnostic(it, secrets) }
-    val retryable: Boolean? = if (responseJson?.has("retryable") == true) responseJson.optBoolean("retryable") else null
-
-    fun userFacingSummary(): String = buildString {
-        append("Error: ").append(userMessage)
-        errorCode?.let { append("\nCode: ").append(it) }
-    }
-
-    fun technicalDetails(): String = buildList {
-        errorCode?.let { add("Code: $it") }
-        httpStatus?.let { add("HTTP status: $it") }
-        operation?.let { add("Operation: $it") }
-        serverId?.let { add("Server: $it") }
-        taskId?.let { add("Task: $it") }
-        retryable?.let { add("Retryable: $it") }
-        recoveryAction?.let { add("Recovery action: $it") }
-        add("Stage: ${safeDiagnosticValue(stage)}")
-    }.joinToString("\n")
-}
+)
 
 internal fun sanitizeCloudDiagnostic(value: String, secrets: List<String> = emptyList()): String {
     var safe = value
@@ -176,7 +215,6 @@ class CloudServerClient @Inject constructor(
         imageBase64: String? = null,
         approvedStepIds: List<String> = emptyList(),
         onLog: (String) -> Unit = {},
-        onDispatch: (serverId: String) -> Unit = {},
     ): String = withContext(Dispatchers.IO) {
         val configured = settingsRepository.cloudServers.first()
         val candidates = configured.filter { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
@@ -199,7 +237,7 @@ class CloudServerClient @Inject constructor(
                 stage = "health_check",
                 requestUrl = "${normalizeServerBase(selected.url)}/health",
                 httpStatus = health.firstOrNull()?.httpCode,
-                responseBody = "No enabled OpenSwarm server returned HTTP 200 from /health. $healthDetail",
+                responseBody = "No enabled OpenSwarm server reported full readiness from /health. $healthDetail",
             )
         }
         val rankedHealthy = health.asSequence()
@@ -250,7 +288,6 @@ class CloudServerClient @Inject constructor(
                     .header("Authorization", "Bearer ${server.token}")
                     .post(payload)
                     .build()
-                onDispatch(server.id)
                 Log.i(CLOUD_LOG_TAG, "request_dispatch stage=http_dispatch method=POST url=$safeUrl task_id=${safeDiagnosticValue(taskId)}")
                 client.newCall(request).execute().use { response ->
                     val responseBody = response.body?.string().orEmpty()
@@ -267,7 +304,7 @@ class CloudServerClient @Inject constructor(
                         stage = "http_response",
                         requestUrl = requestUrl,
                         httpStatus = response.code,
-                        responseBody = responseBody,
+                        responseBody = BrowserUseRemoteProtocol.httpError(response.code, responseBody, listOf(server.token)),
                         secrets = listOf(server.token),
                     )
                 }
@@ -307,17 +344,20 @@ class CloudServerClient @Inject constructor(
         val configured = settingsRepository.cloudServers.first()
             .filter { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
         check(configured.isNotEmpty()) { "Enable and configure at least one cloud server in Remote settings." }
-        val healthy = probeServers(configured).filter { it.online }
-        check(healthy.isNotEmpty()) { "No enabled OpenSwarm server returned HTTP 200 from /health." }
+        // Controls target already-running work, so a draining/not-ready server
+        // with a live HTTP health endpoint must remain reachable for pause/cancel.
+        // New task dispatch continues to require the stricter `online` predicate.
+        val reachable = probeServers(configured).filter { it.httpCode == 200 }
+        check(reachable.isNotEmpty()) { "No enabled OpenSwarm server returned an HTTP health response for task control." }
         val ordered = if (targetId != null) {
             val selected = configured.firstOrNull { it.id == targetId }
                 ?: error("The original cloud server is no longer configured.")
-            check(healthy.any { it.serverId == selected.id }) {
+            check(reachable.any { it.serverId == selected.id }) {
                 "The original cloud server ${selected.name} is offline; task control will not move its local task state to another server."
             }
             listOf(selected)
         } else {
-            healthy.mapNotNull { health -> configured.firstOrNull { it.id == health.serverId } }
+            reachable.mapNotNull { health -> configured.firstOrNull { it.id == health.serverId } }
         }
         var lastError: Throwable? = null
         for (server in ordered) {
@@ -340,7 +380,7 @@ class CloudServerClient @Inject constructor(
                         lastError = IOException("Task not found on ${server.name} (HTTP 404).")
                         shouldTryNextServer = true
                     } else {
-                        error(BrowserUseRemoteProtocol.httpError(response.code, responseBody))
+                        error(BrowserUseRemoteProtocol.httpError(response.code, responseBody, listOf(server.token)))
                     }
                 }
                 if (successfulBody != null) {
@@ -411,7 +451,7 @@ class CloudServerClient @Inject constructor(
         )
     }
 
-    /** A successful control POST is only a request; cancellation is confirmed by task status. */
+    /** A successful control POST is only a request; confirmation requires terminal task state. */
     private suspend fun awaitCancellationConfirmation(server: CloudServerConfig, taskId: String): String {
         val baseUrl = normalizeServerBase(server.url)
         repeat(180) {
@@ -496,27 +536,15 @@ class CloudServerClient @Inject constructor(
             val builder = Request.Builder().url("${normalizeServerBase(server.url)}/health").get()
             server.token.takeIf { it.isNotBlank() }?.let { builder.header("Authorization", "Bearer $it") }
             healthClient.newCall(builder.build()).execute().use { response ->
-                val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
                 val body = response.body?.string().orEmpty()
-                val json = runCatching { JSONObject(body) }.getOrNull()
-                val status = json?.optString("status")?.lowercase()
-                val explicitNotReady = status in setOf("draining", "not_ready", "starting") ||
-                    json?.optBoolean("accepting_new_tasks", true) == false ||
-                    json?.optBoolean("drive_ready", true) == false ||
-                    json?.optBoolean("checkpoint_storage_ready", true) == false ||
-                    json?.optBoolean("lease_coordinator_ready", true) == false
-                val online = response.code == 200 && !explicitNotReady
-                CloudServerHealth(
+                val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+                parseCloudServerHealth(
                     serverId = server.id,
                     serverName = server.name,
-                    online = online,
-                    latencyMs = elapsed,
                     httpCode = response.code,
-                    error = when {
-                        response.code != 200 -> "HTTP ${response.code}"
-                        explicitNotReady -> "Backend reports ${status ?: "required capability unavailable"}"
-                        else -> null
-                    },
+                    body = body,
+                    latencyMs = elapsed,
+                    secrets = listOf(server.token),
                 )
             }
         } catch (failure: Exception) {

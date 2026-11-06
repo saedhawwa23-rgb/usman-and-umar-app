@@ -1,6 +1,6 @@
 """Multi-agent OpenSwarm orchestrator with durable task state and honest capability routing."""
 from __future__ import annotations
-import asyncio, json, os, re, hashlib, time
+import asyncio, json, os, re
 
 import httpx
 from typing import Any
@@ -144,26 +144,27 @@ async def _run_specialist(agent_id: str, objective: str, state: dict[str, Any]) 
         return {"agent_id": agent_id, "status": "GENERATED", "verified": False, "output": output[:20000]}
     raise CapabilityUnavailableError(f"{agent_id} agent is registered, but its execution adapter is not configured. No operation was attempted.")
 
-async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None, plugin_ids: list[str] | None = None, allowed_domains: list[str], max_steps: int, approved_step_ids: list[str] | None = None, ownership_guard: Any = None, checkpoint_callback: Any = None, server_id: str = "unknown", instance_id: str = "unknown", fencing_token: int | None = None) -> str:
+async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None, plugin_ids: list[str] | None = None, allowed_domains: list[str], max_steps: int, approved_step_ids: list[str] | None = None, lifecycle: Any = None) -> str:
     plugins = sorted(set(plugin_ids or []) | ({plugin_id} if plugin_id else set()))
+    task_store = lifecycle.guarded_store(TASKS) if lifecycle is not None else TASKS
     approved = set(approved_step_ids or [])
     try:
-        existing = TASKS.get(task_id)
+        existing = task_store.get(task_id)
     except KeyError:
         existing = None
 
     if existing is None and approved:
         raise RuntimeError("No saved pending-approval record exists for this task on this server. Refusing to apply stale or cross-server approvals.")
     if existing is None:
-        TASKS.create(task_id, prompt)
+        task_store.create(task_id, prompt)
         try:
-            TASKS.transition(task_id, "PLANNING", "manager_planning_started")
+            task_store.transition(task_id, "PLANNING", "manager_planning_started")
             plan = _manager_plan(prompt, plugins, max_steps)
-            TASKS.save_plan(task_id, plan["steps"])
-            TASKS.transition(task_id, "READY", "manager_plan_ready", {"step_count": len(plan["steps"])})
+            task_store.save_plan(task_id, plan["steps"])
+            task_store.transition(task_id, "READY", "manager_plan_ready", {"step_count": len(plan["steps"])})
         except Exception as exc:
             try:
-                TASKS.transition(task_id, "FAILED", "planning_failed", {"error_type": type(exc).__name__, "message": str(exc)[:500]})
+                task_store.transition(task_id, "FAILED", "planning_failed", {"error_type": type(exc).__name__, "message": str(exc)[:500]})
             except Exception:
                 pass
             raise
@@ -196,28 +197,19 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                    for step in plan["steps"] if step["id"] in awaiting]
         report = {"task_id": task_id, "status": "WAITING_FOR_USER", "summary": plan["summary"],
                   "approval_required": details, "verified": False}
-        TASKS.save_result(task_id, report)
+        task_store.save_result(task_id, report)
         if existing is not None and existing["state"] == "WAITING_FOR_USER":
-            TASKS.append_event(task_id, "approval_progress", {"approved_step_ids": sorted(approved), "remaining_step_ids": sorted(awaiting)})
+            task_store.append_event(task_id, "approval_progress", {"approved_step_ids": sorted(approved), "remaining_step_ids": sorted(awaiting)})
         else:
-            TASKS.transition(task_id, "WAITING_FOR_USER", "explicit_approval_required",
+            task_store.transition(task_id, "WAITING_FOR_USER", "explicit_approval_required",
                              {"step_ids": sorted(awaiting)})
-        if checkpoint_callback is not None:
-            await checkpoint_callback({
-                "current_step": "", "completed_steps": [],
-                "pending_steps": [step["id"] for step in plan["steps"]],
-                "graph_state": {"summary": plan["summary"], "plan": plan["steps"],
-                                "results": [], "approved_step_ids": sorted(approved)},
-                "execution_receipts": [], "idempotency_keys": [],
-                "task_status": "WAITING_FOR_USER",
-            })
         return json.dumps(report, ensure_ascii=False)
 
     try:
         if existing is not None and existing["state"] in {"WAITING_FOR_USER", "PAUSED"}:
-            TASKS.transition(task_id, "READY", "user_approval_received" if existing["state"] == "WAITING_FOR_USER" else "task_resumed",
+            task_store.transition(task_id, "READY", "user_approval_received" if existing["state"] == "WAITING_FOR_USER" else "task_resumed",
                              {"approved_step_ids": sorted(approved)})
-        TASKS.transition(task_id, "RUNNING", "specialists_started")
+        task_store.transition(task_id, "RUNNING", "specialists_started")
         saved_results = (existing.get("result") or {}).get("results", []) if existing is not None and existing["state"] == "PAUSED" else []
         results = list(saved_results)
         completed = {
@@ -225,47 +217,19 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
             for item in saved_results if isinstance(item, dict) and isinstance(item.get("step_id"), str)
         }
         pending = {step["id"]: step for step in plan["steps"] if step["id"] not in completed}
-        prior_receipts = (existing.get("result") or {}).get("execution_receipts", []) if existing else []
-        receipts: dict[str, dict[str, Any]] = {
-            receipt["step_id"]: dict(receipt) for receipt in prior_receipts
-            if isinstance(receipt, dict) and isinstance(receipt.get("step_id"), str)
-        }
-        idempotency_keys = {
-            step["id"]: hashlib.sha256(f"{task_id}:{step['id']}".encode("utf-8")).hexdigest()
-            for step in plan["steps"]
-        }
-
-        async def persist_snapshot(current_step: str = "", task_status: str = "RUNNING") -> None:
-            if checkpoint_callback is None:
-                return
-            snapshot = {
-                "current_step": current_step,
-                "completed_steps": sorted(completed),
-                "pending_steps": sorted(pending),
-                "graph_state": {"summary": plan["summary"], "plan": plan["steps"], "results": results},
-                "approved_step_ids": sorted(approved),
-                "execution_receipts": [dict(value) for value in receipts.values()],
-                "idempotency_keys": list(idempotency_keys.values()),
-                "task_status": task_status,
-            }
-            await checkpoint_callback(snapshot)
-
-        await persist_snapshot(task_status="RUNNING")
         while pending:
             ready = [step for step in pending.values()
                      if all(dependency in completed for dependency in step["depends_on"])]
             if not ready:
                 raise RuntimeError("Manager plan contains a dependency cycle or blocked step.")
             async def dispatch(step):
-                if ownership_guard is not None:
-                    await ownership_guard()
                 agent_id = step["agent_id"]
-                control_state = TASKS.get(task_id)["state"]
+                control_state = task_store.get(task_id)["state"]
                 if control_state in {"PAUSE_REQUESTED", "PAUSED", "CANCEL_REQUESTED", "CANCELLED"}:
                     return {"agent_id": agent_id,
                             "status": "CONTROL_PAUSED" if control_state in {"PAUSE_REQUESTED", "PAUSED"} else "CONTROL_CANCELLED",
                             "verified": False, "output": "Execution stopped at a cooperative control checkpoint."}
-                TASKS.append_event(task_id, "agent_handoff", {
+                task_store.append_event(task_id, "agent_handoff", {
                     "step_id": step["id"], "from_agent": "manager",
                     "to_agent": agent_id, "objective": step["objective"],
                     "depends_on": step["depends_on"],
@@ -316,8 +280,6 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                     result = await CAPABILITIES.execute(
                         capability_id, tool_input, approved=step["id"] in approved
                     )
-                    if ownership_guard is not None:
-                        await ownership_guard()
                     return {"agent_id": agent_id, "status": "EXECUTED",
                             "verified": result.get("verified") is True, "capability_id": capability_id,
                             "output": json.dumps(result, ensure_ascii=False)[:20000]}
@@ -325,80 +287,81 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                     return {"agent_id": agent_id, "status": "PARTIAL", "verified": False,
                             "output": "Only fixed backend URL/domain policies apply; this is not a complete security audit."}
                 prior = [completed[item] for item in step["depends_on"]]
-                result = await _run_specialist(agent_id, step["objective"], {
+                return await _run_specialist(agent_id, step["objective"], {
                     "prompt": prompt, "allowed_domains": allowed_domains,
                     "plugins": plugins, "shared_context": prior, "step": step,
-                    "persistent_memory": TASKS.memory_recent(8),
+                    "persistent_memory": task_store.memory_recent(8),
                     "approved": step["id"] in approved,
                 })
-                if ownership_guard is not None:
-                    await ownership_guard()
-                return result
             async def dispatch_with_retry(step):
                 capability_id = step.get("capability_id") or ""
+                capability = CAPABILITIES.get(capability_id)
+                tool_input = step.get("tool_input", {})
+                critical = (
+                    step["agent_id"] in {"terminal", "automation", "android", "drive"} or
+                    (capability is not None and capability.risk in {"high", "critical"}) or
+                    capability_id in {"files.write", "documents.create", "github.write", "github.pull_request", "memory.write"} or
+                    (step["agent_id"] == "coder" and isinstance(tool_input, dict) and bool(tool_input.get("output_path")))
+                )
+                if lifecycle is not None and critical:
+                    prior = lifecycle.prepare_action(step)
+                    if prior is not None:
+                        recovered = (prior.get("details") or {}).get("outcome")
+                        if not isinstance(recovered, dict):
+                            raise RuntimeError("Confirmed action receipt has no recoverable result; reconciliation required.")
+                        return recovered
                 safe_retry = (
                     step["agent_id"] in {"browser", "research", "coder", "planner", "data"} or
                     (step["agent_id"] == "files" and capability_id in {"files.read", "files.list"}) or
                     (step["agent_id"] == "github" and capability_id == "github.read") or
                     (step["agent_id"] == "memory" and capability_id in {"memory.read", "memory.search"})
                 )
-                step_id = step["id"]
-                idempotency_key = idempotency_keys[step_id]
-                step["_idempotency_key"] = idempotency_key
                 for attempt in range(3):
-                    started_at = time.time()
-                    base_receipt = {
-                        "task_id": task_id, "step_id": step_id, "action_id": step.get("capability_id") or step.get("agent_id"),
-                        "idempotency_key": idempotency_key, "server_id": server_id,
-                        "instance_id": instance_id, "started_at": started_at,
-                        "fencing_token": fencing_token, "completed_at": None,
-                        "external_reference": None, "result_hash": None, "error_details": None,
-                    }
-                    receipts[step_id] = {**base_receipt, "status": "PREPARED"}
-                    await persist_snapshot(step_id)
-                    if ownership_guard is not None:
-                        await ownership_guard()
-                    receipts[step_id] = {**base_receipt, "status": "EXECUTING"}
-                    await persist_snapshot(step_id)
                     try:
+                        if lifecycle is not None:
+                            await lifecycle.before_step()
                         outcome = await dispatch(step)
-                        if outcome.get("status") in {"CONTROL_PAUSED", "CONTROL_CANCELLED"}:
-                            receipt_status = "CANCELLED" if outcome.get("status") == "CONTROL_CANCELLED" else "FAILED"
-                            receipts[step_id] = {**base_receipt, "status": receipt_status,
-                                                 "completed_at": time.time(),
-                                                 "error_details": "Stopped at a cooperative safe checkpoint."}
-                            await persist_snapshot(step_id)
-                            return outcome
-                        if ownership_guard is not None:
-                            await ownership_guard()
-                        outcome_hash = hashlib.sha256(json.dumps(outcome, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
-                        receipts[step_id] = {**base_receipt, "status": "CONFIRMED", "completed_at": time.time(),
-                                             "result_hash": outcome_hash}
-                        await persist_snapshot(step_id)
+                        if lifecycle is not None:
+                            await lifecycle.after_step()
+                            if critical:
+                                lifecycle.finish_action(step, "CONFIRMED", outcome)
                         return outcome
                     except Exception as exc:
+                        if lifecycle is not None and critical:
+                            try:
+                                lifecycle.finish_action(step, "UNKNOWN", {"error_type": type(exc).__name__, "message": str(exc)[:300]})
+                            except Exception:
+                                pass
+                            # The external operation may have taken effect even
+                            # when it failed locally; do not turn this into a
+                            # normal retryable execution failure.
+                            uncertain_error = getattr(lifecycle, "uncertain_action_error", None)
+                            if uncertain_error is not None:
+                                raise uncertain_error(step, exc) from exc
                         status_code = getattr(getattr(exc, "response", None), "status_code", None)
-                        retryable = isinstance(exc, (TimeoutError, ConnectionError, httpx.TimeoutException, httpx.TransportError)) or status_code in {429, 500, 502, 503, 504}
-                        terminal_retry = safe_retry and retryable and attempt < 2
-                        receipts[step_id] = {**base_receipt,
-                                             "status": "FAILED" if terminal_retry else "UNKNOWN",
-                                             "completed_at": time.time(),
-                                             "error_details": type(exc).__name__}
-                        await persist_snapshot(step_id)
+                        retryable = not critical and (isinstance(exc, (TimeoutError, ConnectionError, httpx.TimeoutException, httpx.TransportError)) or status_code in {429, 500, 502, 503, 504})
                         if not safe_retry or not retryable or attempt == 2:
                             raise
-                        TASKS.append_event(task_id, "agent_retry", {
+                        task_store.append_event(task_id, "agent_retry", {
                             "step_id": step["id"], "agent_id": step["agent_id"],
                             "attempt": attempt + 1, "error_type": type(exc).__name__,
                             "message": str(exc)[:300],
                         })
                         await asyncio.sleep(0.5 * (2 ** attempt))
-            dispatched = await asyncio.gather(*(dispatch_with_retry(step) for step in ready), return_exceptions=True)
-            if ownership_guard is not None:
-                await ownership_guard()
+            if lifecycle is None:
+                dispatched = await asyncio.gather(*(dispatch_with_retry(step) for step in ready), return_exceptions=True)
+            else:
+                # Drive JSON records lack atomic create/CAS; serialize leased work
+                # so this task never races its own receipts/checkpoint generations.
+                dispatched = []
+                for step in ready:
+                    try:
+                        dispatched.append(await dispatch_with_retry(step))
+                    except BaseException as exc:
+                        dispatched.append(exc)
             for step, outcome in zip(ready, dispatched):
                 if isinstance(outcome, BaseException):
-                    TASKS.append_event(task_id, "agent_failed", {
+                    task_store.append_event(task_id, "agent_failed", {
                         "step_id": step["id"], "agent_id": step["agent_id"],
                         "error_type": type(outcome).__name__, "message": str(outcome)[:500],
                     })
@@ -408,46 +371,47 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                 pending.pop(step["id"], None)
                 completed[step["id"]] = outcome
                 results.append({"step_id": step["id"], **outcome})
-                TASKS.append_event(task_id, "agent_result", {
+                task_store.append_event(task_id, "agent_result", {
                     "step_id": step["id"], "agent_id": step["agent_id"],
                     "status": outcome.get("status"), "verified": outcome.get("verified", False),
                 })
-            await persist_snapshot()
-            control_state = TASKS.get(task_id)["state"]
+                task_store.save_result(task_id, {"status": "RUNNING", "summary": plan["summary"],
+                    "results": results, "approved_step_ids": sorted(approved), "verified": False})
+                if lifecycle is not None:
+                    lifecycle.save_checkpoint(plan=plan["steps"], completed=completed,
+                        pending=pending, results=results, task_state=task_store.get(task_id))
+            control_state = task_store.get(task_id)["state"]
             if control_state in {"PAUSE_REQUESTED", "PAUSED", "CANCEL_REQUESTED", "CANCELLED"}:
-                final_control_state = "CANCELLED" if control_state in {"CANCEL_REQUESTED", "CANCELLED"} else "PAUSED"
+                final_control_state = "CANCELLED" if control_state == "CANCELLED" else "PAUSED"
                 report = {"task_id": task_id, "summary": plan["summary"], "status": final_control_state,
                           "results": results, "approved_step_ids": sorted(approved), "verified": False}
-                TASKS.save_result(task_id, report)
+                task_store.save_result(task_id, report)
                 if control_state == "PAUSE_REQUESTED":
-                    TASKS.transition(task_id, "PAUSED", "pause_checkpoint_reached")
+                    task_store.transition(task_id, "PAUSED", "pause_checkpoint_reached")
                 elif control_state == "CANCEL_REQUESTED":
-                    TASKS.transition(task_id, "CANCELLED", "cancel_checkpoint_acknowledged")
-                await persist_snapshot(task_status=final_control_state)
+                    task_store.transition(task_id, "CANCELLED", "cancel_checkpoint_reached")
+                    report["status"] = "CANCELLED"
+                    report["cancellation_confirmed"] = True
+                    task_store.save_result(task_id, report)
                 return json.dumps(report, ensure_ascii=False)
-            TASKS.save_result(task_id, {"status": "RUNNING", "summary": plan["summary"],
+            task_store.save_result(task_id, {"status": "RUNNING", "summary": plan["summary"],
                                         "results": results, "approved_step_ids": sorted(approved),
                                         "verified": False})
         if not results:
             raise CapabilityUnavailableError("Manager plan contained no executable specialist.")
-        TASKS.transition(task_id, "VERIFYING", "independent_result_check_started")
+        task_store.transition(task_id, "VERIFYING", "independent_result_check_started")
         verified = all(item.get("verified") is True for item in results)
         report = {"summary": plan["summary"], "results": results, "verified": verified,
                   "verification": "Available execution checks passed." if verified else "PARTIALLY_VERIFIED: generated text is not proof of execution."}
-        TASKS.save_result(task_id, report)
-        TASKS.transition(task_id, "COMPLETED" if verified else "WAITING_FOR_USER",
+        task_store.save_result(task_id, report)
+        task_store.transition(task_id, "COMPLETED" if verified else "WAITING_FOR_USER",
                          "verification_passed" if verified else "verification_incomplete", {"verified": verified})
-        await persist_snapshot(task_status="COMPLETED" if verified else "WAITING_FOR_USER")
         return json.dumps(report, ensure_ascii=False)
     except Exception as exc:
         try:
-            state = TASKS.get(task_id)["state"]
+            state = task_store.get(task_id)["state"]
             if state not in {"FAILED", "COMPLETED", "CANCELLED"}:
-                TASKS.transition(task_id, "FAILED", "execution_failed", {"error_type": type(exc).__name__, "message": str(exc)[:500]})
-        except Exception:
-            pass
-        try:
-            await persist_snapshot(task_status="FAILED")
+                task_store.transition(task_id, "FAILED", "execution_failed", {"error_type": type(exc).__name__, "message": str(exc)[:500]})
         except Exception:
             pass
         raise

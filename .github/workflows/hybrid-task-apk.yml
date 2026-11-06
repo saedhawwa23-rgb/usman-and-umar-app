@@ -87,7 +87,6 @@ jobs:
 
       - name: Run unit tests (time-bounded)
         id: tests
-        continue-on-error: true
         timeout-minutes: 15
         run: ./gradlew testDebugUnitTest --stacktrace
 

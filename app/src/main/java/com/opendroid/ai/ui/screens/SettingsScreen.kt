@@ -235,7 +235,7 @@ fun SettingsScreen(
                 Card(modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = CardBackground)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
                         Text("OPENSWARM CLOUD SERVERS", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
-                        Text("Room-backed cluster profiles. Auto mode probes /health concurrently, picks the lowest-latency HTTP 200 server, then fails over in ranked order.", color = TextSecondary, fontSize = 12.sp)
+                        Text("Room-backed cluster profiles. Auto mode probes /health concurrently and routes only to the fastest server reporting full readiness, then fails over in ranked order.", color = TextSecondary, fontSize = 12.sp)
                         Spacer(Modifier.height(8.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Button(onClick = viewModel::pingAllCloudServers, enabled = !pingingCloudServers && cloudServers.isNotEmpty()) {
@@ -302,7 +302,8 @@ fun SettingsScreen(
                                 Text(
                                     when {
                                         health == null -> "Not checked"
-                                        health.online -> "Online · ${health.latencyMs} ms"
+                                        health.online -> "Ready · ${health.latencyMs} ms"
+                                        health.httpCode == 200 -> "Not schedulable${health.backendStatus?.let { " · $it" }.orEmpty()}"
                                         else -> "Offline${health.httpCode?.let { " · HTTP $it" }.orEmpty()}"
                                     },
                                     color = TextSecondary,
@@ -325,6 +326,33 @@ fun SettingsScreen(
                         }
                         AnimatedVisibility(visible = expanded) {
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                if (health != null) {
+                                    Text(
+                                        "Backend: ${health.backendStatus ?: "unknown"} · ${if (health.online) "eligible" else "not eligible"}",
+                                        color = if (health.online) Color(0xFF35C759) else Color(0xFFE5A23B),
+                                        fontSize = 11.sp,
+                                    )
+                                    Text(
+                                        "Server ID: ${health.reportedServerId ?: "not reported"} · Instance: ${health.instanceId ?: "not reported"}",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                    )
+                                    Text(
+                                        "Tasks: ${health.activeTasks?.toString() ?: "unknown"} active · Uptime: ${health.uptimeSeconds?.let { "${it}s" } ?: "unknown"}",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                    )
+                                    Text(
+                                        "Readiness: accepting=${health.acceptingNewTasks?.toString() ?: "missing"}, draining=${health.draining?.toString() ?: "missing"}, Drive=${health.driveReady?.toString() ?: "missing"}, checkpoint=${health.checkpointStorageReady?.toString() ?: "missing"}, lease=${health.leaseCoordinatorReady?.toString() ?: "missing"}",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                    )
+                                    Text(
+                                        "Recovery: ${health.recoveryState ?: "not reported"}${health.recoveryReason?.let { " · $it" }.orEmpty()}",
+                                        color = if (health.recoveryReason.isNullOrBlank()) TextSecondary else Color(0xFFE5A23B),
+                                        fontSize = 11.sp,
+                                    )
+                                }
                                 OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Server name") })
                                 OutlinedTextField(value = url, onValueChange = { url = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("HTTPS backend URL") })
                                 OutlinedTextField(value = token, onValueChange = { token = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("Bearer token") })

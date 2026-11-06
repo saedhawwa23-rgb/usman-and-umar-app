@@ -10,18 +10,18 @@ from contextlib import contextmanager
 from typing import Any
 
 TASK_STATES = {"PENDING", "PLANNING", "READY", "RUNNING", "VERIFYING", "COMPLETED",
-               "WAITING_FOR_USER", "PAUSE_REQUESTED", "PAUSED", "FAILED", "CANCEL_REQUESTED", "CANCELLED", "RETRYING"}
+               "WAITING_FOR_USER", "PAUSE_REQUESTED", "PAUSED", "CANCEL_REQUESTED", "FAILED", "CANCELLED", "RETRYING"}
 _ALLOWED = {
-    "PENDING": {"PLANNING", "CANCEL_REQUESTED", "CANCELLED"},
-    "PLANNING": {"READY", "WAITING_FOR_USER", "FAILED", "CANCEL_REQUESTED", "CANCELLED"},
-    "READY": {"RUNNING", "WAITING_FOR_USER", "CANCEL_REQUESTED", "CANCELLED"},
+    "PENDING": {"PLANNING", "CANCELLED"},
+    "PLANNING": {"READY", "WAITING_FOR_USER", "FAILED", "CANCELLED"},
+    "READY": {"RUNNING", "WAITING_FOR_USER", "CANCELLED"},
     "RUNNING": {"VERIFYING", "WAITING_FOR_USER", "PAUSE_REQUESTED", "CANCEL_REQUESTED", "RETRYING", "FAILED", "CANCELLED"},
-    "PAUSE_REQUESTED": {"PAUSED", "CANCEL_REQUESTED", "CANCELLED"},
-    "VERIFYING": {"COMPLETED", "RETRYING", "FAILED", "WAITING_FOR_USER", "CANCEL_REQUESTED"},
-    "WAITING_FOR_USER": {"READY", "RUNNING", "CANCEL_REQUESTED", "CANCELLED", "FAILED"},
-    "PAUSED": {"READY", "RUNNING", "CANCEL_REQUESTED", "CANCELLED"},
-    "RETRYING": {"READY", "RUNNING", "FAILED", "CANCEL_REQUESTED", "CANCELLED"},
-    "CANCEL_REQUESTED": {"CANCELLED", "FAILED"},
+    "PAUSE_REQUESTED": {"PAUSED", "CANCELLED"},
+    "CANCEL_REQUESTED": {"CANCELLED"},
+    "VERIFYING": {"COMPLETED", "RETRYING", "FAILED", "WAITING_FOR_USER"},
+    "WAITING_FOR_USER": {"READY", "RUNNING", "CANCELLED", "FAILED"},
+    "PAUSED": {"READY", "RUNNING", "CANCELLED"},
+    "RETRYING": {"READY", "RUNNING", "FAILED", "CANCELLED"},
     "FAILED": {"RETRYING"},
     "COMPLETED": set(),
     "CANCELLED": set(),
@@ -132,45 +132,6 @@ class TaskStateStore:
             db.execute("INSERT INTO task_events(task_id,event,detail_json,created_at) VALUES(?,?,?,?)",
                        (task_id, "result_saved", json.dumps({"verified": result.get("verified", False)}), now))
 
-    def restore_from_checkpoint(self, checkpoint: dict[str, Any]) -> dict[str, Any]:
-        """Rebuild a local projection from a validated durable snapshot only.
-
-        Interrupted RUNNING tasks are restored as PAUSED, never auto-resumed.
-        Callers must reject EXECUTING/UNKNOWN side-effect receipts before use.
-        """
-        task_id = checkpoint.get("task_id")
-        prompt = checkpoint.get("original_prompt")
-        graph = checkpoint.get("graph_state") or {}
-        inner = graph.get("graph_state") or {}
-        plan = inner.get("plan") or []
-        results = inner.get("results") or []
-        if not isinstance(task_id, str) or not task_id or not isinstance(prompt, str):
-            raise ValueError("Checkpoint task identity or original prompt is invalid")
-        if not isinstance(plan, list) or not isinstance(results, list):
-            raise ValueError("Checkpoint plan/results are invalid")
-        saved_status = str(checkpoint.get("task_status", "RUNNING")).upper()
-        state = saved_status if saved_status in {"PAUSED", "WAITING_FOR_USER"} else "PAUSED"
-        now = time.time()
-        approved = graph.get("approved_step_ids", [])
-        result = {"status": state, "summary": inner.get("summary", "Recovered from durable checkpoint"),
-                  "results": results, "approved_step_ids": approved, "verified": False,
-                  "execution_receipts": checkpoint.get("execution_receipts", [])}
-        with self._lock, self._db() as db:
-            exists = db.execute("SELECT 1 FROM tasks WHERE task_id=?", (task_id,)).fetchone()
-            if exists:
-                raise ValueError("Task already exists in this runtime; restore was not applied")
-            db.execute(
-                "INSERT INTO tasks(task_id,prompt,state,plan_json,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-                (task_id, prompt, state, json.dumps(plan), json.dumps(result), now, now),
-            )
-            db.execute(
-                "INSERT INTO task_events(task_id,event,to_state,detail_json,created_at) VALUES(?,?,?,?,?)",
-                (task_id, "task_restored_from_drive_checkpoint", state,
-                 json.dumps({"checkpoint_version": checkpoint.get("checkpoint_version"),
-                             "checkpoint_sha256": checkpoint.get("_verified_sha256", "")}), now),
-            )
-        return self.get(task_id)
-
 
     def memory_get(self, key: str) -> dict[str, Any] | None:
         normalized = str(key or "").strip()
@@ -220,14 +181,3 @@ class TaskStateStore:
         with self._lock, self._connect() as db:
             rows = db.execute("SELECT * FROM task_events WHERE task_id=? ORDER BY id", (task_id,)).fetchall()
         return [{**dict(row), "detail": json.loads(row["detail_json"])} for row in rows]
-
-    def active_tasks(self) -> list[str]:
-        """Return this process/runtime's non-terminal SQLite task IDs only."""
-        terminal = ("COMPLETED", "FAILED", "CANCELLED")
-        placeholders = ",".join("?" for _ in terminal)
-        with self._lock, self._connect() as db:
-            rows = db.execute(
-                f"SELECT task_id FROM tasks WHERE state NOT IN ({placeholders}) ORDER BY created_at",
-                terminal,
-            ).fetchall()
-        return [row["task_id"] for row in rows]

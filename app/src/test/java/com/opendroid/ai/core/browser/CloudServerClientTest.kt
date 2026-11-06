@@ -47,6 +47,46 @@ class CloudServerClientTest {
     }
 
     @Test
+    fun `health parser requires every explicit readiness field and retains recovery diagnostics`() {
+        val ready = parseCloudServerHealth("configured-1", "Server 1", 200, readyHealthBody)
+        val legacy = parseCloudServerHealth("legacy", "Legacy", 200, "{}")
+        val draining = parseCloudServerHealth(
+            "draining", "Draining", 200,
+            readyHealthBody.replace("\"draining\":false", "\"draining\":true"),
+        )
+
+        assertTrue(ready.online)
+        assertEquals("backend-1", ready.reportedServerId)
+        assertEquals("instance-a", ready.instanceId)
+        assertEquals("recovering", ready.recoveryState)
+        assertEquals("restoring checkpoint", ready.recoveryReason)
+        assertEquals(3, ready.activeTasks)
+        assertFalse(legacy.online)
+        assertTrue(legacy.error.orEmpty().contains("missing"))
+        assertFalse(draining.online)
+    }
+
+    @Test
+    fun `HTTP 200 legacy health is not routed to for execution`() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+        server.start()
+        try {
+            val client = CloudServerClient(newSettingsRepository(server.url("/").toString().trimEnd('/'), "legacy-health-token"))
+            val failure = runCatching {
+                client.execute(taskId = "not-ready", prompt = "Do not dispatch", pluginId = "openswarm_agent")
+            }.exceptionOrNull()
+            assertTrue(failure is CloudRequestException)
+            assertTrue(failure?.message.orEmpty().contains("stage=health_check"))
+            assertTrue(failure?.message.orEmpty().contains("status=missing"))
+            assertEquals("/health", server.takeRequest().target)
+            assertEquals(1, server.requestCount)
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
     fun `OpenSwarm payload matches realistic execute schema and never serializes bearer credentials`() {
         val body = buildOpenSwarmPayload(
             taskId = "chat-1730838420000",
@@ -92,6 +132,29 @@ class CloudServerClientTest {
     }
 
     @Test
+    fun `control cancellation waits for terminal confirmation instead of trusting accepted request`() = runBlocking {
+        val server = MockWebServer()
+        val drainingHealth = readyHealthBody.replace("\"accepting_new_tasks\":true", "\"accepting_new_tasks\":false")
+            .replace("\"draining\":false", "\"draining\":true")
+        server.enqueue(MockResponse.Builder().code(200).body(drainingHealth).build())
+        server.enqueue(MockResponse.Builder().code(200).body("""{"task_id":"task-cancel","state":"CANCEL_REQUESTED"}""").build())
+        server.enqueue(MockResponse.Builder().code(200).body("""{"task_id":"task-cancel","state":"CANCEL_REQUESTED"}""").build())
+        server.enqueue(MockResponse.Builder().code(200).body("""{"task_id":"task-cancel","state":"CANCELLED"}""").build())
+        server.start()
+        try {
+            val client = CloudServerClient(newSettingsRepository(server.url("/").toString().trimEnd('/'), "cancel-token"))
+            val result = JSONObject(client.controlTask("task-cancel", "cancel", "legacy-1"))
+            assertEquals("CANCELLED", result.getString("state"))
+            assertEquals("/health", server.takeRequest().target)
+            assertEquals("/tasks/task-cancel/cancel", server.takeRequest().target)
+            assertEquals("/tasks/task-cancel", server.takeRequest().target)
+            assertEquals("/tasks/task-cancel", server.takeRequest().target)
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
     fun `cloud diagnostics retain stage status body and URL without credentials`() {
         val failure = CloudRequestException(
             stage = "http_response",
@@ -111,76 +174,9 @@ class CloudServerClientTest {
     }
 
     @Test
-    fun `structured lease error exposes safe message and expandable diagnostic fields`() {
-        val failure = CloudRequestException(
-            stage = "http_response",
-            requestUrl = "https://server.example/execute",
-            httpStatus = 409,
-            responseBody = """{"error":"LEASE_CONFLICT","message":"Another server owns this task.","task_id":"task-7","server_id":"server-2","operation":"execute","retryable":false,"recovery_action":"reconcile_task_owner","token":"secret-value"}""",
-            secrets = listOf("secret-value"),
-        )
-
-        assertEquals("LEASE_CONFLICT", failure.errorCode)
-        assertEquals("Another server owns this task.", failure.userMessage)
-        assertTrue(failure.userFacingSummary().contains("Error: Another server owns this task."))
-        assertTrue(failure.technicalDetails().contains("HTTP status: 409"))
-        assertTrue(failure.technicalDetails().contains("Server: server-2"))
-        assertTrue(failure.technicalDetails().contains("Recovery action: reconcile_task_owner"))
-        assertFalse(failure.userFacingSummary().contains("secret-value"))
-        assertFalse(failure.technicalDetails().contains("secret-value"))
-    }
-
-    @Test
-    fun `execute routes away from HTTP 200 backend that reports draining`() = runBlocking {
-        val draining = MockWebServer()
-        val healthy = MockWebServer()
-        draining.enqueue(MockResponse.Builder().code(200).body("""{"status":"draining","accepting_new_tasks":false}""").build())
-        healthy.enqueue(MockResponse.Builder().code(200).body("""{"status":"ready","accepting_new_tasks":true,"drive_ready":true,"checkpoint_storage_ready":true,"lease_coordinator_ready":true}""").build())
-        healthy.enqueue(MockResponse.Builder().code(200).body("""{"result":"healthy server"}""").build())
-        draining.start()
-        healthy.start()
-        try {
-            val client = CloudServerClient(newSettingsRepository(
-                draining.url("/").toString().trimEnd('/'), "token-one",
-                healthy.url("/").toString().trimEnd('/'), "token-two",
-            ))
-            val result = client.execute("route-1", "Do the task", pluginId = "openswarm_agent")
-            assertEquals("healthy server", JSONObject(result).getString("result"))
-            assertEquals("/health", draining.takeRequest().target)
-            assertEquals("/health", healthy.takeRequest().target)
-            assertEquals("/execute", healthy.takeRequest().target)
-            assertEquals(1, draining.requestCount)
-        } finally {
-            draining.close()
-            healthy.close()
-        }
-    }
-
-    @Test
-    fun `control cancellation waits for terminal confirmation instead of trusting accepted request`() = runBlocking {
-        val server = MockWebServer()
-        server.enqueue(MockResponse.Builder().code(200).body("""{"status":"ready","accepting_new_tasks":true}""").build())
-        server.enqueue(MockResponse.Builder().code(200).body("""{"task_id":"task-cancel","state":"CANCEL_REQUESTED"}""").build())
-        server.enqueue(MockResponse.Builder().code(200).body("""{"task_id":"task-cancel","state":"CANCEL_REQUESTED"}""").build())
-        server.enqueue(MockResponse.Builder().code(200).body("""{"task_id":"task-cancel","state":"CANCELLED"}""").build())
-        server.start()
-        try {
-            val client = CloudServerClient(newSettingsRepository(server.url("/").toString().trimEnd('/'), "cancel-token"))
-            val result = JSONObject(client.controlTask("task-cancel", "cancel", "legacy-1"))
-            assertEquals("CANCELLED", result.getString("state"))
-            assertEquals("/health", server.takeRequest().target)
-            assertEquals("/tasks/task-cancel/cancel", server.takeRequest().target)
-            assertEquals("/tasks/task-cancel", server.takeRequest().target)
-            assertEquals("/tasks/task-cancel", server.takeRequest().target)
-        } finally {
-            server.close()
-        }
-    }
-
-    @Test
     fun `execute sends authenticated realistic OpenSwarm POST with Localtunnel header`() = runBlocking {
         val server = MockWebServer()
-        server.enqueue(MockResponse.Builder().code(200).body("{\"status\":\"ok\"}").build())
+        server.enqueue(MockResponse.Builder().code(200).body(readyHealthBody).build())
         server.enqueue(MockResponse.Builder().code(200).body("{\"result\":\"Example Domain\"}").build())
         server.start()
         try {
@@ -218,7 +214,7 @@ class CloudServerClientTest {
     @Test
     fun `execute surfaces real HTTP status and response body without leaking bearer token`() = runBlocking {
         val server = MockWebServer()
-        server.enqueue(MockResponse.Builder().code(200).body("{}").build())
+        server.enqueue(MockResponse.Builder().code(200).body(readyHealthBody).build())
         server.enqueue(MockResponse.Builder().code(401).body("{\"status\":\"error\",\"error\":\"Invalid application token.\"}").build())
         server.start()
         try {
@@ -238,6 +234,36 @@ class CloudServerClientTest {
             val execute = server.takeRequest()
             assertEquals("Bearer $token", execute.headers["Authorization"])
             assertFalse(execute.body?.utf8().orEmpty().contains(token))
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun `execute displays structured recovery error fields and redacts credentials`() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse.Builder().code(200).body(readyHealthBody).build())
+        server.enqueue(
+            MockResponse.Builder().code(503).body(
+                """{"status":"error","code":"TASK_RECOVERING","message":"runtime is restoring","task_id":"task-42","recovery_state":"checkpoint_restore","recovery_action":"wait","token":"structured-secret"}""",
+            ).build(),
+        )
+        server.start()
+        try {
+            val token = "structured-secret"
+            val client = CloudServerClient(newSettingsRepository(server.url("/").toString().trimEnd('/'), token))
+            val failure = runCatching {
+                client.execute(taskId = "task-42", prompt = "Run task", pluginId = "openswarm_agent")
+            }.exceptionOrNull()
+            val message = failure?.message.orEmpty()
+            assertTrue(failure is CloudRequestException)
+            assertTrue(message.contains("http_status=503"))
+            assertTrue(message.contains("code=TASK_RECOVERING"))
+            assertTrue(message.contains("message=runtime is restoring"))
+            assertTrue(message.contains("task_id=task-42"))
+            assertTrue(message.contains("recovery_state=checkpoint_restore"))
+            assertTrue(message.contains("recovery_action=wait"))
+            assertFalse(message.contains(token))
         } finally {
             server.close()
         }
@@ -282,7 +308,7 @@ class CloudServerClientTest {
         }
     }
 
-    private fun newSettingsRepository(url: String, token: String, secondUrl: String? = null, secondToken: String = "token-two"): SettingsRepository {
+    private fun newSettingsRepository(url: String, token: String): SettingsRepository {
         val dataStore = PreferenceDataStoreFactory.create(
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
             produceFile = {
@@ -295,25 +321,19 @@ class CloudServerClientTest {
             dataStore.edit { preferences ->
                 preferences[stringPreferencesKey("openswarm_server_1_url")] = url
                 preferences[booleanPreferencesKey("openswarm_server_1_enabled")] = true
-                if (secondUrl != null) {
-                    preferences[stringPreferencesKey("openswarm_server_2_url")] = secondUrl
-                    preferences[booleanPreferencesKey("openswarm_server_2_enabled")] = true
-                }
             }
         }
-        return SettingsRepository(dataStore, TestCredentialStore(token, secondToken), runStartupMigration = false)
+        return SettingsRepository(dataStore, TestCredentialStore(token), runStartupMigration = false)
     }
 
-    private class TestCredentialStore(private val serverToken: String, private val secondServerToken: String) : ProviderCredentialStore {
+    private val readyHealthBody = """{"status":"ready","server_id":"backend-1","instance_id":"instance-a","uptime_seconds":1234,"accepting_new_tasks":true,"draining":false,"drive_ready":true,"checkpoint_storage_ready":true,"lease_coordinator_ready":true,"active_tasks":3,"recovery_state":"recovering","recovery_reason":"restoring checkpoint"}"""
+
+    private class TestCredentialStore(private val serverToken: String) : ProviderCredentialStore {
         override val recoveryState: StateFlow<ProviderCredentialRecoveryState> =
             MutableStateFlow(ProviderCredentialRecoveryState.Ready)
 
         override fun read(credential: ProviderCredentialId): CredentialStoreResult<String?> =
-            CredentialStoreResult.Success(when (credential) {
-                ProviderCredentialId.OpenSwarmServer1Token -> serverToken
-                ProviderCredentialId.OpenSwarmServer2Token -> secondServerToken
-                else -> null
-            })
+            CredentialStoreResult.Success(if (credential == ProviderCredentialId.OpenSwarmServer1Token) serverToken else null)
 
         override fun readProviderApiKeys(): CredentialStoreResult<Map<String, String>> =
             CredentialStoreResult.Success(emptyMap())

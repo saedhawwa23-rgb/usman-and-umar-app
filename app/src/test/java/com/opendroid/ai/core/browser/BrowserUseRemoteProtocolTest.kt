@@ -84,6 +84,23 @@ class BrowserUseRemoteProtocolTest {
         assertTrue(!error.contains("completed"))
     }
 
+    @Test
+    fun structuredBackendErrorDisplaysRecoveryFieldsAndHttpStatusWithoutCredentials() {
+        val body = """{"status":"error","error":{"code":"TASK_RECOVERING","message":"Please wait","task_id":"task-9","recovery_state":"restoring","recovery_action":"retry_later","token":"secret-value"}}"""
+        val parsed = BrowserUseRemoteProtocol.parseBackendError(503, body)
+        val message = BrowserUseRemoteProtocol.httpError(503, body, secrets = listOf("secret-value"))
+
+        assertEquals("TASK_RECOVERING", parsed?.code)
+        assertEquals("task-9", parsed?.taskId)
+        assertEquals(503, parsed?.httpStatus)
+        assertTrue(message.contains("HTTP 503"))
+        assertTrue(message.contains("TASK_RECOVERING"))
+        assertTrue(message.contains("Please wait"))
+        assertTrue(message.contains("recovery_state=restoring"))
+        assertTrue(message.contains("recovery_action=retry_later"))
+        assertTrue(!message.contains("secret-value"))
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun blankPromptIsRejectedBeforeNetworkRequest() {
         BrowserUseRemoteProtocol.buildRequestJson("task", "   ", useFmhy = true)

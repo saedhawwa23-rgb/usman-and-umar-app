@@ -2,6 +2,7 @@ import base64
 import os
 import tempfile
 import subprocess
+import time
 import unittest
 from unittest.mock import AsyncMock, patch
 import json
@@ -13,6 +14,8 @@ import openswarm_agent
 import tool_registry
 import httpx
 from tool_registry import _DuckDuckGoResultParser
+from drive_task_lease import DriveTaskLeaseCoordinator, TaskLease
+from drive_task_runtime import DriveTaskRuntime
 
 
 class AgentRegistryTests(unittest.TestCase):
@@ -307,6 +310,120 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
 
 class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
 
+    async def test_mocked_drive_lifecycle_receipts_and_confirmed_checkpoint(self):
+        class Request:
+            def __init__(self, value):
+                self.value = value
+            def execute(self):
+                return self.value
+        class Files:
+            def __init__(self, service):
+                self.service = service
+            def get(self, **_kwargs):
+                return Request({"id": "folder", "name": "USMAN_UMAR_CHECKPOINTS",
+                                "mimeType": "application/vnd.google-apps.folder", "trashed": False})
+            def list(self, **_kwargs):
+                return Request({"files": []})
+            def create(self, body, media_body=None, **_kwargs):
+                file_id = f"probe-{len(self.service.contents) + 1}"
+                self.service.contents[file_id] = media_body._fd.getvalue() if media_body else b""
+                return Request({"id": file_id, **body})
+            def get_media(self, fileId):
+                return Request(self.service.contents[fileId])
+            def delete(self, fileId):
+                self.service.contents.pop(fileId, None)
+                return Request({})
+        class Service:
+            def __init__(self):
+                self.contents = {}
+            def files(self):
+                return Files(self)
+        class Coordinator:
+            heartbeat_seconds = 3600
+            def __init__(self, service, _folder, server, instance):
+                self.service, self.folder_id, self.server, self.instance = service, _folder, server, instance
+                self.receipts, self.writes, self.checkpoints = {}, [], []
+            def acquire(self, task_id):
+                now = time.time()
+                self.lease = TaskLease(task_id, self.server, self.instance, 1, now + 3600,
+                    "ACTIVE", "lease-file", now, now, now)
+                return self.lease
+            def assert_owner(self, lease):
+                if lease.owner_instance_id != self.instance:
+                    raise RuntimeError("stale owner")
+            def renew(self, lease):
+                return lease
+            def idempotency_key(self, task_id, step, action):
+                return DriveTaskLeaseCoordinator.idempotency_key(task_id, step, action)
+            def list_receipts(self, _task_id):
+                return list(self.receipts.values())
+            def write_receipt(self, task_id, step, action, state, *, details=None):
+                key = self.idempotency_key(task_id, step, action)
+                self.writes.append(state)
+                doc = {"task_id": task_id, "step_name": step, "logical_action_id": action,
+                       "idempotency_key": key, "state": state, "details": details or {}}
+                self.receipts[key] = doc
+                return doc
+            def load_checkpoint(self, *_args, **_kwargs):
+                return self.checkpoints[-1]
+            def save_checkpoint(self, task_id, payload, *, owner, checkpoint_version):
+                doc = {"task_id": task_id, "checkpoint_id": "cp-1",
+                       "checkpoint_version": checkpoint_version, "payload": payload}
+                self.checkpoints.append(doc)
+                return doc
+
+        coordinator_holder = {}
+        def coordinator_factory(*args):
+            coordinator_holder["coordinator"] = Coordinator(*args)
+            return coordinator_holder["coordinator"]
+        runtime = DriveTaskRuntime(service_factory=Service, coordinator_factory=coordinator_factory,
+                                   folder_id="folder", server_id="test-server", instance_id="test-instance")
+        with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-token"}):
+            health = runtime.health(0)
+        self.assertEqual(health["status"], "ready")
+        self.assertTrue(health["drive_ready"])
+        self.assertTrue(health["checkpoint_storage_ready"])
+        self.assertTrue(health["lease_coordinator_ready"])
+        self.assertTrue(health["accepting_new_tasks"])
+        # TaskStateStore opens a fresh SQLite connection per operation; use a
+        # file-backed temporary DB because plain :memory: is connection-local.
+        store = TaskStateStore(tempfile.mktemp(suffix="-openswarm-drive-test.sqlite3"))
+        plan = {"summary": "Write one reviewed artifact", "steps": [{
+            "id": "write-artifact", "agent_id": "files", "objective": "Write an artifact",
+            "depends_on": [], "requires_approval": False, "capability_id": "files.write",
+            "tool_input": {"path": "artifact.txt", "content": "hello"},
+        }]}
+        capabilities = CapabilityRegistry()
+        executions = []
+        async def write(_payload):
+            executions.append("called")
+            return {"verified": True, "path": "artifact.txt"}
+        capabilities.register(Capability("files.write", "Write artifact", "workspace", risk="high", configured=True), write)
+        session = await runtime.acquire("mocked-drive-task").start()
+        with patch.object(openswarm_agent, "TASKS", store), \
+             patch.object(openswarm_agent, "CAPABILITIES", capabilities), \
+             patch.object(openswarm_agent, "_manager_plan", return_value=plan):
+            pending = json.loads(await openswarm_agent.run_openswarm_task(
+                task_id="mocked-drive-task", prompt="Write an artifact", plugin_id=None,
+                allowed_domains=[], max_steps=3, lifecycle=session))
+            self.assertEqual(pending["status"], "WAITING_FOR_USER")
+            report = json.loads(await openswarm_agent.run_openswarm_task(
+                task_id="mocked-drive-task", prompt="Write an artifact", plugin_id=None,
+                allowed_domains=[], max_steps=3, approved_step_ids=["write-artifact"], lifecycle=session))
+        await session.close()
+        coordinator = coordinator_holder["coordinator"]
+        self.assertTrue(report["verified"])
+        self.assertEqual(executions, ["called"])
+        self.assertEqual(coordinator.writes, ["PREPARED", "EXECUTING", "CONFIRMED"])
+        self.assertEqual(len(coordinator.checkpoints), 1)
+        payload = coordinator.checkpoints[0]["payload"]
+        self.assertIn("plan", payload)
+        self.assertIn("completed_steps", payload)
+        self.assertIn("pending_steps", payload)
+        self.assertIn("results", payload)
+        self.assertIn("task_state", payload)
+        self.assertEqual(payload["lease_generation"], 1)
+
     async def test_safe_specialist_retries_transient_timeout_and_records_event(self):
         with tempfile.TemporaryDirectory() as directory:
             store = TaskStateStore(os.path.join(directory, "retry.sqlite"))
@@ -375,7 +492,7 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
                  "depends_on": ["research-1"], "requires_approval": False},
             ]}
             async def cancel_after_research(agent_id, objective, state):
-                store.transition("cancel-task", "CANCELLED", "test_cancel_requested")
+                store.transition("cancel-task", "CANCEL_REQUESTED", "test_cancel_requested")
                 return {"agent_id": agent_id, "status": "EXECUTED", "verified": True, "output": "sources"}
             executor = AsyncMock(side_effect=cancel_after_research)
             with patch.object(openswarm_agent, "TASKS", store), \
