@@ -130,6 +130,8 @@ internal class CloudRequestException(
     responseBody: String? = null,
     cause: Throwable? = null,
     secrets: List<String> = emptyList(),
+    val errorCode: String? = null,
+    private val backendMessage: String? = null,
 ) : IOException(
     buildString {
         append("stage=").append(safeDiagnosticValue(stage))
@@ -139,7 +141,16 @@ internal class CloudRequestException(
         append(" response_body=").append(sanitizeCloudDiagnostic(responseBody.orEmpty(), secrets).ifBlank { "<empty>" })
     },
     cause,
-)
+) {
+    fun technicalDetails(): String = message.orEmpty()
+
+    fun userFacingSummary(): String = backendMessage?.takeIf { it.isNotBlank() } ?: when (httpStatus) {
+        401, 403 -> "The cloud server rejected the configured credentials."
+        409 -> "The cloud task could not safely continue because its state or ownership conflicted."
+        503 -> "The cloud backend is unavailable, recovering, or not accepting new tasks."
+        else -> "The cloud task request failed${httpStatus?.let { " (HTTP $it)" }.orEmpty()}."
+    }
+}
 
 internal fun sanitizeCloudDiagnostic(value: String, secrets: List<String> = emptyList()): String {
     var safe = value
@@ -215,6 +226,7 @@ class CloudServerClient @Inject constructor(
         imageBase64: String? = null,
         approvedStepIds: List<String> = emptyList(),
         onLog: (String) -> Unit = {},
+        onDispatch: (String) -> Unit = {},
     ): String = withContext(Dispatchers.IO) {
         val configured = settingsRepository.cloudServers.first()
         val candidates = configured.filter { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
@@ -283,6 +295,7 @@ class CloudServerClient @Inject constructor(
             val requestUrl = "$baseUrl/execute"
             val safeUrl = safeDiagnosticUrl(requestUrl)
             try {
+                onDispatch(server.id)
                 val request = Request.Builder()
                     .url(requestUrl)
                     .header("Authorization", "Bearer ${server.token}")
@@ -298,6 +311,9 @@ class CloudServerClient @Inject constructor(
                         }.getOrDefault(responseBody)
                         return@withContext enriched
                     }
+                    val backendError = BrowserUseRemoteProtocol.parseBackendError(
+                        response.code, responseBody, listOf(server.token),
+                    )
                     // A server response may follow partial task execution. Never replay a
                     // task on another node merely because this node returned 5xx.
                     throw CloudRequestException(
@@ -306,6 +322,8 @@ class CloudServerClient @Inject constructor(
                         httpStatus = response.code,
                         responseBody = BrowserUseRemoteProtocol.httpError(response.code, responseBody, listOf(server.token)),
                         secrets = listOf(server.token),
+                        errorCode = backendError?.code,
+                        backendMessage = backendError?.message,
                     )
                 }
             } catch (failure: CloudRequestException) {

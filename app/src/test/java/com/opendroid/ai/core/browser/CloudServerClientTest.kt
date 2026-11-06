@@ -162,9 +162,14 @@ class CloudServerClientTest {
             httpStatus = 502,
             responseBody = "{\"error\":\"bad gateway\",\"token\":\"do-not-log\"}",
             secrets = listOf("do-not-log"),
+            errorCode = "EXECUTION_OUTCOME_UNKNOWN",
+            backendMessage = "Task outcome requires reconciliation.",
         )
 
         val message = failure.message.orEmpty()
+        assertEquals("EXECUTION_OUTCOME_UNKNOWN", failure.errorCode)
+        assertEquals("Task outcome requires reconciliation.", failure.userFacingSummary())
+        assertTrue(failure.technicalDetails().contains("stage=http_response"))
         assertTrue(message.contains("stage=http_response"))
         assertTrue(message.contains("exception_class=CloudRequestException"))
         assertTrue(message.contains("request_url=https://tunnel.example/execute"))
