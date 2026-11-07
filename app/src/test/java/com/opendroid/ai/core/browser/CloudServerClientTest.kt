@@ -104,7 +104,7 @@ class CloudServerClientTest {
             }.exceptionOrNull()
             assertTrue(failure is CloudRequestException)
             assertTrue(failure?.message.orEmpty().contains("stage=health_check"))
-            assertTrue(failure?.message.orEmpty().contains("status=missing"))
+            assertTrue(failure?.message.orEmpty().contains("accepting_new_tasks=missing"))
             assertEquals("/health", server.takeRequest().target)
             assertEquals(1, server.requestCount)
         } finally {
