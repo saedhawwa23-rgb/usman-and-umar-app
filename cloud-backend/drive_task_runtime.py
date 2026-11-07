@@ -21,7 +21,8 @@ from drive_task_lease import (
 )
 
 DEFAULT_FOLDER_NAME = "USMAN_UMAR_CHECKPOINTS"
-DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+CLOUD_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 
 
 class DriveRuntimeError(RuntimeError):
@@ -31,14 +32,24 @@ class DriveRuntimeError(RuntimeError):
         self.recovery_state = recovery_state
 
 
-def _build_drive_service() -> Any:
-    """Build Drive API v3 from ADC (works with Colab auth or configured ADC)."""
+def build_service_account_drive_client() -> Any:
+    """Build Drive API v3 using the configured Service Account JSON key."""
     try:
-        import google.auth
+        from google.auth.transport.requests import Request
+        from google.oauth2 import service_account
         from googleapiclient.discovery import build
     except ImportError as exc:
         raise LeaseUnavailable("Google Drive client libraries are not installed") from exc
-    credentials, _ = google.auth.default(scopes=[DRIVE_SCOPE])
+    key_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+    if not key_path or not os.path.isfile(key_path):
+        raise LeaseUnavailable("GOOGLE_APPLICATION_CREDENTIALS must point to the Service Account JSON key")
+    try:
+        credentials = service_account.Credentials.from_service_account_file(
+            key_path, scopes=[DRIVE_SCOPE, CLOUD_SCOPE]
+        )
+        credentials.refresh(Request())
+    except Exception as exc:
+        raise LeaseUnavailable("Service Account credentials could not be loaded or refreshed") from exc
     return build("drive", "v3", credentials=credentials, cache_discovery=False)
 
 
@@ -213,8 +224,8 @@ class DriveTaskExecutionSession:
 
 
 class DriveTaskRuntime:
-    """Lazy ADC-backed coordinator plus process identity and injectable clients."""
-    def __init__(self, *, service_factory: Any = _build_drive_service,
+    """Lazy Service Account-backed Drive coordinator plus process identity and injectable clients."""
+    def __init__(self, *, service_factory: Any = build_service_account_drive_client,
                  coordinator_factory: Any = DriveTaskLeaseCoordinator,
                  folder_id: str | None = None, server_id: str | None = None,
                  instance_id: str | None = None, clock: Any = time.time):

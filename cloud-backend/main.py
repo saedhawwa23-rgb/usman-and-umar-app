@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from agent_registry import build_default_registry
 from task_state import TaskStateStore
 from tool_registry import build_default_capability_registry
-from drive_task_runtime import DriveRuntimeError, DriveTaskRuntime
+from drive_task_runtime import DriveRuntimeError, DriveTaskRuntime, build_service_account_drive_client
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="USMAN AND UMAR OpenSwarm Task Backend", version="3.0.0")
@@ -36,7 +36,7 @@ _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _BLOCKED_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".test", ".invalid")
 _BLOCKED_HOSTS = {"localhost", "metadata.google.internal", "metadata"}
 AI_PACKAGES_WAITING_MESSAGE = "Playwright dependencies are still downloading. Please wait."
-_drive_runtime = DriveTaskRuntime()
+_drive_runtime = DriveTaskRuntime(service_factory=build_service_account_drive_client)
 _active_count = 0
 _active_lock = threading.Lock()
 
