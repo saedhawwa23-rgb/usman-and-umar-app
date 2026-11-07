@@ -61,7 +61,7 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
             class RuntimeStub:
                 def assert_task_owner(self, _task_id):
                     return None
-            with patch.object(main, "_task_store", store), patch.object(main, "_drive_runtime", RuntimeStub()), patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            with patch.object(main, "_task_store", store), patch.object(main, "_task_runtime", RuntimeStub()), patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
                 headers = {"Authorization": "Bearer test-secret"}
                 paused = await self.client.post("/tasks/pause-api/pause", headers=headers)
                 store.transition("pause-api", "PAUSED", "test_checkpoint_reached")
@@ -97,7 +97,7 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
                 def acquire(self, _task_id):
                     return Session()
             with patch.object(main, "_task_store", store), \
-                 patch.object(main, "_drive_runtime", RuntimeStub()), \
+                 patch.object(main, "_task_runtime", RuntimeStub()), \
                  patch.object(openswarm_agent, "run_openswarm_task", new=AsyncMock(return_value='{"status":"COMPLETED"}')), \
                  patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
                 response = await self.client.post(
@@ -106,17 +106,17 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["result"], '{"status":"COMPLETED"}')
 
-    async def test_execute_fails_closed_when_drive_readiness_is_false(self):
+    async def test_execute_fails_closed_when_redis_readiness_is_false(self):
         class RuntimeStub:
             def health(self, _active):
-                return {"ready": False, "drive_ready": False, "auth_ready": True,
+                return {"ready": False, "redis_ready": False, "auth_ready": True,
                         "checkpoints_ready": False, "recovery_state": "RECOVERY_BLOCKED",
                         "draining": False, "server_id": "test", "instance_id": "test"}
-        with patch.object(main, "_drive_runtime", RuntimeStub()), \
+        with patch.object(main, "_task_runtime", RuntimeStub()), \
              patch.object(main, "run_openswarm_task", new=AsyncMock()) as runner, \
              patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
             response = await self.client.post("/execute", headers={"Authorization": "Bearer test-secret"}, json={
-                "task_id": "drive-gated", "prompt": "Research this", "plugin_id": "openswarm_agent"})
+                "task_id": "redis-gated", "prompt": "Research this", "plugin_id": "openswarm_agent"})
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["error_code"], "BACKEND_NOT_READY")
         runner.assert_not_awaited()
@@ -125,12 +125,12 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
         class DrainingRuntime:
             def health(self, _active):
                 return {"status": "ready", "ready": True, "auth_ready": True,
-                    "drive_ready": True, "checkpoints_ready": True,
+                    "redis_ready": True, "checkpoints_ready": True,
                     "checkpoint_storage_ready": True, "lease_coordinator_ready": True,
                     "lease_ready": True, "accepting_new_tasks": False, "draining": True,
                     "server_id": "server-a", "instance_id": "instance-a",
                     "recovery_state": "LEASE_ACTIVE"}
-        with patch.object(main, "_drive_runtime", DrainingRuntime()), \
+        with patch.object(main, "_task_runtime", DrainingRuntime()), \
              patch.object(main, "run_playwright_task", new=AsyncMock()) as runner, \
              patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
             response = await self.client.post("/execute",

@@ -6,11 +6,11 @@ import httpx
 from typing import Any
 from agent_registry import build_default_registry
 from model_provider import NVIDIA_DEFAULT_MODEL, select_provider
-from task_state import TaskStateStore
+from redis_task_storage import build_task_state_store
 from tool_registry import build_default_capability_registry
 
 AGENTS = build_default_registry()
-TASKS = TaskStateStore()
+TASKS = build_task_state_store()
 CAPABILITIES = build_default_capability_registry(TASKS)
 
 class CapabilityUnavailableError(RuntimeError):
@@ -351,8 +351,8 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
             if lifecycle is None:
                 dispatched = await asyncio.gather(*(dispatch_with_retry(step) for step in ready), return_exceptions=True)
             else:
-                # Drive JSON records lack atomic create/CAS; serialize leased work
-                # so this task never races its own receipts/checkpoint generations.
+                # Keep each task's checkpoint and receipt sequence ordered. Redis
+                # GET/SET still cannot serialize writers across separate runtimes.
                 dispatched = []
                 for step in ready:
                     try:

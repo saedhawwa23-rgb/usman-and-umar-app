@@ -19,9 +19,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from agent_registry import build_default_registry
-from task_state import TaskStateStore
 from tool_registry import build_default_capability_registry
-from drive_task_runtime import DriveRuntimeError, DriveTaskRuntime, build_service_account_drive_client
+from redis_task_storage import RedisTaskRuntime, RedisStorageError, RedisLeaseConflict, build_task_state_store
 from pydantic import BaseModel, Field
 
 app = FastAPI(title="USMAN AND UMAR OpenSwarm Task Backend", version="3.0.0")
@@ -36,7 +35,7 @@ _URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _BLOCKED_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".test", ".invalid")
 _BLOCKED_HOSTS = {"localhost", "metadata.google.internal", "metadata"}
 AI_PACKAGES_WAITING_MESSAGE = "Playwright dependencies are still downloading. Please wait."
-_drive_runtime = DriveTaskRuntime(service_factory=build_service_account_drive_client)
+_task_runtime = RedisTaskRuntime()
 _active_count = 0
 _active_lock = threading.Lock()
 
@@ -76,7 +75,7 @@ async def trace_request_validation_failure(request: Request, exc: RequestValidat
 run_openswarm_task: Any = None
 run_playwright_task: Any = None
 _agent_registry = build_default_registry()
-_task_store = TaskStateStore()
+_task_store = build_task_state_store()
 _capability_registry = build_default_capability_registry(_task_store)
 
 
@@ -132,14 +131,14 @@ def _error_response(status_code: int, message: str, error_code: str | None = Non
     if error_code:
         content["error_code"] = error_code
         content.setdefault("recovery_action", {
-            "BACKEND_NOT_READY": "Restore Drive, checkpoint storage, and backend authentication readiness before retrying.",
+            "BACKEND_NOT_READY": "Restore Upstash Redis and backend authentication readiness before retrying.",
             "SERVER_DRAINING": "Submit new work to another server reporting accepting_new_tasks=true.",
-            "DRIVE_UNAVAILABLE": "Restore Drive connectivity and inspect persisted task state before retrying.",
-            "LEASE_CONFLICT": "Do not retry side effects; inspect duplicate/conflicting lease records and reconcile ownership.",
-            "STALE_OWNER": "Stop execution on this instance and inspect the latest lease generation.",
+            "REDIS_UNAVAILABLE": "Restore Upstash Redis connectivity before retrying.",
+            "LEASE_CONFLICT": "Do not retry side effects; inspect the Redis lease and reconcile task ownership.",
+            "STALE_OWNER": "Stop execution on this instance and inspect the latest Redis lease generation.",
             "RECOVERY_BLOCKED": "Reconcile the cited receipts/checkpoint manually before resuming.",
-            "CHECKPOINT_INVALID": "Preserve Drive records and inspect checkpoint schema/checksum before recovery.",
-            "CHECKPOINT_CONFLICT": "Preserve both records and inspect lease/checkpoint generations before retrying.",
+            "CHECKPOINT_INVALID": "Preserve Redis task data and inspect checkpoint state before recovery.",
+            "CHECKPOINT_CONFLICT": "Preserve Redis task data and inspect lease/checkpoint generations before retrying.",
         }.get(error_code, "Inspect the structured error details and task state before retrying."))
     content.update(fields)
     return JSONResponse(status_code=status_code, content=content)
@@ -271,10 +270,10 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
     session = None
     counted_active = False
     try:
-        health_state = _drive_runtime.health(_active_count)
+        health_state = _task_runtime.health(_active_count)
         if not health_state["ready"]:
             return _error_response(503, "Mandatory backend readiness checks failed; task execution is disabled.",
-                "BACKEND_NOT_READY", task_id=request.task_id, ready=False, drive_ready=health_state["drive_ready"],
+                "BACKEND_NOT_READY", task_id=request.task_id, ready=False, redis_ready=health_state["redis_ready"],
                 auth_ready=health_state["auth_ready"], checkpoints_ready=health_state["checkpoints_ready"],
                 recovery_state=health_state["recovery_state"])
         if health_state["draining"]:
@@ -284,7 +283,7 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
         _load_ai_execution_functions(openswarm_requested)
         async with _execution_semaphore:
             if openswarm_requested:
-                session = await _drive_runtime.acquire(request.task_id).start()
+                session = await _task_runtime.acquire(request.task_id).start()
             with _active_lock:
                 _active_count += 1
                 counted_active = True
@@ -310,13 +309,13 @@ async def _execute_impl(request: ExecuteRequest, http_request: Request, authoriz
                     action="click" if link_text else "scrape",
                     link_text=link_text,
                 ), timeout=_EXECUTION_TIMEOUT_SECONDS)
-    except DriveRuntimeError as exc:
-        logger.warning("execute_status task_id=%s execution_status=blocked error_code=%s", task_id, exc.code)
-        status = 409 if exc.code in {"LEASE_CONFLICT", "STALE_OWNER", "RECOVERY_BLOCKED", "CHECKPOINT_CONFLICT"} else 503
-        return _error_response(status, _safe_exception_detail(exc), exc.code,
-            task_id=request.task_id,
-            drive_ready=exc.code not in {"DRIVE_UNAVAILABLE", "LEASE_UNAVAILABLE", "CHECKPOINT_UNAVAILABLE"},
-            recovery_state=exc.recovery_state)
+    except RedisStorageError as exc:
+        logger.warning("execute_status task_id=%s execution_status=blocked error_code=%s", task_id, "LEASE_CONFLICT" if isinstance(exc, RedisLeaseConflict) else "REDIS_UNAVAILABLE")
+        code = "LEASE_CONFLICT" if isinstance(exc, RedisLeaseConflict) else "REDIS_UNAVAILABLE"
+        status = 409 if isinstance(exc, RedisLeaseConflict) else 503
+        return _error_response(status, _safe_exception_detail(exc), code,
+            task_id=request.task_id, redis_ready=code != "REDIS_UNAVAILABLE",
+            recovery_state="RECOVERY_BLOCKED" if isinstance(exc, RedisLeaseConflict) else None)
     except asyncio.TimeoutError:
         logger.exception("Agent execution timed out for task_id=%s", request.task_id)
         logger.error("execute_status task_id=%s execution_status=failed status=504 stage=execution", task_id)
@@ -354,7 +353,7 @@ def root() -> dict[str, str]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return _drive_runtime.health(_active_count)
+    return _task_runtime.health(_active_count)
 
 @app.get("/agents")
 def agents(authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any]:
@@ -404,20 +403,21 @@ def get_task_logs(task_id: str, authorization: str | None = Header(default=None,
 def pause_task(task_id: str, authorization: str | None = Header(default=None, alias="Authorization")) -> dict[str, Any] | JSONResponse:
     _require_bearer_token(authorization)
     try:
-        _drive_runtime.assert_task_owner(task_id)
+        _task_runtime.assert_task_owner(task_id)
         task = _task_store.get(task_id)
         if task["state"] in {"PAUSE_REQUESTED", "PAUSED"}:
             return task
         if task["state"] != "RUNNING":
             raise HTTPException(status_code=409, detail=f"Only a RUNNING task can be paused; current state is {task['state']}.")
         result = _task_store.transition(task_id, "PAUSE_REQUESTED", "user_requested_pause")
-        _drive_runtime.assert_task_owner(task_id)
+        _task_runtime.assert_task_owner(task_id)
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except DriveRuntimeError as exc:
-        return _error_response(409 if exc.code == "STALE_OWNER" else 503, str(exc), exc.code,
-                               drive_ready=exc.code != "DRIVE_UNAVAILABLE")
+    except RedisStorageError as exc:
+        code = "LEASE_CONFLICT" if isinstance(exc, RedisLeaseConflict) else "REDIS_UNAVAILABLE"
+        return _error_response(409 if isinstance(exc, RedisLeaseConflict) else 503, str(exc), code,
+                               redis_ready=code != "REDIS_UNAVAILABLE")
 
 
 @app.post("/tasks/{task_id}/cancel", response_model=None)
@@ -426,7 +426,7 @@ def cancel_task(task_id: str, authorization: str | None = Header(default=None, a
     cancellable = {"PENDING", "PLANNING", "READY", "RUNNING", "VERIFYING",
                    "WAITING_FOR_USER", "PAUSE_REQUESTED", "PAUSED", "RETRYING", "CANCEL_REQUESTED"}
     try:
-        _drive_runtime.assert_task_owner(task_id)
+        _task_runtime.assert_task_owner(task_id)
         task = _task_store.get(task_id)
         if task["state"] == "CANCEL_REQUESTED":
             return {"status": "CANCEL_REQUESTED", "state": "CANCEL_REQUESTED",
@@ -435,17 +435,18 @@ def cancel_task(task_id: str, authorization: str | None = Header(default=None, a
             raise HTTPException(status_code=409, detail=f"Task cannot be cancelled from {task['state']}.")
         if task["state"] == "RUNNING":
             requested = _task_store.transition(task_id, "CANCEL_REQUESTED", "user_requested_cancel")
-            _drive_runtime.assert_task_owner(task_id)
+            _task_runtime.assert_task_owner(task_id)
             return {"status": "CANCEL_REQUESTED", "state": "CANCEL_REQUESTED",
                     "cancellation_confirmed": False, "task": requested}
         result = _task_store.transition(task_id, "CANCELLED", "user_requested_cancel")
-        _drive_runtime.assert_task_owner(task_id)
+        _task_runtime.assert_task_owner(task_id)
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except DriveRuntimeError as exc:
-        return _error_response(409 if exc.code == "STALE_OWNER" else 503, str(exc), exc.code,
-                               drive_ready=exc.code != "DRIVE_UNAVAILABLE")
+    except RedisStorageError as exc:
+        code = "LEASE_CONFLICT" if isinstance(exc, RedisLeaseConflict) else "REDIS_UNAVAILABLE"
+        return _error_response(409 if isinstance(exc, RedisLeaseConflict) else 503, str(exc), code,
+                               redis_ready=code != "REDIS_UNAVAILABLE")
 
 
 @app.post("/tasks/{task_id}/resume", response_model=None)
@@ -453,16 +454,15 @@ async def resume_task(task_id: str, authorization: str | None = Header(default=N
     _require_bearer_token(authorization)
     session = None
     try:
-        session = await _drive_runtime.acquire(task_id).start()
+        session = await _task_runtime.acquire(task_id).start()
         try:
             task = _task_store.get(task_id)
         except KeyError:
             checkpoint_doc = getattr(session, "recovered_checkpoint", None)
-            if not checkpoint_doc and session.lease.checkpoint_id and session.lease.checkpoint_version:
-                checkpoint_doc = session.coordinator.load_checkpoint(task_id, session.lease.checkpoint_id,
-                    session.lease.checkpoint_version)
             if not checkpoint_doc:
-                raise HTTPException(status_code=404, detail="No validated Drive checkpoint exists for this task.")
+                checkpoint_doc = _task_runtime.recover_checkpoint(task_id)
+            if not checkpoint_doc:
+                raise HTTPException(status_code=404, detail="No Redis checkpoint exists for this task.")
             payload = checkpoint_doc.get("payload") or {}
             guarded_store = session.guarded_store(_task_store)
             saved = ((payload.get("task_state") or {}).get("result") or {})
@@ -495,10 +495,12 @@ async def resume_task(task_id: str, authorization: str | None = Header(default=N
         raise HTTPException(status_code=504, detail="Task resume exceeded the server execution timeout.") from exc
     except HTTPException:
         raise
-    except DriveRuntimeError as exc:
-        status_code = 409 if exc.code in {"LEASE_CONFLICT", "STALE_OWNER", "RECOVERY_BLOCKED"} else 503
-        return _error_response(status_code, str(exc), exc.code, recovery_state=exc.recovery_state,
-                               drive_ready=exc.code != "DRIVE_UNAVAILABLE")
+    except RedisStorageError as exc:
+        conflict = isinstance(exc, RedisLeaseConflict)
+        return _error_response(409 if conflict else 503, str(exc),
+                               "LEASE_CONFLICT" if conflict else "REDIS_UNAVAILABLE",
+                               recovery_state="RECOVERY_BLOCKED" if conflict else None,
+                               redis_ready=not conflict)
     except Exception as exc:
         logger.exception("Task resume failed for task_id=%s", task_id)
         raise HTTPException(status_code=500, detail=_safe_exception_detail(exc)) from exc

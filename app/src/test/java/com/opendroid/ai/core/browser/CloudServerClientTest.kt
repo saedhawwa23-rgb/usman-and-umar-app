@@ -331,7 +331,7 @@ class CloudServerClientTest {
         return SettingsRepository(dataStore, TestCredentialStore(token), runStartupMigration = false)
     }
 
-    private val readyHealthBody = """{"status":"ready","server_id":"backend-1","instance_id":"instance-a","uptime_seconds":1234,"accepting_new_tasks":true,"draining":false,"drive_ready":true,"checkpoint_storage_ready":true,"lease_coordinator_ready":true,"active_tasks":3,"recovery_state":"recovering","recovery_reason":"restoring checkpoint"}"""
+    private val readyHealthBody = """{"status":"ready","server_id":"backend-1","instance_id":"instance-a","uptime_seconds":1234,"accepting_new_tasks":true,"draining":false,"redis_ready":true,"checkpoint_storage_ready":true,"lease_coordinator_ready":true,"active_tasks":3,"recovery_state":"recovering","recovery_reason":"restoring checkpoint"}"""
 
     private class TestCredentialStore(private val serverToken: String) : ProviderCredentialStore {
         override val recoveryState: StateFlow<ProviderCredentialRecoveryState> =

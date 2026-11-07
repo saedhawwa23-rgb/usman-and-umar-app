@@ -40,7 +40,7 @@ data class CloudServerHealth(
     val uptimeSeconds: Long? = null,
     val acceptingNewTasks: Boolean? = null,
     val draining: Boolean? = null,
-    val driveReady: Boolean? = null,
+    val redisReady: Boolean? = null,
     val checkpointStorageReady: Boolean? = null,
     val leaseCoordinatorReady: Boolean? = null,
     val activeTasks: Int? = null,
@@ -69,19 +69,19 @@ internal fun parseCloudServerHealth(
     val instanceId = text("instance_id")
     val accepting = bool("accepting_new_tasks")
     val draining = bool("draining")
-    val driveReady = bool("drive_ready")
+    val redisReady = bool("redis_ready")
     val checkpointReady = bool("checkpoint_storage_ready")
     val leaseReady = bool("lease_coordinator_ready")
     val recoveryState = text("recovery_state")
     val recoveryReason = text("recovery_reason")
     val ready = httpCode == 200 && backendStatus == "ready" && accepting == true && draining == false &&
-        driveReady == true && checkpointReady == true && leaseReady == true
+        redisReady == true && checkpointReady == true && leaseReady == true
     val readinessIssues = buildList {
         if (httpCode != 200) add("HTTP $httpCode")
         if (backendStatus != "ready") add("status=${backendStatus ?: "missing"}")
         if (accepting != true) add("accepting_new_tasks=${accepting ?: "missing"}")
         if (draining != false) add("draining=${draining ?: "missing"}")
-        if (driveReady != true) add("drive_ready=${driveReady ?: "missing"}")
+        if (redisReady != true) add("redis_ready=${redisReady ?: "missing"}")
         if (checkpointReady != true) add("checkpoint_storage_ready=${checkpointReady ?: "missing"}")
         if (leaseReady != true) add("lease_coordinator_ready=${leaseReady ?: "missing"}")
     }
@@ -100,7 +100,7 @@ internal fun parseCloudServerHealth(
         uptimeSeconds = long("uptime_seconds"),
         acceptingNewTasks = accepting,
         draining = draining,
-        driveReady = driveReady,
+        redisReady = redisReady,
         checkpointStorageReady = checkpointReady,
         leaseCoordinatorReady = leaseReady,
         activeTasks = int("active_tasks"),

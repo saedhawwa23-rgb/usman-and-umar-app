@@ -25,13 +25,13 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
             instance_id = "test-instance"
             def health(self, active_count):
                 return {"status": "ready", "ready": True, "auth_ready": True,
-                    "drive_ready": True, "checkpoints_ready": True,
+                    "redis_ready": True, "checkpoints_ready": True,
                     "checkpoint_storage_ready": True, "lease_coordinator_ready": True,
                     "lease_ready": True, "accepting_new_tasks": True, "draining": False,
                     "recovery_state": "LEASE_ACTIVE", "server_id": self.server_id,
                     "instance_id": self.instance_id, "active_count": active_count}
             def acquire(self, _task_id): return Session()
-        self.runtime_patch = patch("main._drive_runtime", ReadyRuntime())
+        self.runtime_patch = patch("main._task_runtime", ReadyRuntime())
         self.runtime_patch.start()
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
@@ -46,10 +46,10 @@ class DirectBrowserExecutionTests(unittest.IsolatedAsyncioTestCase):
         class NotReadyRuntime:
             def health(self, _active):
                 return {"status": "not_ready", "ready": False, "auth_ready": False,
-                    "drive_ready": False, "checkpoint_storage_ready": False,
+                    "redis_ready": False, "checkpoint_storage_ready": False,
                     "lease_coordinator_ready": False, "accepting_new_tasks": False,
                     "draining": False, "recovery_state": "RECOVERY_BLOCKED"}
-        with patch.object(main, "_drive_runtime", NotReadyRuntime()):
+        with patch.object(main, "_task_runtime", NotReadyRuntime()):
             root = await self.client.get("/")
             health = await self.client.get("/health")
         self.assertEqual(root.status_code, 200)
