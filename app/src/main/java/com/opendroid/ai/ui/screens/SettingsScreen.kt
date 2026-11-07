@@ -343,7 +343,7 @@ fun SettingsScreen(
                                         fontSize = 11.sp,
                                     )
                                     Text(
-                                        "Readiness: accepting=${health.acceptingNewTasks?.toString() ?: "missing"}, draining=${health.draining?.toString() ?: "missing"}, Redis=${health.redisReady?.toString() ?: "missing"}, checkpoint=${health.checkpointStorageReady?.toString() ?: "missing"}, lease=${health.leaseCoordinatorReady?.toString() ?: "missing"}",
+                                        "Readiness: accepting=${health.acceptingNewTasks?.toString() ?: "missing"}, draining=${health.draining?.toString() ?: "missing"}, checkpoint=${health.checkpointReady?.toString() ?: "missing"}, lease=${health.leaseReady?.toString() ?: "missing"}",
                                         color = TextSecondary,
                                         fontSize = 11.sp,
                                     )

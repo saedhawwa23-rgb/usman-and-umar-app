@@ -26,7 +26,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Result of a live `/health` probe. Only explicit full backend readiness is eligible for work. */
+/** Result of a live `/health` probe. Eligibility follows accepting, drain, checkpoint, and lease flags. */
 data class CloudServerHealth(
     val serverId: String,
     val serverName: String,
@@ -40,9 +40,8 @@ data class CloudServerHealth(
     val uptimeSeconds: Long? = null,
     val acceptingNewTasks: Boolean? = null,
     val draining: Boolean? = null,
-    val redisReady: Boolean? = null,
-    val checkpointStorageReady: Boolean? = null,
-    val leaseCoordinatorReady: Boolean? = null,
+    val checkpointReady: Boolean? = null,
+    val leaseReady: Boolean? = null,
     val activeTasks: Int? = null,
     val recoveryState: String? = null,
     val recoveryReason: String? = null,
@@ -69,21 +68,19 @@ internal fun parseCloudServerHealth(
     val instanceId = text("instance_id")
     val accepting = bool("accepting_new_tasks")
     val draining = bool("draining")
-    val redisReady = bool("redis_ready")
-    val checkpointReady = bool("checkpoint_storage_ready")
-    val leaseReady = bool("lease_coordinator_ready")
+    // Prefer the current API names while accepting the earlier Redis backend aliases.
+    val checkpointReady = bool("checkpoint_ready") ?: bool("checkpoint_storage_ready")
+    val leaseReady = bool("lease_ready") ?: bool("lease_coordinator_ready")
     val recoveryState = text("recovery_state")
     val recoveryReason = text("recovery_reason")
-    val ready = httpCode == 200 && backendStatus == "ready" && accepting == true && draining == false &&
-        redisReady == true && checkpointReady == true && leaseReady == true
+    val ready = httpCode == 200 && accepting == true && draining == false &&
+        checkpointReady == true && leaseReady == true
     val readinessIssues = buildList {
         if (httpCode != 200) add("HTTP $httpCode")
-        if (backendStatus != "ready") add("status=${backendStatus ?: "missing"}")
         if (accepting != true) add("accepting_new_tasks=${accepting ?: "missing"}")
         if (draining != false) add("draining=${draining ?: "missing"}")
-        if (redisReady != true) add("redis_ready=${redisReady ?: "missing"}")
-        if (checkpointReady != true) add("checkpoint_storage_ready=${checkpointReady ?: "missing"}")
-        if (leaseReady != true) add("lease_coordinator_ready=${leaseReady ?: "missing"}")
+        if (checkpointReady != true) add("checkpoint_ready=${checkpointReady ?: "missing"}")
+        if (leaseReady != true) add("lease_ready=${leaseReady ?: "missing"}")
     }
     val reportedError = text("error")
     val reason = recoveryReason ?: reportedError ?: readinessIssues.joinToString(", ").takeIf { it.isNotEmpty() }
@@ -100,9 +97,8 @@ internal fun parseCloudServerHealth(
         uptimeSeconds = long("uptime_seconds"),
         acceptingNewTasks = accepting,
         draining = draining,
-        redisReady = redisReady,
-        checkpointStorageReady = checkpointReady,
-        leaseCoordinatorReady = leaseReady,
+        checkpointReady = checkpointReady,
+        leaseReady = leaseReady,
         activeTasks = int("active_tasks"),
         recoveryState = recoveryState,
         recoveryReason = reason,

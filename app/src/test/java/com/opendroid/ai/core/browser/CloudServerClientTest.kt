@@ -67,6 +67,32 @@ class CloudServerClientTest {
     }
 
     @Test
+    fun `redis health is eligible using the four readiness flags without drive or redis flags`() {
+        val health = parseCloudServerHealth(
+            "redis-node", "Redis node", 200,
+            """{"accepting_new_tasks":true,"draining":false,"checkpoint_ready":true,"lease_ready":true}""",
+        )
+
+        assertTrue(health.online)
+        assertEquals(true, health.checkpointReady)
+        assertEquals(true, health.leaseReady)
+        assertEquals(null, health.error)
+    }
+
+    @Test
+    fun `redis health eligibility rejects each missing or false required readiness flag`() {
+        val healthy = """{"accepting_new_tasks":true,"draining":false,"checkpoint_ready":true,"lease_ready":true}"""
+        val notAccepting = healthy.replace("\"accepting_new_tasks\":true", "\"accepting_new_tasks\":false")
+        val draining = healthy.replace("\"draining\":false", "\"draining\":true")
+        val missingCheckpoint = healthy.replace("\"checkpoint_ready\":true,", "")
+        val missingLease = healthy.replace(",\"lease_ready\":true", "")
+
+        listOf(notAccepting, draining, missingCheckpoint, missingLease).forEach { body ->
+            assertFalse(parseCloudServerHealth("redis-node", "Redis node", 200, body).online)
+        }
+    }
+
+    @Test
     fun `HTTP 200 legacy health is not routed to for execution`() = runBlocking {
         val server = MockWebServer()
         server.enqueue(MockResponse.Builder().code(200).body("{}").build())
