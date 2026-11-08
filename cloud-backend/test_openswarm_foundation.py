@@ -417,6 +417,35 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
             handoffs = [event for event in store.events("manager-splice") if event["event"] == "agent_handoff"]
             self.assertEqual([event["detail"]["to_agent"] for event in handoffs], ["browser"])
 
+    async def test_manager_only_plan_with_requested_url_hands_off_to_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(os.path.join(directory, "manager-url.sqlite"))
+            plan = {"summary": "Inspect the requested website", "steps": [{
+                "id": "manager-only", "agent_id": "manager", "objective": "Plan the handoff",
+                "depends_on": [], "requires_approval": False,
+            }]}
+            capabilities = CapabilityRegistry()
+            browser_calls = []
+
+            async def extract(payload):
+                browser_calls.append(payload)
+                return {"text": "Example Domain", "verified": True}
+
+            capabilities.register(Capability("browser.extract", "Extract public page", "cloud", configured=True), extract)
+            with patch.object(openswarm_agent, "TASKS", store), \
+                 patch.object(openswarm_agent, "CAPABILITIES", capabilities), \
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan):
+                report = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="manager-url-handoff", prompt="Go to https://example.com and summarize it",
+                    plugin_id="openswarm_agent", allowed_domains=["example.com"], max_steps=5,
+                ))
+
+            self.assertEqual(report["status"], "COMPLETED")
+            self.assertTrue(report["verified"])
+            self.assertEqual([result["agent_id"] for result in report["results"]], ["browser"])
+            self.assertEqual(browser_calls, [{"url": "https://example.com", "allowed_domains": ["example.com"]}])
+            self.assertNotEqual(report["status"], "CONTROL_ONLY")
+
     async def test_control_only_plan_without_executable_specialist_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             store = TaskStateStore(os.path.join(directory, "no-tool.sqlite"))

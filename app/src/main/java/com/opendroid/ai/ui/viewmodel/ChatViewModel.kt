@@ -57,6 +57,10 @@ import org.json.JSONObject
 
 enum class ChatTarget { API_MODEL, CLOUD_OPENSWARM }
 
+/** OpenSwarm is an execution backend, so selecting its plugin must bypass local/API planning. */
+internal fun resolveChatTarget(target: ChatTarget, pluginIds: List<String>): ChatTarget =
+    if ("openswarm_agent" in pluginIds) ChatTarget.CLOUD_OPENSWARM else target
+
 data class CloudTaskUiState(
     val taskId: String,
     val sessionId: String,
@@ -248,10 +252,11 @@ class ChatViewModel @Inject constructor(
 
     fun sendMessage(query: String, context: Context, imageBase64: String? = null, target: ChatTarget = ChatTarget.API_MODEL, pluginIds: List<String> = emptyList(), thinkHarder: Boolean = false) {
         if (query.isBlank()) return
+        val effectiveTarget = resolveChatTarget(target, pluginIds)
         val sessionId = pinTaskSessionSnapshot()
         val fingerprint = listOf(
             sessionId.orEmpty(),
-            target.name,
+            effectiveTarget.name,
             query,
             imageBase64?.hashCode()?.toString().orEmpty(),
             pluginIds.distinct().sorted().joinToString(","),
@@ -265,7 +270,7 @@ class ChatViewModel @Inject constructor(
         lastOutgoingTimestamp = messageTimestamp
 
         val messageId = UUID.randomUUID().toString()
-        val taskId = if (target == ChatTarget.CLOUD_OPENSWARM) "chat-${UUID.randomUUID()}" else null
+        val taskId = if (effectiveTarget == ChatTarget.CLOUD_OPENSWARM) "chat-${UUID.randomUUID()}" else null
         val metadata = JSONObject()
             .put("plugins", JSONArray(pluginIds.distinct()))
             .put("think_harder", thinkHarder)
@@ -277,14 +282,14 @@ class ChatViewModel @Inject constructor(
             timestamp = messageTimestamp,
             imageBase64 = imageBase64,
             deliveryState = ChatDeliveryState.QUEUED,
-            deliveryTarget = target.name,
+            deliveryTarget = effectiveTarget.name,
             deliveryTaskId = taskId,
             deliveryMetadata = metadata,
             deliveryRetryable = false,
         )
         optimisticOutgoing.value = optimisticOutgoing.value + PendingOutgoing(sessionId, queued)
-        if (target == ChatTarget.CLOUD_OPENSWARM) {
-            // Explicit cloud selection always stays on the cloud path; AutoMode never redirects it.
+        if (effectiveTarget == ChatTarget.CLOUD_OPENSWARM) {
+            // OpenSwarm execution always stays on the cloud path; AutoMode never redirects it.
             android.util.Log.i("CloudOpenSwarm", "dispatch_route=cloud_openswarm manual_mode_does_not_redirect=true")
         }
 
@@ -300,7 +305,7 @@ class ChatViewModel @Inject constructor(
                 sendQueueMutex.withLock {
                     conversationRepository.updateMessageDelivery(messageId, ChatDeliveryState.SENDING)
                     val sending = queued.copy(deliveryState = ChatDeliveryState.SENDING)
-                    if (target == ChatTarget.CLOUD_OPENSWARM) {
+                    if (effectiveTarget == ChatTarget.CLOUD_OPENSWARM) {
                         val pinnedTaskId = requireNotNull(taskId)
                         _cloudTaskState.value = CloudTaskUiState(pinnedTaskId, pinnedSession, "RUNNING")
                         runCloudOpenSwarm(sending, pinnedSession, pluginIds, thinkHarder, imageBase64)
@@ -383,7 +388,7 @@ class ChatViewModel @Inject constructor(
             val body = cloudServerClient.execute(
                 taskId = taskId,
                 prompt = userMessage.text,
-                pluginId = pluginIds.firstOrNull() ?: "openswarm_agent",
+                pluginId = if ("openswarm_agent" in pluginIds) "openswarm_agent" else pluginIds.firstOrNull() ?: "openswarm_agent",
                 pluginIds = pluginIds.ifEmpty { listOf("openswarm_agent") },
                 thinkHarder = thinkHarder,
                 imageBase64 = imageBase64,

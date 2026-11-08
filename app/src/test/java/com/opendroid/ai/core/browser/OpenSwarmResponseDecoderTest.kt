@@ -29,6 +29,19 @@ class OpenSwarmResponseDecoderTest {
     }
 
     @Test
+    fun `unverified plan JSON becomes friendly progress instead of raw chat text`() {
+        val response = OpenSwarmResponseDecoder.decode(
+            """{"summary":"Open example.com","plan":[{"agent_id":"browser","objective":"Scrape page"}],"verified":false}""",
+        )
+
+        assertEquals(
+            OpenSwarmResponse.InProgress("Manager Agent is planning the task...", "UNVERIFIED"),
+            response,
+        )
+        assertFalse(response.toString().contains("objective"))
+    }
+
+    @Test
     fun `unverified report is progress even when it contains apparent output`() {
         val response = OpenSwarmResponseDecoder.decode(
             """{"status":"RUNNING","verified":false,"output":"not a final answer"}""",
