@@ -56,7 +56,13 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import android.content.Context
+import android.content.ClipboardManager
+import android.content.Intent
+import android.net.Uri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -94,6 +100,34 @@ fun SettingsScreen(
     val pingingCloudServers by viewModel.pingingCloudServers.collectAsState()
     val cloudKeepAliveEnabled by viewModel.cloudKeepAliveEnabled.collectAsState()
     var expandedCloudServerIds by remember { mutableStateOf(emptySet<String>()) }
+    var newServerName by remember { mutableStateOf("") }
+    var newServerUrl by remember { mutableStateOf("") }
+    var newServerToken by remember { mutableStateOf("") }
+    var showColabWizard by remember { mutableStateOf(false) }
+    var colabWizardStep by remember { mutableIntStateOf(0) }
+    var detectedColabUrl by remember { mutableStateOf<String?>(null) }
+    var tokenPromptUrl by remember { mutableStateOf<String?>(null) }
+    var detectedServerToken by remember { mutableStateOf("") }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
+
+    DisposableEffect(lifecycleOwner, clipboard) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val copiedText = runCatching {
+                    clipboard?.primaryClip?.takeIf { it.itemCount > 0 }
+                        ?.getItemAt(0)?.coerceToText(context)?.toString()
+                }.getOrNull()
+                val candidate = findColabTunnelUrl(copiedText)
+                if (candidate != null && candidate != newServerUrl) {
+                    showColabWizard = false
+                    detectedColabUrl = candidate
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val providers = listOf(
         "Google Gemini",
@@ -367,14 +401,76 @@ fun SettingsScreen(
                 Card(modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = CardBackground)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("ADD CLUSTER SERVER · ${cloudServers.size}/10", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
-                        Text("Add up to ten Colab/OpenSwarm servers. Ping All checks every configured server in parallel.", color = TextSecondary, fontSize = 11.sp)
-                        var newName by remember { mutableStateOf("") }
-                        var newUrl by remember { mutableStateOf("") }
-                        var newToken by remember { mutableStateOf("") }
-                        OutlinedTextField(value = newName, onValueChange = { newName = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server name") })
-                        OutlinedTextField(value = newUrl, onValueChange = { newUrl = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server HTTPS URL") })
-                        OutlinedTextField(value = newToken, onValueChange = { newToken = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("New server token") })
-                        Button(onClick = { viewModel.addCloudServer(newName, newUrl, newToken); newName = ""; newUrl = ""; newToken = "" }, enabled = newUrl.isNotBlank() && cloudServers.size < 10) { Text(if (cloudServers.size < 10) "+ Add Cloud Server" else "Cluster Full") }
+                        Text("Connect a Colab runtime in four short steps. Server tokens stay in secure app storage.", color = TextSecondary, fontSize = 11.sp)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = {
+                                    showColabWizard = true
+                                    colabWizardStep = 0
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(COLAB_NOTEBOOK_URL)))
+                                    }
+                                },
+                                enabled = cloudServers.size < 10,
+                            ) { Text("Launch Colab Notebook") }
+                            OutlinedButton(onClick = { showColabWizard = true; colabWizardStep = 0 }) {
+                                Text("Setup guide")
+                            }
+                        }
+                        if (newServerUrl.isNotBlank()) {
+                            Text("Detected tunnel URL is ready. Enter its APP_CLIENT_TOKEN, then add the server.", color = AccentCyan, fontSize = 11.sp)
+                        }
+                        OutlinedTextField(value = newServerName, onValueChange = { newServerName = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server name") })
+                        OutlinedTextField(value = newServerUrl, onValueChange = { newServerUrl = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server HTTPS URL") })
+                        OutlinedTextField(value = newServerToken, onValueChange = { newServerToken = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("New server APP_CLIENT_TOKEN") })
+                        Button(
+                            onClick = {
+                                viewModel.addCloudServer(newServerName, newServerUrl, newServerToken)
+                                newServerName = ""
+                                newServerUrl = ""
+                                newServerToken = ""
+                            },
+                            enabled = newServerUrl.isNotBlank() && newServerToken.isNotBlank() && cloudServers.size < 10,
+                        ) { Text(if (cloudServers.size < 10) "+ Add Cloud Server" else "Cluster Full") }
+
+                        if (showColabWizard) {
+                            ColabSetupWizardDialog(
+                                step = colabWizardStep,
+                                onStepChange = { colabWizardStep = it },
+                                onDismiss = { showColabWizard = false },
+                                onLaunchNotebook = {
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(COLAB_NOTEBOOK_URL)))
+                                    }
+                                },
+                            )
+                        }
+                        detectedColabUrl?.let { candidate ->
+                            DetectedColabUrlDialog(
+                                url = candidate,
+                                onDismiss = { detectedColabUrl = null },
+                                onAccept = {
+                                    detectedColabUrl = null
+                                    detectedServerToken = ""
+                                    tokenPromptUrl = candidate
+                                },
+                            )
+                        }
+                        tokenPromptUrl?.let { candidate ->
+                            ColabTokenPromptDialog(
+                                url = candidate,
+                                token = detectedServerToken,
+                                onTokenChange = { detectedServerToken = it },
+                                onDismiss = { tokenPromptUrl = null; detectedServerToken = "" },
+                                onContinue = {
+                                    newServerName = newServerName.ifBlank { "Colab OpenSwarm" }
+                                    newServerUrl = candidate
+                                    newServerToken = detectedServerToken
+                                    tokenPromptUrl = null
+                                    detectedServerToken = ""
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -1634,6 +1730,99 @@ fun SettingsScreen(
     }
 
 
+}
+
+@Composable
+private fun ColabSetupWizardDialog(
+    step: Int,
+    onStepChange: (Int) -> Unit,
+    onDismiss: () -> Unit,
+    onLaunchNotebook: () -> Unit,
+) {
+    val titles = listOf(
+        "Open the Colab notebook",
+        "Run the notebook",
+        "Copy the server URL",
+        "Return to this app",
+    )
+    val details = listOf(
+        "The USMAN AND UMAR backend notebook opens in Colab. Sign in to Google if prompted.",
+        "In Colab, choose Runtime → Run all and approve Google’s prompts. Wait for the tunnel URL in Cell 4.",
+        "Copy the complete HTTPS URL printed by Cell 4. The app accepts loca.lt and trycloudflare.com tunnel links.",
+        "Return here. The app checks the clipboard on resume and asks before using a detected tunnel URL. You will enter the APP_CLIENT_TOKEN separately.",
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Connect a Colab server · ${step + 1}/4", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LinearProgressIndicator(
+                    progress = { (step + 1) / 4f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = AccentCyan,
+                )
+                Text(titles[step], color = AccentCyan, fontWeight = FontWeight.SemiBold)
+                Text(details[step], color = TextSecondary)
+                if (step == 0) {
+                    Button(onClick = onLaunchNotebook, modifier = Modifier.fillMaxWidth()) {
+                        Text("Open Colab Notebook")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { if (step == 3) onDismiss() else onStepChange(step + 1) }) {
+                Text(if (step == 3) "Done" else "Next")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { if (step == 0) onDismiss() else onStepChange(step - 1) }) {
+                Text(if (step == 0) "Close" else "Back")
+            }
+        },
+    )
+}
+
+@Composable
+private fun DetectedColabUrlDialog(url: String, onDismiss: () -> Unit, onAccept: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Colab server detected", color = TextPrimary) },
+        text = { Text("Detected Colab Server URL:\n$url\n\nAdd this server?", color = TextSecondary) },
+        confirmButton = { TextButton(onClick = onAccept) { Text("Yes, continue") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } },
+    )
+}
+
+@Composable
+private fun ColabTokenPromptDialog(
+    url: String,
+    token: String,
+    onTokenChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onContinue: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add Colab server token", color = TextPrimary) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("URL: $url", color = AccentCyan)
+                Text("Enter the APP_CLIENT_TOKEN configured in Colab Secrets. It is stored securely and is not read from the clipboard.", color = TextSecondary)
+                OutlinedTextField(
+                    value = token,
+                    onValueChange = onTokenChange,
+                    label = { Text("APP_CLIENT_TOKEN") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onContinue, enabled = token.isNotBlank()) { Text("Use token") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 private fun connectionStatusLabel(state: ConnectionTestState?): String = when (state) {

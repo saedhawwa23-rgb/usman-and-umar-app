@@ -366,7 +366,11 @@ def capabilities(authorization: str | None = Header(default=None, alias="Authori
     _require_bearer_token(authorization)
     model_configured = bool(os.getenv("NVIDIA_API_KEY", "").strip() or os.getenv("OPENROUTER_API_KEY", "").strip())
     tool_readiness = {item["id"]: item["adapter_configured"] for item in _capability_registry.describe()}
-    agent_tools = {"browser": "browser.extract", "research": "research.search", "github": "github.read", "memory": "memory.read", "terminal": "terminal.execute"}
+    agent_tools = {
+        "browser": "browser.extract", "research": "research.search",
+        "github": "github.read", "memory": "memory.read",
+        "terminal": "terminal.execute", "files": "files.list",
+    }
     configured = {"manager", "planner", "coder"} if model_configured else set()
     configured.update(agent_id for agent_id, tool_id in agent_tools.items() if tool_readiness.get(tool_id, False))
     return {"capabilities": [

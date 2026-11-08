@@ -84,6 +84,13 @@ class CapabilityTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("--clearenv", sandbox_argv)
             self.assertFalse(run.call_args.kwargs["shell"])
 
+    async def test_terminal_adapter_is_advertised_when_colab_sandbox_is_enabled(self):
+        command_paths = {"bwrap": "/usr/bin/bwrap", "prlimit": "/usr/bin/prlimit"}
+        with patch.dict(os.environ, {"OPENSWARM_ENABLE_SANDBOX": "1"}), \
+             patch.object(tool_registry.shutil, "which", side_effect=lambda command: command_paths.get(command)):
+            descriptions = {item["id"]: item for item in build_default_capability_registry().describe()}
+        self.assertTrue(descriptions["terminal.execute"]["adapter_configured"])
+
     async def test_high_risk_capability_requires_approval(self):
         registry = CapabilityRegistry()
         async def run(_payload):
@@ -376,13 +383,13 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(browser_calls, [{"url": "https://example.com", "allowed_domains": ["example.com"]}])
             self.assertEqual(report["status"], "COMPLETED")
             self.assertTrue(report["verified"])
-            self.assertEqual(len(report["results"]), 1)
+            self.assertEqual([result["agent_id"] for result in report["results"]], ["browser", "delivery"])
             self.assertEqual(report["results"][0]["agent_id"], "browser")
             self.assertTrue(report["results"][0]["verified"])
             self.assertIn("Page title: Example Domain", report["results"][0]["output"])
             self.assertEqual(store.get("browser-handoff")["state"], "COMPLETED")
             handoffs = [event for event in store.events("browser-handoff") if event["event"] == "agent_handoff"]
-            self.assertEqual([event["detail"]["to_agent"] for event in handoffs], ["browser"])
+            self.assertEqual([event["detail"]["to_agent"] for event in handoffs], ["browser", "delivery"])
 
     async def test_manager_control_node_is_spliced_out_when_browser_step_exists(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -436,15 +443,18 @@ class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
                  patch.object(openswarm_agent, "CAPABILITIES", capabilities), \
                  patch.object(openswarm_agent, "_manager_plan", return_value=plan):
                 report = json.loads(await openswarm_agent.run_openswarm_task(
-                    task_id="manager-url-handoff", prompt="Go to https://example.com and summarize it",
+                task_id="manager-url-handoff", prompt="Go to https://example.com and tell me the title",
                     plugin_id="openswarm_agent", allowed_domains=["example.com"], max_steps=5,
                 ))
 
             self.assertEqual(report["status"], "COMPLETED")
             self.assertTrue(report["verified"])
-            self.assertEqual([result["agent_id"] for result in report["results"]], ["browser"])
+            self.assertEqual([result["agent_id"] for result in report["results"]], ["browser", "delivery"])
+            self.assertEqual(report["results"][0]["output"], "Example Domain")
             self.assertEqual(browser_calls, [{"url": "https://example.com", "allowed_domains": ["example.com"]}])
             self.assertNotEqual(report["status"], "CONTROL_ONLY")
+            handoffs = [event for event in store.events("manager-url-handoff") if event["event"] == "agent_handoff"]
+            self.assertEqual([event["detail"]["to_agent"] for event in handoffs], ["browser", "delivery"])
 
     async def test_control_only_plan_without_executable_specialist_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:

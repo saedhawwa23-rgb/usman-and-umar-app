@@ -98,13 +98,23 @@ def _route_control_only_steps(plan: dict[str, Any], prompt: str) -> dict[str, An
         source = next(iter(managers.values()))
         browser_step = {
             **source,
+            "id": f"{source.get('id', 'manager')}-browser",
             "agent_id": "browser",
             "objective": prompt,
             "depends_on": [],
             "capability_id": None,
             "tool_input": {"url": url},
         }
-        return {**plan, "steps": [browser_step]}
+        delivery_step = {
+            "id": f"{source.get('id', 'manager')}-delivery",
+            "agent_id": "delivery",
+            "objective": "Package the verified browser result for delivery.",
+            "depends_on": [browser_step["id"]],
+            "requires_approval": False,
+            "capability_id": "delivery.package",
+            "tool_input": {},
+        }
+        return {**plan, "steps": [browser_step, delivery_step]}
 
     def expand_dependency(step_id: str, visiting: set[str] | None = None) -> list[str]:
         if step_id not in managers:

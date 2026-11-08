@@ -40,9 +40,11 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
         research = next(item for item in capabilities.json()["capabilities"] if item["id"] == "research")
         github = next(item for item in capabilities.json()["capabilities"] if item["id"] == "github")
         memory = next(item for item in capabilities.json()["capabilities"] if item["id"] == "memory")
+        files = next(item for item in capabilities.json()["capabilities"] if item["id"] == "files")
         self.assertTrue(browser["adapter_configured"])
         self.assertTrue(research["adapter_configured"])
         self.assertTrue(memory["adapter_configured"])
+        self.assertTrue(files["adapter_configured"])
         self.assertFalse(github["adapter_configured"])
         tool_ids = {item["id"] for item in capabilities.json()["tools"]}
         self.assertIn("research.search", tool_ids)
