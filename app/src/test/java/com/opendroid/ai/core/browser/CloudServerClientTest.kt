@@ -80,6 +80,19 @@ class CloudServerClientTest {
     }
 
     @Test
+    fun `legacy checkpoint and lease aliases remain eligible without Drive or Redis readiness gates`() {
+        val health = parseCloudServerHealth(
+            "redis-node", "Redis node", 200,
+            """{"status":"ready","accepting_new_tasks":true,"draining":false,"drive_ready":false,"checkpoint_storage_ready":true,"lease_coordinator_ready":true}""",
+        )
+
+        assertTrue(health.online)
+        assertEquals(true, health.checkpointReady)
+        assertEquals(true, health.leaseReady)
+        assertEquals(null, health.error)
+    }
+
+    @Test
     fun `redis health eligibility rejects each missing or false required readiness flag`() {
         val healthy = """{"accepting_new_tasks":true,"draining":false,"checkpoint_ready":true,"lease_ready":true}"""
         val notAccepting = healthy.replace("\"accepting_new_tasks\":true", "\"accepting_new_tasks\":false")

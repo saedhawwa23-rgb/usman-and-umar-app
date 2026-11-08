@@ -78,7 +78,7 @@ import com.opendroid.ai.data.db.dao.SocialAuditLogDao
         CloudServerEntity::class,
         GoogleDriveAccountEntity::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = true
 )
 abstract class OpenDroidDatabase : RoomDatabase() {
@@ -558,6 +558,19 @@ abstract class OpenDroidDatabase : RoomDatabase() {
                         quotaError TEXT
                     )
                 """)
+            }
+        }
+
+        /** Adds a durable outbound-message state and retry metadata without changing chat history. */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryState TEXT")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryTarget TEXT")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryTaskId TEXT")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryMetadata TEXT")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryError TEXT")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryRetryable INTEGER")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN imageBase64 TEXT")
             }
         }
     }

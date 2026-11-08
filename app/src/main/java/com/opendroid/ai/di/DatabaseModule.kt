@@ -51,6 +51,7 @@ object DatabaseModule {
             OpenDroidDatabase.MIGRATION_10_11,
             OpenDroidDatabase.MIGRATION_11_12,
             OpenDroidDatabase.MIGRATION_12_13,
+            OpenDroidDatabase.MIGRATION_13_14,
         )
         .build()
     }

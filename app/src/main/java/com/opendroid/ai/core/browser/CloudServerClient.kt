@@ -222,7 +222,7 @@ class CloudServerClient @Inject constructor(
         imageBase64: String? = null,
         approvedStepIds: List<String> = emptyList(),
         onLog: (String) -> Unit = {},
-        onDispatch: (String) -> Unit = {},
+        onDispatch: suspend (String) -> Unit = {},
     ): String = withContext(Dispatchers.IO) {
         val configured = settingsRepository.cloudServers.first()
         val candidates = configured.filter { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }

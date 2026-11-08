@@ -24,6 +24,7 @@ import com.opendroid.ai.core.browser.CloudRequestException
 import com.opendroid.ai.core.browser.CloudServerClient
 import com.opendroid.ai.core.browser.sanitizeCloudDiagnostic
 import com.opendroid.ai.data.models.AutoMode
+import com.opendroid.ai.data.models.ChatDeliveryState
 import com.opendroid.ai.data.models.ChatMessage
 import com.opendroid.ai.data.models.LLMConfig
 import com.opendroid.ai.data.models.resolvedAutoMode
@@ -39,13 +40,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CompletableDeferred
 import javax.inject.Inject
 import java.util.UUID
+import org.json.JSONArray
+import org.json.JSONObject
 
 enum class ChatTarget { API_MODEL, CLOUD_OPENSWARM }
 
@@ -67,18 +73,31 @@ class ChatViewModel @Inject constructor(
     private val localAiAppExecutor: LocalAiAppExecutor,
 ) : ViewModel() {
 
+    private data class PendingOutgoing(val sessionId: String?, val message: ChatMessage)
+
+    private val optimisticOutgoing = MutableStateFlow<List<PendingOutgoing>>(emptyList())
+    private val sendQueueMutex = Mutex()
+    private val recoveryComplete = CompletableDeferred<Unit>()
+    private val retryingMessageIds = mutableSetOf<String>()
+    private var lastSubmissionFingerprint: String? = null
+    private var lastSubmissionAtMillis: Long = 0
+    private var lastOutgoingTimestamp: Long = 0
+
+    init {
+        viewModelScope.launch {
+            try {
+                conversationRepository.recoverInterruptedOutgoingMessages()
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                android.util.Log.e("ChatOutbox", "Interrupted-send recovery failed", failure)
+            } finally {
+                recoveryComplete.complete(Unit)
+            }
+        }
+    }
+
     val llmConfig: StateFlow<LLMConfig> = settingsRepository.llmConfig
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LLMConfig())
-
-    // Scoped to whichever session is current; re-collects automatically when the
-    // user switches chats since the repository's flow is driven off the same
-    // reactive "current session" pointer that switchToSession() flips.
-    val conversationHistory: StateFlow<List<ChatMessage>> = conversationRepository.conversations
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
 
     /** Every chat session, most recently active first. */
     val sessions: StateFlow<List<ChatSession>> = conversationRepository.sessions
@@ -95,6 +114,23 @@ class ChatViewModel @Inject constructor(
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = null
         )
+
+    // Room is the source of truth. This id-keyed overlay makes a just-submitted
+    // message visible synchronously until its insert reaches Room, and session
+    // filtering keeps it with the chat that owned the send.
+    val conversationHistory: StateFlow<List<ChatMessage>> = combine(
+        conversationRepository.conversations, optimisticOutgoing, currentSessionId
+    ) { persisted, optimistic, activeSessionId ->
+        val merged = linkedMapOf<String, ChatMessage>()
+        optimistic.filter { it.sessionId == null || it.sessionId == activeSessionId }
+            .forEach { merged[it.message.id] = it.message }
+        persisted.forEach { merged[it.id] = it }
+        merged.values.sortedBy { it.timestamp }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList(),
+    )
 
     val agentState: StateFlow<AgentState> = agentLoop.agentState
 
@@ -142,7 +178,19 @@ class ChatViewModel @Inject constructor(
     private val _taskSessionId = MutableStateFlow<String?>(null)
     private val _cloudTaskState = MutableStateFlow<CloudTaskUiState?>(null)
     val cloudTaskState: StateFlow<CloudTaskUiState?> = _cloudTaskState
-    private var cloudTaskJob: Job? = null
+
+    private fun updateCloudTask(taskId: String, transform: (CloudTaskUiState) -> CloudTaskUiState) {
+        _cloudTaskState.value?.takeIf { it.taskId == taskId }?.let { current ->
+            _cloudTaskState.value = transform(current)
+        }
+    }
+
+    private fun updateCloudTaskUnlessTerminal(taskId: String, transform: (CloudTaskUiState) -> CloudTaskUiState) {
+        val terminalStatuses = setOf("COMPLETED", "FAILED", "CANCELLED")
+        _cloudTaskState.value?.takeIf { it.taskId == taskId && it.status !in terminalStatuses }?.let { current ->
+            _cloudTaskState.value = transform(current)
+        }
+    }
 
     /**
      * [agentState], but forced to [AgentState.Idle] whenever it actually describes a
@@ -199,37 +247,150 @@ class ChatViewModel @Inject constructor(
     fun sendMessage(query: String, context: Context, imageBase64: String? = null, target: ChatTarget = ChatTarget.API_MODEL, pluginIds: List<String> = emptyList(), thinkHarder: Boolean = false) {
         if (query.isBlank()) return
         val sessionId = pinTaskSessionSnapshot()
+        val fingerprint = listOf(
+            sessionId.orEmpty(),
+            target.name,
+            query,
+            imageBase64?.hashCode()?.toString().orEmpty(),
+            pluginIds.distinct().sorted().joinToString(","),
+            thinkHarder.toString(),
+        ).joinToString("|")
+        val now = System.currentTimeMillis()
+        if (fingerprint == lastSubmissionFingerprint && now - lastSubmissionAtMillis < 500) return
+        lastSubmissionFingerprint = fingerprint
+        lastSubmissionAtMillis = now
+        val messageTimestamp = maxOf(now, lastOutgoingTimestamp + 10)
+        lastOutgoingTimestamp = messageTimestamp
+
+        val messageId = UUID.randomUUID().toString()
+        val taskId = if (target == ChatTarget.CLOUD_OPENSWARM) "chat-${UUID.randomUUID()}" else null
+        val metadata = JSONObject()
+            .put("plugins", JSONArray(pluginIds.distinct()))
+            .put("think_harder", thinkHarder)
+            .toString()
+        val queued = ChatMessage(
+            id = messageId,
+            text = query,
+            sender = ChatMessage.Sender.USER,
+            timestamp = messageTimestamp,
+            imageBase64 = imageBase64,
+            deliveryState = ChatDeliveryState.QUEUED,
+            deliveryTarget = target.name,
+            deliveryTaskId = taskId,
+            deliveryMetadata = metadata,
+            deliveryRetryable = false,
+        )
+        optimisticOutgoing.value = optimisticOutgoing.value + PendingOutgoing(sessionId, queued)
         if (target == ChatTarget.CLOUD_OPENSWARM) {
-            // Explicit cloud selection always stays on the cloud path. The local
-            // AutoMode toggle must never silently redirect a cloud task to an AI app.
+            // Explicit cloud selection always stays on the cloud path; AutoMode never redirects it.
             android.util.Log.i("CloudOpenSwarm", "dispatch_route=cloud_openswarm manual_mode_does_not_redirect=true")
-            val taskId = "chat-${UUID.randomUUID()}"
-            cloudTaskJob = viewModelScope.launch {
-                val pinnedSession = sessionId ?: conversationRepository.ensureCurrentSessionId()
-                _cloudTaskState.value = CloudTaskUiState(taskId, pinnedSession, "RUNNING")
-                runCloudOpenSwarm(taskId, query, pinnedSession, pluginIds, thinkHarder, imageBase64)
+        }
+
+        viewModelScope.launch {
+            recoveryComplete.await()
+            val pinnedSession = sessionId ?: conversationRepository.ensureCurrentSessionId()
+            updateOptimisticSession(messageId, pinnedSession)
+            try {
+                // Persist QUEUED before waiting behind another request. If the process is
+                // interrupted while an earlier send runs, startup recovery can still see it.
+                conversationRepository.insertMessage(pinnedSession, queued)
+                awaitPersistedMessage(pinnedSession, messageId)
+                sendQueueMutex.withLock {
+                    conversationRepository.updateMessageDelivery(messageId, ChatDeliveryState.SENDING)
+                    val sending = queued.copy(deliveryState = ChatDeliveryState.SENDING)
+                    if (target == ChatTarget.CLOUD_OPENSWARM) {
+                        val pinnedTaskId = requireNotNull(taskId)
+                        _cloudTaskState.value = CloudTaskUiState(pinnedTaskId, pinnedSession, "RUNNING")
+                        runCloudOpenSwarm(sending, pinnedSession, pluginIds, thinkHarder, imageBase64)
+                    } else {
+                        _taskSessionId.value = pinnedSession
+                        agentLoop.processQuery(
+                            query, context, pinnedSession, imageBase64,
+                            prePersistedUserMessage = sending,
+                        ).join()
+                    }
+                }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) {
+                    withContext(NonCancellable) {
+                        runCatching {
+                            conversationRepository.updateMessageDelivery(
+                                messageId,
+                                ChatDeliveryState.FAILED,
+                                "The app stopped while this request was running. Check its task status before retrying.",
+                                retryable = false,
+                            )
+                        }
+                    }
+                    throw failure
+                }
+                val detail = sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank {
+                    failure.javaClass.simpleName
+                }
+                runCatching {
+                    conversationRepository.updateMessageDelivery(
+                        messageId, ChatDeliveryState.FAILED, detail, retryable = true
+                    )
+                }
+                updateOptimisticMessage(queued.copy(
+                    deliveryState = ChatDeliveryState.FAILED,
+                    deliveryError = detail,
+                    deliveryRetryable = true,
+                ))
             }
-        } else {
-            agentLoop.processQuery(query, context, sessionId, imageBase64)
         }
     }
 
-    private suspend fun runCloudOpenSwarm(taskId: String, query: String, sessionId: String, pluginIds: List<String>, thinkHarder: Boolean, imageBase64: String?) {
-        val userMessage = ChatMessage(UUID.randomUUID().toString(), query, ChatMessage.Sender.USER)
-        conversationRepository.insertMessage(sessionId, userMessage)
-        val assistantId = UUID.randomUUID().toString()
-        conversationRepository.insertMessage(sessionId, ChatMessage(assistantId, "", ChatMessage.Sender.AGENT, modelBadge = "Cloud OpenSwarm"))
+    private suspend fun awaitPersistedMessage(sessionId: String, messageId: String) {
+        conversationRepository.getMessages(sessionId).first { messages -> messages.any { it.id == messageId } }
+        optimisticOutgoing.value = optimisticOutgoing.value.filterNot { it.message.id == messageId }
+    }
+
+    private fun updateOptimisticSession(messageId: String, sessionId: String) {
+        optimisticOutgoing.value = optimisticOutgoing.value.map { pending ->
+            if (pending.message.id == messageId) pending.copy(sessionId = sessionId) else pending
+        }
+    }
+
+    private fun updateOptimisticMessage(message: ChatMessage) {
+        optimisticOutgoing.value = optimisticOutgoing.value.map { pending ->
+            if (pending.message.id == message.id) pending.copy(message = message) else pending
+        }
+    }
+
+    private suspend fun runCloudOpenSwarm(
+        userMessage: ChatMessage,
+        sessionId: String,
+        pluginIds: List<String>,
+        thinkHarder: Boolean,
+        imageBase64: String?,
+    ) {
+        val taskId = userMessage.deliveryTaskId ?: "chat-${UUID.randomUUID()}"
+        val assistantId = "cloud-reply-${userMessage.id}"
+        conversationRepository.insertMessage(
+            sessionId,
+            ChatMessage(
+                assistantId,
+                "",
+                ChatMessage.Sender.AGENT,
+                timestamp = userMessage.timestamp + 1,
+                modelBadge = "Cloud OpenSwarm",
+            ),
+        )
         try {
             val body = cloudServerClient.execute(
                 taskId = taskId,
-                prompt = query,
+                prompt = userMessage.text,
                 pluginId = pluginIds.firstOrNull() ?: "openswarm_agent",
                 pluginIds = pluginIds.ifEmpty { listOf("openswarm_agent") },
                 thinkHarder = thinkHarder,
                 imageBase64 = imageBase64,
                 onLog = { log -> android.util.Log.i("CloudOpenSwarm", log) },
                 onDispatch = { serverId ->
-                    _cloudTaskState.value = _cloudTaskState.value?.copy(serverId = serverId)
+                    conversationRepository.updateMessageDelivery(
+                        userMessage.id, ChatDeliveryState.SENT, taskId = taskId
+                    )
+                    updateCloudTask(taskId) { it.copy(serverId = serverId) }
                 },
             )
             val result = BrowserUseRemoteProtocol.parseSuccess(body).result
@@ -239,36 +400,125 @@ class ChatViewModel @Inject constructor(
                 conversationRepository.updateMessageText(assistantId, streamed.toString())
                 delay(18)
             }
-            if (result.isBlank()) conversationRepository.updateMessageText(assistantId, "Cloud OpenSwarm returned an empty result. Tap retry to run it again.")
-            val resultStatus = runCatching { org.json.JSONObject(result).optString("status").uppercase() }.getOrDefault("")
+            if (result.isBlank()) {
+                val error = "Cloud OpenSwarm returned an empty result; check Task Manager before retrying."
+                conversationRepository.updateMessageText(assistantId, error)
+                conversationRepository.updateMessageDelivery(userMessage.id, ChatDeliveryState.FAILED, error, retryable = false, taskId = taskId)
+                updateCloudTask(taskId) { it.copy(status = "UNKNOWN", message = error) }
+                return
+            }
+            val resultStatus = runCatching { JSONObject(result).optString("status").uppercase() }.getOrDefault("")
             val finalStatus = when (resultStatus) {
                 "CANCELLED" -> "CANCELLED"
                 "PAUSED", "WAITING_FOR_USER" -> resultStatus
                 "FAILED" -> "FAILED"
                 else -> "COMPLETED"
             }
-            _cloudTaskState.value = _cloudTaskState.value?.copy(status = finalStatus)
+            when (finalStatus) {
+                "FAILED", "CANCELLED" -> conversationRepository.updateMessageDelivery(
+                    userMessage.id, ChatDeliveryState.FAILED, result.take(1_000), retryable = true, taskId = taskId
+                )
+                "PAUSED", "WAITING_FOR_USER" -> conversationRepository.updateMessageDelivery(
+                    userMessage.id, ChatDeliveryState.SENT, taskId = taskId
+                )
+                else -> conversationRepository.updateMessageDelivery(
+                    userMessage.id, ChatDeliveryState.COMPLETED, taskId = taskId
+                )
+            }
+            updateCloudTask(taskId) { it.copy(status = finalStatus) }
         } catch (failure: Exception) {
-            val detail = (failure as? CloudRequestException)?.message.orEmpty().ifBlank {
+            if (failure is kotlinx.coroutines.CancellationException) throw failure
+            val detail = (failure as? CloudRequestException)?.technicalDetails().orEmpty().ifBlank {
                 "stage=response_processing exception_class=${failure.javaClass.simpleName} request_url=not-available http_status=none response_body=${sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank { "<empty>" }}"
             }
             android.util.Log.e("CloudOpenSwarm", detail)
             val userDetail = if (failure is CloudRequestException) {
-                val diagnostics = failure.technicalDetails()
-                "Cloud OpenSwarm failed: ${failure.userFacingSummary()}\n\n[cloud-technical-details]\n$diagnostics"
+                "Cloud OpenSwarm failed: ${failure.userFacingSummary()}\n\n[cloud-technical-details]\n$detail"
             } else {
                 "Cloud OpenSwarm failed: ${sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank { "The task result could not be verified." }}"
             }
             conversationRepository.updateMessageText(assistantId, userDetail)
-            val state = when {
-                failure.message.orEmpty().contains("UNKNOWN", ignoreCase = true) ||
-                    failure is java.net.SocketTimeoutException ||
-                    ((failure as? CloudRequestException)?.stage == "network_io") ||
-                    ((failure as? CloudRequestException)?.errorCode == "EXECUTION_OUTCOME_UNKNOWN") -> "UNKNOWN"
-                _cloudTaskState.value?.status == "CANCEL_REQUESTED" -> "CANCEL_REQUESTED"
-                else -> "FAILED"
+            val retryable = when (failure) {
+                is CloudRequestException -> failure.stage in setOf("configuration", "health_check", "connect", "dns_resolution") ||
+                    (failure.stage == "http_response" && failure.httpStatus in setOf(400, 401, 403, 404, 408, 422, 429, 503))
+                else -> failure !is java.net.SocketTimeoutException
             }
-            _cloudTaskState.value = _cloudTaskState.value?.copy(status = state, message = sanitizeCloudDiagnostic(failure.message.orEmpty()))
+            val outcomeUnknown = failure is java.net.SocketTimeoutException ||
+                (failure as? CloudRequestException)?.stage == "network_io" ||
+                (failure as? CloudRequestException)?.errorCode == "EXECUTION_OUTCOME_UNKNOWN"
+            conversationRepository.updateMessageDelivery(
+                userMessage.id,
+                ChatDeliveryState.FAILED,
+                detail,
+                retryable = retryable && !outcomeUnknown,
+                taskId = taskId,
+            )
+            updateCloudTask(taskId) {
+                it.copy(status = if (outcomeUnknown) "UNKNOWN" else "FAILED", message = sanitizeCloudDiagnostic(failure.message.orEmpty()))
+            }
+        }
+    }
+
+    /** Retry reuses the existing visible/user row; a fresh cloud attempt gets one new backend task ID. */
+    fun retryMessage(messageId: String, sessionId: String?, context: Context) {
+        if (sessionId == null || !retryingMessageIds.add(messageId)) return
+        viewModelScope.launch {
+            try {
+                recoveryComplete.await()
+                val message = conversationRepository.getMessages(sessionId).first()
+                    .firstOrNull { it.id == messageId && it.sender == ChatMessage.Sender.USER } ?: return@launch
+                if (message.deliveryState != ChatDeliveryState.FAILED || message.deliveryRetryable != true) return@launch
+                val cloudRetry = message.deliveryTarget == ChatTarget.CLOUD_OPENSWARM.name
+                val metadata = runCatching { JSONObject(message.deliveryMetadata.orEmpty()) }.getOrNull()
+                val pluginsJson = metadata?.optJSONArray("plugins") ?: JSONArray()
+                val plugins = (0 until pluginsJson.length()).map { pluginsJson.optString(it) }.filter { it.isNotBlank() }
+                val thinkHarder = metadata?.optBoolean("think_harder", false) ?: false
+                val retry = message.copy(
+                    deliveryState = ChatDeliveryState.QUEUED,
+                    deliveryTaskId = if (cloudRetry) "chat-${UUID.randomUUID()}" else message.deliveryTaskId,
+                    deliveryError = null,
+                    deliveryRetryable = false,
+                )
+                if (cloudRetry) {
+                    conversationRepository.insertMessage(sessionId, retry)
+                } else {
+                    conversationRepository.updateMessageDelivery(messageId, ChatDeliveryState.QUEUED, error = null, retryable = false)
+                }
+
+                sendQueueMutex.withLock {
+                    conversationRepository.updateMessageDelivery(
+                        messageId,
+                        ChatDeliveryState.SENDING,
+                        taskId = retry.deliveryTaskId,
+                    )
+                    if (cloudRetry) {
+                        val taskId = requireNotNull(retry.deliveryTaskId)
+                        _cloudTaskState.value = CloudTaskUiState(taskId, sessionId, "RUNNING")
+                        runCloudOpenSwarm(
+                            retry.copy(deliveryState = ChatDeliveryState.SENDING),
+                            sessionId,
+                            plugins,
+                            thinkHarder,
+                            retry.imageBase64,
+                        )
+                    } else {
+                        _taskSessionId.value = sessionId
+                        agentLoop.retryRequest(messageId, sessionId, context).join()
+                    }
+                }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                val detail = sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank {
+                    failure.javaClass.simpleName
+                }
+                runCatching {
+                    conversationRepository.updateMessageDelivery(
+                        messageId, ChatDeliveryState.FAILED, detail, retryable = true
+                    )
+                }
+            } finally {
+                retryingMessageIds.remove(messageId)
+            }
         }
     }
 
@@ -584,20 +834,22 @@ class ChatViewModel @Inject constructor(
         val cloud = _cloudTaskState.value
         if (cloud != null && cloud.status in setOf("RUNNING", "CANCEL_REQUESTED", "UNKNOWN")) {
             if (cloud.status == "CANCEL_REQUESTED") return
-            _cloudTaskState.value = cloud.copy(status = "CANCEL_REQUESTED", message = "Cancellation requested; waiting for a safe checkpoint.")
+            updateCloudTask(cloud.taskId) {
+                it.copy(status = "CANCEL_REQUESTED", message = "Cancellation requested; waiting for a safe checkpoint.")
+            }
             viewModelScope.launch {
                 try {
                     val response = cloudServerClient.controlTask(cloud.taskId, "cancel", cloud.serverId)
                     val state = runCatching { org.json.JSONObject(response).optString("state") }.getOrDefault("")
-                    _cloudTaskState.value = _cloudTaskState.value?.copy(
+                    updateCloudTaskUnlessTerminal(cloud.taskId) { current -> current.copy(
                         status = if (state == "CANCELLED") "CANCELLED" else if (state == "CANCEL_REQUESTED") "CANCEL_REQUESTED" else "UNKNOWN",
                         message = if (state == "CANCELLED") "Cancellation confirmed at a safe checkpoint." else "Cancellation requested; server status is ${state.ifBlank { "unknown" }}.",
-                    )
+                    ) }
                 } catch (failure: Exception) {
-                    _cloudTaskState.value = _cloudTaskState.value?.copy(
+                    updateCloudTaskUnlessTerminal(cloud.taskId) { current -> current.copy(
                         status = "UNKNOWN",
                         message = "Cancellation could not be confirmed. The task may still be running. ${sanitizeCloudDiagnostic(failure.message.orEmpty())}",
-                    )
+                    ) }
                 }
             }
         } else {

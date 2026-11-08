@@ -6,6 +6,7 @@ import com.opendroid.ai.data.db.dao.ChatSessionDao
 import com.opendroid.ai.data.db.dao.ConversationDao
 import com.opendroid.ai.data.db.entities.ChatSessionEntity
 import com.opendroid.ai.data.db.entities.ConversationEntity
+import com.opendroid.ai.data.models.ChatDeliveryState
 import com.opendroid.ai.data.models.ChatMessage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -39,6 +40,8 @@ class ConversationRepository @Inject constructor(
     // (e.g. two ViewModels reading history at app startup) can't each insert
     // their own session - a fresh install must end up with exactly one.
     private val ensureSessionMutex = Mutex()
+    private val interruptedRecoveryMutex = Mutex()
+    private var interruptedMessagesRecovered = false
 
     /**
      * Messages of the currently active session, oldest first. Reactive to both
@@ -82,6 +85,31 @@ class ConversationRepository @Inject constructor(
         conversationDao.updateMessageText(messageId, text)
     }
 
+    suspend fun updateMessageImage(messageId: String, imageBase64: String) {
+        conversationDao.updateMessageImage(messageId, imageBase64)
+    }
+
+    suspend fun updateMessageDelivery(
+        messageId: String,
+        state: ChatDeliveryState,
+        error: String? = null,
+        retryable: Boolean? = false,
+        taskId: String? = null,
+    ) {
+        conversationDao.updateMessageDelivery(messageId, state.name, error, retryable, taskId)
+    }
+
+    /** Converts requests left in flight by process death into visible failures. */
+    suspend fun recoverInterruptedOutgoingMessages() {
+        interruptedRecoveryMutex.withLock {
+            if (interruptedMessagesRecovered) return@withLock
+            conversationDao.recoverInterruptedOutgoingMessages(
+                "The app stopped before this request finished. Check the task status before retrying."
+            )
+            interruptedMessagesRecovered = true
+        }
+    }
+
     /** Last [limit] messages of the current session, chronological order. */
     suspend fun getLastMessages(limit: Int): List<ChatMessage> =
         getLastMessages(ensureCurrentSessionId(), limit)
@@ -92,6 +120,12 @@ class ConversationRepository @Inject constructor(
             entity.toChatMessage()
         }.reversed()
     }
+
+    /** Last [limit] messages up to a user turn; later queued messages cannot affect its context. */
+    suspend fun getLastMessagesUpTo(sessionId: String, timestamp: Long, limit: Int): List<ChatMessage> =
+        conversationDao.getLastMessagesForSessionUpTo(sessionId, timestamp, limit)
+            .map { it.toChatMessage() }
+            .reversed()
 
     /**
      * Clears every message of the current session only. Other sessions are untouched.
@@ -201,7 +235,14 @@ class ConversationRepository @Inject constructor(
         sender = ChatMessage.Sender.valueOf(sender),
         timestamp = timestamp,
         modelBadge = modelBadge,
-        contactPickerData = contactPickerData
+        imageBase64 = imageBase64,
+        contactPickerData = contactPickerData,
+        deliveryState = deliveryState?.let { runCatching { ChatDeliveryState.valueOf(it) }.getOrNull() },
+        deliveryTarget = deliveryTarget,
+        deliveryTaskId = deliveryTaskId,
+        deliveryMetadata = deliveryMetadata,
+        deliveryError = deliveryError,
+        deliveryRetryable = deliveryRetryable
     )
 
     private fun ChatMessage.toEntity(sessionId: String) = ConversationEntity(
@@ -210,8 +251,15 @@ class ConversationRepository @Inject constructor(
         sender = sender.name,
         timestamp = timestamp,
         modelBadge = modelBadge,
+        imageBase64 = imageBase64,
         contactPickerData = contactPickerData,
-        sessionId = sessionId
+        sessionId = sessionId,
+        deliveryState = deliveryState?.name,
+        deliveryTarget = deliveryTarget,
+        deliveryTaskId = deliveryTaskId,
+        deliveryMetadata = deliveryMetadata,
+        deliveryError = deliveryError,
+        deliveryRetryable = deliveryRetryable
     )
 
     private fun ChatSessionEntity.toChatSession() = ChatSession(

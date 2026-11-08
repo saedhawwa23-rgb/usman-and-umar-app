@@ -297,6 +297,38 @@ class OpenDroidDatabaseMigrationTest {
     }
 
     @Test
+    fun `migration 13 to 14 preserves chat rows and adds nullable delivery state`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.deleteDatabase(TEST_DATABASE)
+        helper.createDatabase(databasePath, 13).use { db ->
+            db.execSQL(
+                "INSERT INTO chat_sessions (id, title, createdAt, updatedAt, isCurrent) VALUES ('chat-one', 'Chat', 1, 1, 1)"
+            )
+            db.execSQL(
+                "INSERT INTO conversations (id, text, sender, timestamp, modelBadge, contactPickerData, sessionId) " +
+                    "VALUES ('message-one', 'survives migration', 'USER', 2, NULL, NULL, 'chat-one')"
+            )
+        }
+
+        val migrated = helper.runMigrationsAndValidate(
+            databasePath, 14, true, OpenDroidDatabase.MIGRATION_13_14
+        )
+        migrated.query(
+            "SELECT text, deliveryState, deliveryTarget, deliveryTaskId, deliveryMetadata, deliveryError, deliveryRetryable, imageBase64 FROM conversations WHERE id='message-one'"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("survives migration", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+            assertTrue(cursor.isNull(3))
+            assertTrue(cursor.isNull(4))
+            assertTrue(cursor.isNull(5))
+            assertTrue(cursor.isNull(6))
+            assertTrue(cursor.isNull(7))
+        }
+    }
+
+    @Test
     fun `Room preserves ten Colab server rows and long tunnel URLs without truncation`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val providedTunnelUrls = listOf(

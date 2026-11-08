@@ -77,6 +77,7 @@ import com.opendroid.ai.core.agent.primaryAction
 import com.opendroid.ai.core.agent.title
 import com.opendroid.ai.core.voice.SpeechRecognitionEngine
 import com.opendroid.ai.data.models.AutoMode
+import com.opendroid.ai.data.models.ChatDeliveryState
 import com.opendroid.ai.data.models.ChatMessage
 import com.opendroid.ai.data.models.effectiveGrantedActions
 import com.opendroid.ai.data.models.resolvedAutoMode
@@ -538,7 +539,7 @@ fun ChatScreen(
                             }
                         }
                     }
-                    items(history) { msg ->
+                    items(history, key = { it.id }) { msg ->
                         ChatBubble(
                             message = msg,
                             viewModel = viewModel,
@@ -546,6 +547,7 @@ fun ChatScreen(
                             onEditRequested = { startEditingMessage(it) },
                             onMessageLongPressed = { messageForActions = it },
                             onToolApproved = { call -> viewModel.approveChatToolCall(call, context) },
+                            onRetry = { failed -> viewModel.retryMessage(failed.id, currentSessionId, context) },
                         )
                     }
                     
@@ -1146,6 +1148,7 @@ fun ChatBubble(
     onEditRequested: ((ChatMessage) -> Unit)? = null,
     onMessageLongPressed: ((ChatMessage) -> Unit)? = null,
     onToolApproved: ((ChatToolCall) -> Unit)? = null,
+    onRetry: ((ChatMessage) -> Unit)? = null,
 ) {
     val isAgent = message.sender == ChatMessage.Sender.AGENT
     val toolCall = remember(message.id, message.text) {
@@ -1312,6 +1315,44 @@ fun ChatBubble(
                         if (showCloudTechnicalDetails) {
                             Text(details, color = TextSecondary, fontSize = 11.sp, lineHeight = 15.sp)
                         }
+                    }
+                }
+
+                if (!isAgent && message.deliveryState != null) {
+                    val deliveryLabel = when (message.deliveryState) {
+                        ChatDeliveryState.QUEUED -> "Queued"
+                        ChatDeliveryState.SENDING -> "Sending…"
+                        ChatDeliveryState.SENT -> "Sent"
+                        ChatDeliveryState.COMPLETED -> "Completed"
+                        ChatDeliveryState.FAILED -> "Failed"
+                        null -> ""
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = deliveryLabel,
+                            fontSize = 10.sp,
+                            color = if (message.deliveryState == ChatDeliveryState.FAILED) AccentRed else TextSecondary,
+                        )
+                        if (message.deliveryState == ChatDeliveryState.FAILED) {
+                            TextButton(
+                                onClick = { onRetry?.invoke(message) },
+                                enabled = message.deliveryRetryable == true && onRetry != null,
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                            ) { Text("Retry", fontSize = 11.sp, color = AccentCyan) }
+                        }
+                    }
+                    message.deliveryError?.takeIf { message.deliveryState == ChatDeliveryState.FAILED }?.let { detail ->
+                        Text(
+                            text = detail,
+                            fontSize = 10.sp,
+                            color = TextSecondary,
+                            lineHeight = 14.sp,
+                            maxLines = 3,
+                        )
                     }
                 }
                 

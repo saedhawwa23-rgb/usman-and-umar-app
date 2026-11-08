@@ -11,6 +11,7 @@ import com.opendroid.ai.core.llm.prompts.PlanningPrompts
 import com.opendroid.ai.core.memory.MemoryManager
 import com.opendroid.ai.core.memory.ExecutionHistoryPrivacy
 import com.opendroid.ai.data.models.AutoMode
+import com.opendroid.ai.data.models.ChatDeliveryState
 import com.opendroid.ai.data.models.ChatMessage
 import com.opendroid.ai.data.models.Plan
 import com.opendroid.ai.data.models.PlanStatus
@@ -223,7 +224,8 @@ class AgentLoop @Inject constructor(
         context: Context,
         explicitSessionId: String? = null,
         attachmentImageBase64: String? = null,
-    ) {
+        prePersistedUserMessage: ChatMessage? = null,
+    ): Job {
         // processQuery is also the delivery path for a reply to a pending
         // awaitUserResponse() prompt (see below). That's ONLY true when this message comes
         // from the SAME session the waiting task is pinned to (waitingSessionId) - a
@@ -284,8 +286,13 @@ class AgentLoop @Inject constructor(
                     null
                 }
 
-                // Save user message
-                val userMsg = ChatMessage(
+                // Reuse the durable outbox row created by ChatViewModel for Send. The
+                // unique message id remains the idempotency key across queueing/retries.
+                val userMsg = prePersistedUserMessage?.copy(
+                    text = query,
+                    sender = ChatMessage.Sender.USER,
+                    imageBase64 = attachmentImageBase64 ?: screenshotBase64
+                ) ?: ChatMessage(
                     id = UUID.randomUUID().toString(),
                     text = query,
                     sender = ChatMessage.Sender.USER,
@@ -293,7 +300,13 @@ class AgentLoop @Inject constructor(
                     imageBase64 = attachmentImageBase64 ?: screenshotBase64
                 )
                 memoryManager.storeMessage(userMsg, sessionId)
-                conversationRepository.insertMessage(sessionId, userMsg)
+                val alreadyPersisted = prePersistedUserMessage != null &&
+                    conversationRepository.getMessages(sessionId).first().any { it.id == userMsg.id }
+                if (!alreadyPersisted) conversationRepository.insertMessage(sessionId, userMsg)
+                if (prePersistedUserMessage != null) {
+                    userMsg.imageBase64?.let { conversationRepository.updateMessageImage(userMsg.id, it) }
+                    conversationRepository.updateMessageDelivery(userMsg.id, ChatDeliveryState.SENT)
+                }
 
                 if (isAnsweringPendingQuestion) {
                     // Re-validate at delivery time, not just at schedule time: only
@@ -303,7 +316,10 @@ class AgentLoop @Inject constructor(
                     // is nothing to buffer it for; just drop it.
                     val pending = pendingUserInput
                     if (pending != null && pending.requestId == pendingAtScheduleTime?.requestId) {
-                        pending.deferred.complete(query)
+                    pending.deferred.complete(query)
+                    }
+                    if (prePersistedUserMessage != null) {
+                        conversationRepository.updateMessageDelivery(userMsg.id, ChatDeliveryState.COMPLETED)
                     }
                     return@launch
                 }
@@ -312,16 +328,44 @@ class AgentLoop @Inject constructor(
                 queryMutex.withLock {
                     processQueryLocked(userMsg, query, context, sessionId)
                 }
+                if (prePersistedUserMessage != null) {
+                    val error = _agentState.value as? AgentState.Error
+                    if (error == null) {
+                        conversationRepository.updateMessageDelivery(userMsg.id, ChatDeliveryState.COMPLETED)
+                    } else {
+                        val failure = deliveryFailure(userMsg.id, sessionId, error.message)
+                        conversationRepository.updateMessageDelivery(
+                            userMsg.id, ChatDeliveryState.FAILED, failure.first, retryable = failure.second
+                        )
+                    }
+                }
             } catch (e: CancellationException) {
+                if (prePersistedUserMessage != null) withContext(NonCancellable) {
+                    conversationRepository.updateMessageDelivery(
+                        prePersistedUserMessage.id,
+                        ChatDeliveryState.FAILED,
+                        "The request was interrupted before completion. Retry to run it again.",
+                        retryable = true,
+                    )
+                }
                 throw e
             } catch (e: Exception) {
                 _agentState.value = AgentState.Error(e.localizedMessage ?: "Unknown processing error")
+                if (prePersistedUserMessage != null) {
+                    conversationRepository.updateMessageDelivery(
+                        prePersistedUserMessage.id,
+                        ChatDeliveryState.FAILED,
+                        e.localizedMessage ?: e.javaClass.simpleName,
+                        retryable = true,
+                    )
+                }
             }
         }
 
         if (!isAnsweringPendingQuestion) {
             currentJob = job
         }
+        return job
     }
 
     /**
@@ -332,7 +376,7 @@ class AgentLoop @Inject constructor(
      * Falls back to the session's last user message if [requestId] doesn't resolve to
      * one (e.g. a plan re-evaluation failure, whose requestId is a plan id).
      */
-    fun retryRequest(requestId: String, sessionId: String, context: Context) {
+    fun retryRequest(requestId: String, sessionId: String, context: Context): Job {
         val waitingSession = waitingSessionId
         if (waitingSession != null && waitingSession != sessionId) {
             abandonWaitingTask(waitingSession)
@@ -350,16 +394,57 @@ class AgentLoop @Inject constructor(
                     it.id == requestId && it.sender == ChatMessage.Sender.USER
                 } ?: messages.lastOrNull { it.sender == ChatMessage.Sender.USER } ?: return@launch
 
+                conversationRepository.updateMessageDelivery(userMsg.id, ChatDeliveryState.SENDING)
+                conversationRepository.updateMessageDelivery(userMsg.id, ChatDeliveryState.SENT)
+
                 queryMutex.withLock {
                     processQueryLocked(userMsg, userMsg.text, context, sessionId)
                 }
+                val error = _agentState.value as? AgentState.Error
+                if (error == null) {
+                    conversationRepository.updateMessageDelivery(userMsg.id, ChatDeliveryState.COMPLETED)
+                } else {
+                    val failure = deliveryFailure(userMsg.id, sessionId, error.message)
+                    conversationRepository.updateMessageDelivery(
+                        userMsg.id, ChatDeliveryState.FAILED, failure.first, retryable = failure.second
+                    )
+                }
             } catch (e: CancellationException) {
+                withContext(NonCancellable) {
+                    conversationRepository.updateMessageDelivery(
+                        requestId,
+                        ChatDeliveryState.FAILED,
+                        "The request was interrupted before completion. Retry to run it again.",
+                        retryable = true,
+                    )
+                }
                 throw e
             } catch (e: Exception) {
                 _agentState.value = AgentState.Error(e.localizedMessage ?: "Unknown processing error")
+                conversationRepository.updateMessageDelivery(
+                    requestId,
+                    ChatDeliveryState.FAILED,
+                    e.localizedMessage ?: e.javaClass.simpleName,
+                    retryable = true,
+                )
             }
         }
         currentJob = job
+        return job
+    }
+
+    /** Uses only the LLM error model's redacted fields; never persists a raw body or secret. */
+    private fun deliveryFailure(requestId: String, sessionId: String, fallback: String): Pair<String, Boolean> {
+        val error = _chatError.value?.takeIf { it.requestId == requestId && it.sessionId == sessionId }
+            ?: return fallback to true
+        val details = buildString {
+            append("category=").append(error.category.code)
+            append(" provider=").append(error.provider)
+            append(" model=").append(error.model)
+            append(" http_status=").append(error.httpStatus?.toString() ?: "none")
+            error.redactedDetail?.toString()?.takeIf(String::isNotBlank)?.let { append(' ').append(it) }
+        }
+        return details to error.retryable
     }
 
     private suspend fun processQueryLocked(userMsg: ChatMessage, query: String, context: Context, sessionId: String) {
@@ -519,7 +604,7 @@ class AgentLoop @Inject constructor(
                 $relevantContext
             """.trimIndent()
 
-            val lastMsgs = conversationRepository.getLastMessages(sessionId, 10).map { msg ->
+            val lastMsgs = conversationRepository.getLastMessagesUpTo(sessionId, userMsg.timestamp, 10).map { msg ->
                 val withImage = if (msg.id == userMsg.id) {
                     msg.copy(imageBase64 = userMsg.imageBase64)
                 } else {
@@ -541,6 +626,7 @@ class AgentLoop @Inject constructor(
                 id = replyId,
                 text = currentReplyText,
                 sender = ChatMessage.Sender.AGENT,
+                timestamp = userMsg.timestamp + 1,
                 modelBadge = provider.name
             )
 
