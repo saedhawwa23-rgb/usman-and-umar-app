@@ -22,6 +22,8 @@ import com.opendroid.ai.core.agent.primaryAction
 import com.opendroid.ai.core.browser.BrowserUseRemoteProtocol
 import com.opendroid.ai.core.browser.CloudRequestException
 import com.opendroid.ai.core.browser.CloudServerClient
+import com.opendroid.ai.core.browser.OpenSwarmResponse
+import com.opendroid.ai.core.browser.OpenSwarmResponseDecoder
 import com.opendroid.ai.core.browser.sanitizeCloudDiagnostic
 import com.opendroid.ai.data.models.AutoMode
 import com.opendroid.ai.data.models.ChatDeliveryState
@@ -394,49 +396,70 @@ class ChatViewModel @Inject constructor(
                 },
             )
             val result = BrowserUseRemoteProtocol.parseSuccess(body).result
-            val streamed = StringBuilder()
-            result.chunked(48).forEach { chunk ->
-                streamed.append(chunk)
-                conversationRepository.updateMessageText(assistantId, streamed.toString())
-                delay(18)
+            when (val decoded = OpenSwarmResponseDecoder.decode(result)) {
+                is OpenSwarmResponse.Completed -> {
+                    val streamed = StringBuilder()
+                    decoded.output.chunked(48).forEach { chunk ->
+                        streamed.append(chunk)
+                        conversationRepository.updateMessageText(assistantId, streamed.toString())
+                        delay(18)
+                    }
+                    conversationRepository.updateMessageDelivery(
+                        userMessage.id, ChatDeliveryState.COMPLETED, taskId = taskId,
+                    )
+                    updateCloudTask(taskId) { it.copy(status = "COMPLETED", message = null) }
+                }
+                is OpenSwarmResponse.InProgress -> {
+                    conversationRepository.updateMessageText(assistantId, decoded.message)
+                    conversationRepository.updateMessageDelivery(
+                        userMessage.id, ChatDeliveryState.SENT, taskId = taskId,
+                    )
+                    // A control/unverified response is not proof of completion. Keep it
+                    // visible as progress, but do not mark the request successful.
+                    updateCloudTask(taskId) { it.copy(status = "UNKNOWN", message = decoded.message) }
+                }
+                is OpenSwarmResponse.Failed -> {
+                    val message = "Cloud OpenSwarm failed: ${decoded.message}"
+                    conversationRepository.updateMessageText(assistantId, message)
+                    conversationRepository.updateMessageDelivery(
+                        userMessage.id, ChatDeliveryState.FAILED, decoded.message,
+                        retryable = true, taskId = taskId,
+                    )
+                    updateCloudTask(taskId) { it.copy(status = "FAILED", message = decoded.message) }
+                }
+                is OpenSwarmResponse.LegacyText -> {
+                    val openSwarmRequested = pluginIds.isEmpty() || "openswarm_agent" in pluginIds
+                    if (openSwarmRequested) {
+                        val message = "Manager Agent returned an unverified response. The task is not marked complete."
+                        conversationRepository.updateMessageText(assistantId, message)
+                        conversationRepository.updateMessageDelivery(
+                            userMessage.id, ChatDeliveryState.SENT, taskId = taskId,
+                        )
+                        updateCloudTask(taskId) { it.copy(status = "UNKNOWN", message = message) }
+                    } else {
+                        // Keep the historical plain-text response path for non-OpenSwarm
+                        // cloud plugins, while leaving its delivery state unverified.
+                        conversationRepository.updateMessageText(assistantId, decoded.text)
+                        conversationRepository.updateMessageDelivery(
+                            userMessage.id, ChatDeliveryState.SENT, taskId = taskId,
+                        )
+                        updateCloudTask(taskId) {
+                            it.copy(status = "UNKNOWN", message = "Legacy plain-text response; completion was not verified.")
+                        }
+                    }
+                }
             }
-            if (result.isBlank()) {
-                val error = "Cloud OpenSwarm returned an empty result; check Task Manager before retrying."
-                conversationRepository.updateMessageText(assistantId, error)
-                conversationRepository.updateMessageDelivery(userMessage.id, ChatDeliveryState.FAILED, error, retryable = false, taskId = taskId)
-                updateCloudTask(taskId) { it.copy(status = "UNKNOWN", message = error) }
-                return
-            }
-            val resultStatus = runCatching { JSONObject(result).optString("status").uppercase() }.getOrDefault("")
-            val finalStatus = when (resultStatus) {
-                "CANCELLED" -> "CANCELLED"
-                "PAUSED", "WAITING_FOR_USER" -> resultStatus
-                "FAILED" -> "FAILED"
-                else -> "COMPLETED"
-            }
-            when (finalStatus) {
-                "FAILED", "CANCELLED" -> conversationRepository.updateMessageDelivery(
-                    userMessage.id, ChatDeliveryState.FAILED, result.take(1_000), retryable = true, taskId = taskId
-                )
-                "PAUSED", "WAITING_FOR_USER" -> conversationRepository.updateMessageDelivery(
-                    userMessage.id, ChatDeliveryState.SENT, taskId = taskId
-                )
-                else -> conversationRepository.updateMessageDelivery(
-                    userMessage.id, ChatDeliveryState.COMPLETED, taskId = taskId
-                )
-            }
-            updateCloudTask(taskId) { it.copy(status = finalStatus) }
         } catch (failure: Exception) {
             if (failure is kotlinx.coroutines.CancellationException) throw failure
             val detail = (failure as? CloudRequestException)?.technicalDetails().orEmpty().ifBlank {
                 "stage=response_processing exception_class=${failure.javaClass.simpleName} request_url=not-available http_status=none response_body=${sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank { "<empty>" }}"
             }
             android.util.Log.e("CloudOpenSwarm", detail)
-            val userDetail = if (failure is CloudRequestException) {
-                "Cloud OpenSwarm failed: ${failure.userFacingSummary()}\n\n[cloud-technical-details]\n$detail"
-            } else {
-                "Cloud OpenSwarm failed: ${sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank { "The task result could not be verified." }}"
-            }
+            val failureSummary = OpenSwarmResponseDecoder.cleanFailureMessage(
+                if (failure is CloudRequestException) failure.userFacingSummary() else failure.message,
+                fallback = "The task result could not be verified.",
+            )
+            val userDetail = "Cloud OpenSwarm failed: $failureSummary"
             conversationRepository.updateMessageText(assistantId, userDetail)
             val retryable = when (failure) {
                 is CloudRequestException -> failure.stage in setOf("configuration", "health_check", "connect", "dns_resolution") ||
@@ -449,12 +472,12 @@ class ChatViewModel @Inject constructor(
             conversationRepository.updateMessageDelivery(
                 userMessage.id,
                 ChatDeliveryState.FAILED,
-                detail,
+                failureSummary,
                 retryable = retryable && !outcomeUnknown,
                 taskId = taskId,
             )
             updateCloudTask(taskId) {
-                it.copy(status = if (outcomeUnknown) "UNKNOWN" else "FAILED", message = sanitizeCloudDiagnostic(failure.message.orEmpty()))
+                it.copy(status = if (outcomeUnknown) "UNKNOWN" else "FAILED", message = failureSummary)
             }
         }
     }

@@ -154,6 +154,46 @@ class ResearchParserTests(unittest.TestCase):
         target = parse_qs(urlsplit(candidate).query)["uddg"][0]
         self.assertEqual(target, "https://example.com/article")
 
+
+class BrowserScraperTests(unittest.IsolatedAsyncioTestCase):
+    async def test_title_mode_returns_browser_observed_title_and_body(self):
+        import browser_scraper
+
+        class Page:
+            url = "https://example.com"
+            async def goto(self, *_args, **_kwargs):
+                return None
+            async def inner_text(self, *_args, **_kwargs):
+                return "Example Domain"
+            async def title(self):
+                return "  Example Domain  "
+
+        class Browser:
+            async def new_page(self):
+                return Page()
+            async def close(self):
+                return None
+
+        class Chromium:
+            async def launch(self, **_kwargs):
+                return Browser()
+
+        class Playwright:
+            chromium = Chromium()
+
+        class PlaywrightContext:
+            async def __aenter__(self):
+                return Playwright()
+            async def __aexit__(self, *_args):
+                return None
+
+        with patch.object(browser_scraper, "async_playwright", return_value=PlaywrightContext()):
+            result = await browser_scraper.run_playwright_task(
+                "https://example.com", allowed_domains=["example.com"], include_title=True
+            )
+        self.assertEqual(result, "Page title: Example Domain\n\nExample Domain")
+
+
 class ResearchAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_search_retrieves_source_page_text_before_marking_research_verified(self):
         html = '<a class="result__a" href="https://example.com/article">Example Article</a>'
@@ -175,7 +215,8 @@ class ResearchAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["sources"][0]["content"], "Actual article body with source evidence.")
         self.assertTrue(result["sources"][0]["retrieved"])
         browser_fetch.assert_awaited_once_with(
-            "https://example.com/article", action="scrape", allowed_domains=["example.com"]
+            "https://example.com/article", action="scrape", allowed_domains=["example.com"],
+            include_title=True,
         )
 
 
@@ -308,6 +349,111 @@ class WorkspaceToolTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OpenSwarmApprovalTests(unittest.IsolatedAsyncioTestCase):
+
+    async def test_control_only_manager_node_hands_url_request_to_verified_browser(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(os.path.join(directory, "handoff.sqlite"))
+            plan = {"summary": "Inspect example.com", "steps": [{
+                "id": "manager-handoff", "agent_id": "manager", "objective": "Delegate the request",
+                "depends_on": [], "requires_approval": False, "tool_input": {},
+            }]}
+            capabilities = CapabilityRegistry()
+            browser_calls = []
+
+            async def extract(payload):
+                browser_calls.append(payload)
+                return {"text": "Page title: Example Domain\n\nExample Domain", "verified": True}
+
+            capabilities.register(Capability("browser.extract", "Extract public page", "cloud", configured=True), extract)
+            with patch.object(openswarm_agent, "TASKS", store), \
+                 patch.object(openswarm_agent, "CAPABILITIES", capabilities), \
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan):
+                report = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="browser-handoff", prompt="Go to https://example.com and tell me the title",
+                    plugin_id=None, allowed_domains=["example.com"], max_steps=5,
+                ))
+
+            self.assertEqual(browser_calls, [{"url": "https://example.com", "allowed_domains": ["example.com"]}])
+            self.assertEqual(report["status"], "COMPLETED")
+            self.assertTrue(report["verified"])
+            self.assertEqual(len(report["results"]), 1)
+            self.assertEqual(report["results"][0]["agent_id"], "browser")
+            self.assertTrue(report["results"][0]["verified"])
+            self.assertIn("Page title: Example Domain", report["results"][0]["output"])
+            self.assertEqual(store.get("browser-handoff")["state"], "COMPLETED")
+            handoffs = [event for event in store.events("browser-handoff") if event["event"] == "agent_handoff"]
+            self.assertEqual([event["detail"]["to_agent"] for event in handoffs], ["browser"])
+
+    async def test_manager_control_node_is_spliced_out_when_browser_step_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(os.path.join(directory, "graph.sqlite"))
+            plan = {"summary": "Inspect example.com", "steps": [
+                {"id": "manager-plan", "agent_id": "manager", "objective": "Plan the handoff",
+                 "depends_on": [], "requires_approval": False},
+                {"id": "browser-read", "agent_id": "browser", "objective": "Read the page title",
+                 "depends_on": ["manager-plan"], "requires_approval": False,
+                 "tool_input": {"url": "https://example.com"}},
+            ]}
+            capabilities = CapabilityRegistry()
+            browser_calls = []
+
+            async def extract(payload):
+                browser_calls.append(payload)
+                return {"text": "Page title: Example Domain", "verified": True}
+
+            capabilities.register(Capability("browser.extract", "Extract public page", "cloud", configured=True), extract)
+            with patch.object(openswarm_agent, "TASKS", store), \
+                 patch.object(openswarm_agent, "CAPABILITIES", capabilities), \
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan):
+                report = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="manager-splice", prompt="Go to https://example.com and tell me the title",
+                    plugin_id=None, allowed_domains=["example.com"], max_steps=5,
+                ))
+
+            self.assertTrue(report["verified"])
+            self.assertEqual(report["status"], "COMPLETED")
+            self.assertEqual([item["agent_id"] for item in report["results"]], ["browser"])
+            self.assertEqual(len(browser_calls), 1)
+            handoffs = [event for event in store.events("manager-splice") if event["event"] == "agent_handoff"]
+            self.assertEqual([event["detail"]["to_agent"] for event in handoffs], ["browser"])
+
+    async def test_control_only_plan_without_executable_specialist_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(os.path.join(directory, "no-tool.sqlite"))
+            plan = {"summary": "Coordinate a task", "steps": [{
+                "id": "manager-only", "agent_id": "manager", "objective": "Coordinate the task",
+                "depends_on": [], "requires_approval": False,
+            }]}
+            with patch.object(openswarm_agent, "TASKS", store), \
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan):
+                with self.assertRaisesRegex(openswarm_agent.CapabilityUnavailableError, "without an executable specialist"):
+                    await openswarm_agent.run_openswarm_task(
+                        task_id="no-tool-task", prompt="Coordinate this task", plugin_id=None,
+                        allowed_domains=[], max_steps=5,
+                    )
+            self.assertEqual(store.get("no-tool-task")["state"], "FAILED")
+            self.assertIsNone(store.get("no-tool-task").get("result"))
+
+    async def test_unverified_specialist_result_is_explicitly_nonfinal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = TaskStateStore(os.path.join(directory, "partial.sqlite"))
+            plan = {"summary": "Prepare a plan", "steps": [{
+                "id": "planner-1", "agent_id": "planner", "objective": "Prepare a plan",
+                "depends_on": [], "requires_approval": False,
+            }]}
+            unverified = AsyncMock(return_value={
+                "agent_id": "planner", "status": "PLANNING", "verified": False, "output": "Proposed steps only."
+            })
+            with patch.object(openswarm_agent, "TASKS", store), \
+                 patch.object(openswarm_agent, "_manager_plan", return_value=plan), \
+                 patch.object(openswarm_agent, "_run_specialist", new=unverified):
+                report = json.loads(await openswarm_agent.run_openswarm_task(
+                    task_id="nonfinal-task", prompt="Prepare a plan", plugin_id=None,
+                    allowed_domains=[], max_steps=5,
+                ))
+            self.assertFalse(report["verified"])
+            self.assertEqual(report["status"], "WAITING_FOR_USER")
+            self.assertEqual(store.get("nonfinal-task")["state"], "WAITING_FOR_USER")
 
     async def test_mocked_redis_lifecycle_receipts_and_checkpoint(self):
         class MemoryRedis:

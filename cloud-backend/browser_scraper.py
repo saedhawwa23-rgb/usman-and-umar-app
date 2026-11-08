@@ -45,8 +45,13 @@ async def run_playwright_task(
     action: str = "scrape",
     link_text: str | None = None,
     allowed_domains: list[str] | None = None,
+    include_title: bool = False,
 ) -> str:
-    """Scrape a URL or click a named link, then return the destination page text."""
+    """Scrape a URL or click a named link, then return destination page text.
+
+    ``include_title`` adds the browser-observed document title to the returned
+    text without changing the default string contract used by direct callers.
+    """
     initial_host, _ = _public_http_url(url)
     action = action.strip().lower()
     if action not in {"scrape", "click"}:
@@ -88,6 +93,10 @@ async def run_playwright_task(
                 final_host, _ = _public_http_url(page.url)
                 if final_host != target_host and not final_host.endswith("." + target_host):
                     raise RuntimeError("The clicked link redirected to an unexpected hostname.")
-            return await page.inner_text("body", timeout=15_000)
+            body_text = await page.inner_text("body", timeout=15_000)
+            if include_title:
+                title = (await page.title()).strip()
+                return f"Page title: {title}\n\n{body_text}" if title else body_text
+            return body_text
         finally:
             await browser.close()

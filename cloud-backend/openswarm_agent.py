@@ -73,6 +73,62 @@ def _manager_plan(prompt: str, plugin_ids: list[str], max_steps: int) -> dict[st
             raise RuntimeError(f"Step {step['id']} has an unknown or self dependency.")
     return {"summary": str(plan.get("summary") or prompt), "steps": normalized}
 
+
+def _route_control_only_steps(plan: dict[str, Any], prompt: str) -> dict[str, Any]:
+    """Remove manager control nodes from the execution graph or hand them to browser.
+
+    The manager is a planner, not an execution adapter. If it is the only planned
+    node and the user supplied a URL, route that request through the existing
+    browser specialist. Otherwise splice manager nodes out of dependencies so
+    their control messages cannot masquerade as completed work.
+    """
+    steps = [dict(step) for step in plan.get("steps", [])]
+    managers = {step["id"]: step for step in steps if step.get("agent_id") == "manager"}
+    if not managers:
+        return {**plan, "steps": steps}
+
+    specialists = [step for step in steps if step.get("agent_id") != "manager"]
+    if not specialists:
+        match = re.search(r"https?://[^\s<>\"']+", prompt, re.IGNORECASE)
+        if not match:
+            raise CapabilityUnavailableError(
+                "Manager returned a control-only plan without an executable specialist or user-supplied URL."
+            )
+        url = match.group(0).rstrip(".,;:!?)]}")
+        source = next(iter(managers.values()))
+        browser_step = {
+            **source,
+            "agent_id": "browser",
+            "objective": prompt,
+            "depends_on": [],
+            "capability_id": None,
+            "tool_input": {"url": url},
+        }
+        return {**plan, "steps": [browser_step]}
+
+    def expand_dependency(step_id: str, visiting: set[str] | None = None) -> list[str]:
+        if step_id not in managers:
+            return [step_id]
+        visiting = set() if visiting is None else visiting
+        if step_id in visiting:
+            raise RuntimeError("Manager plan contains a dependency cycle.")
+        visiting.add(step_id)
+        expanded: list[str] = []
+        for dependency in managers[step_id].get("depends_on", []):
+            expanded.extend(expand_dependency(dependency, visiting))
+        visiting.remove(step_id)
+        return expanded
+
+    routed_steps = []
+    for step in specialists:
+        dependencies: list[str] = []
+        for dependency in step.get("depends_on", []):
+            dependencies.extend(expand_dependency(dependency))
+        step["depends_on"] = list(dict.fromkeys(dependencies))
+        routed_steps.append(step)
+    return {**plan, "steps": routed_steps}
+
+
 async def _run_specialist(agent_id: str, objective: str, state: dict[str, Any]) -> dict[str, Any]:
     if agent_id == "browser":
         context_text = json.dumps(state.get("shared_context", []), ensure_ascii=False)
@@ -159,7 +215,7 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
         task_store.create(task_id, prompt)
         try:
             task_store.transition(task_id, "PLANNING", "manager_planning_started")
-            plan = _manager_plan(prompt, plugins, max_steps)
+            plan = _route_control_only_steps(_manager_plan(prompt, plugins, max_steps), prompt)
             task_store.save_plan(task_id, plan["steps"])
             task_store.transition(task_id, "READY", "manager_plan_ready", {"step_count": len(plan["steps"])})
         except Exception as exc:
@@ -169,10 +225,14 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                 pass
             raise
     elif existing["state"] == "WAITING_FOR_USER":
-        plan = {"summary": (existing.get("result") or {}).get("summary") or prompt, "steps": existing["plan"]}
+        plan = _route_control_only_steps(
+            {"summary": (existing.get("result") or {}).get("summary") or prompt, "steps": existing["plan"]}, prompt
+        )
     elif existing["state"] == "PAUSED":
         saved_result = existing.get("result") or {}
-        plan = {"summary": saved_result.get("summary") or prompt, "steps": existing["plan"]}
+        plan = _route_control_only_steps(
+            {"summary": saved_result.get("summary") or prompt, "steps": existing["plan"]}, prompt
+        )
         approved.update(saved_result.get("approved_step_ids") or [])
     else:
         raise RuntimeError(f"Task {task_id} already exists in state {existing['state']}; use a new task ID or resume only a task waiting for approval.")
@@ -236,8 +296,9 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
                     "approval_granted": step["id"] in approved,
                 })
                 if agent_id == "manager":
-                    return {"agent_id": agent_id, "status": "CONTROL_ONLY", "verified": False,
-                            "output": "Manager handoff recorded; specialist execution is handled by the delegated steps."}
+                    raise CapabilityUnavailableError(
+                        "Manager is control-only and cannot be recorded as an execution result."
+                    )
                 if agent_id == "verification":
                     evidence = [completed[item] for item in step["depends_on"]]
                     passed = bool(evidence) and all(item.get("verified") is True for item in evidence)
@@ -400,8 +461,13 @@ async def run_openswarm_task(*, task_id: str, prompt: str, plugin_id: str | None
         if not results:
             raise CapabilityUnavailableError("Manager plan contained no executable specialist.")
         task_store.transition(task_id, "VERIFYING", "independent_result_check_started")
-        verified = all(item.get("verified") is True for item in results)
+        non_execution_statuses = {"CONTROL_ONLY", "CONTROL_PAUSED", "CONTROL_CANCELLED", "PLANNING"}
+        verified = bool(results) and all(
+            item.get("verified") is True and item.get("status") not in non_execution_statuses
+            for item in results
+        )
         report = {"summary": plan["summary"], "results": results, "verified": verified,
+                  "status": "COMPLETED" if verified else "WAITING_FOR_USER",
                   "verification": "Available execution checks passed." if verified else "PARTIALLY_VERIFIED: generated text is not proof of execution."}
         task_store.save_result(task_id, report)
         task_store.transition(task_id, "COMPLETED" if verified else "WAITING_FOR_USER",

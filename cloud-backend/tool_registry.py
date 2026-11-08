@@ -206,7 +206,9 @@ def build_default_capability_registry(memory_store: Any | None = None) -> Capabi
         allowed = payload.get("allowed_domains") or []
         if not isinstance(allowed, list) or any(not isinstance(item, str) for item in allowed):
             raise ValueError("allowed_domains must be a list of hostnames.")
-        text = await run_playwright_task(url, action="scrape", allowed_domains=allowed or None)
+        text = await run_playwright_task(
+            url, action="scrape", allowed_domains=allowed or None, include_title=True
+        )
         return {"url": url, "text": text, "verified": bool(text.strip())}
 
     async def research_search(payload: dict[str, Any]) -> dict[str, Any]:
