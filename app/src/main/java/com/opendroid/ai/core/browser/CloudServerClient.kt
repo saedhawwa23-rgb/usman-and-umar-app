@@ -45,6 +45,13 @@ data class CloudServerHealth(
     val activeTasks: Int? = null,
     val recoveryState: String? = null,
     val recoveryReason: String? = null,
+    val readinessMessage: String? = null,
+    val ready: Boolean? = null,
+    val authReady: Boolean? = null,
+    val redisReady: Boolean? = null,
+    val checkpointsReady: Boolean? = null,
+    val checkpointStorageReady: Boolean? = null,
+    val leaseCoordinatorReady: Boolean? = null,
 )
 
 /** Strictly parses `/health`; absent or mistyped readiness flags always make a server ineligible. */
@@ -63,6 +70,13 @@ internal fun parseCloudServerHealth(
     fun long(key: String): Long? = (json?.opt(key) as? Number)?.toLong()
     fun int(key: String): Int? = (json?.opt(key) as? Number)?.toInt()
 
+    val ready = bool("ready")
+    val authReady = bool("auth_ready")
+    val redisReady = bool("redis_ready")
+    val checkpointsReady = bool("checkpoints_ready")
+    val checkpointStorageReady = bool("checkpoint_storage_ready")
+    val leaseReadyFlag = bool("lease_ready")
+    val leaseCoordinatorReady = bool("lease_coordinator_ready")
     val backendStatus = text("status")
     val reportedServerId = text("server_id")
     val instanceId = text("instance_id")
@@ -73,10 +87,18 @@ internal fun parseCloudServerHealth(
     val leaseReady = bool("lease_ready") ?: bool("lease_coordinator_ready")
     val recoveryState = text("recovery_state")
     val recoveryReason = text("recovery_reason")
-    val ready = httpCode == 200 && accepting == true && draining == false &&
-        checkpointReady == true && leaseReady == true
+    val allReady = httpCode == 200 && ready == true && authReady == true && redisReady == true &&
+        checkpointsReady == true && checkpointStorageReady == true && leaseReadyFlag == true &&
+        leaseCoordinatorReady == true && accepting == true && draining == false
     val readinessIssues = buildList {
         if (httpCode != 200) add("HTTP $httpCode")
+        if (ready != true) add("ready=${ready ?: "missing"}")
+        if (authReady != true) add("auth_ready=${authReady ?: "missing"}")
+        if (redisReady != true) add("redis_ready=${redisReady ?: "missing"}")
+        if (checkpointsReady != true) add("checkpoints_ready=${checkpointsReady ?: "missing"}")
+        if (checkpointStorageReady != true) add("checkpoint_storage_ready=${checkpointStorageReady ?: "missing"}")
+        if (leaseReadyFlag != true) add("lease_ready=${leaseReadyFlag ?: "missing"}")
+        if (leaseCoordinatorReady != true) add("lease_coordinator_ready=${leaseCoordinatorReady ?: "missing"}")
         if (accepting != true) add("accepting_new_tasks=${accepting ?: "missing"}")
         if (draining != false) add("draining=${draining ?: "missing"}")
         if (checkpointReady != true) add("checkpoint_ready=${checkpointReady ?: "missing"}")
@@ -87,10 +109,10 @@ internal fun parseCloudServerHealth(
     return CloudServerHealth(
         serverId = serverId,
         serverName = serverName,
-        online = ready,
+        online = allReady,
         latencyMs = latencyMs,
         httpCode = httpCode,
-        error = reason?.takeIf { !ready } ?: if (ready) null else readinessIssues.joinToString(", "),
+        error = reason?.takeIf { !allReady } ?: if (allReady) null else readinessIssues.joinToString(", "),
         backendStatus = backendStatus,
         reportedServerId = reportedServerId,
         instanceId = instanceId,
@@ -102,6 +124,13 @@ internal fun parseCloudServerHealth(
         activeTasks = int("active_tasks"),
         recoveryState = recoveryState,
         recoveryReason = reason,
+        readinessMessage = text("detail") ?: reason,
+        ready = ready,
+        authReady = authReady,
+        redisReady = redisReady,
+        checkpointsReady = checkpointsReady,
+        checkpointStorageReady = checkpointStorageReady,
+        leaseCoordinatorReady = leaseCoordinatorReady,
     )
 }
 
@@ -201,16 +230,40 @@ class CloudServerClient @Inject constructor(
         .build()
 
     private val healthClient = OkHttpClient.Builder()
-        .connectTimeout(4, TimeUnit.SECONDS)
-        .readTimeout(4, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
         .callTimeout(5, TimeUnit.SECONDS)
         .addInterceptor(LocalTunnelReminderInterceptor)
         .build()
 
     /** Probes every enabled configured server concurrently and orders healthy servers by latency. */
     suspend fun pingAll(includeDisabled: Boolean = false): List<CloudServerHealth> = probeServers(
-        settingsRepository.cloudServers.first().filter { (includeDisabled || it.enabled) && it.url.isNotBlank() },
+        settingsRepository.cloudServers.first().filter { it.role == "OPENSWARM" && (includeDisabled || it.enabled) && it.url.isNotBlank() },
     )
+
+    suspend fun testOpenSwarmConnection(url: String, token: String, onWaking: () -> Unit = {}): CloudServerHealth {
+        val normalized = com.opendroid.ai.data.repository.validateOpenSwarmTunnelUrl(url)
+        val temporary = CloudServerConfig("connection-test", "OpenSwarm Colab", normalized, true, token, "OPENSWARM")
+        val first = withContext(Dispatchers.IO) { probe(temporary) }
+        if (!first.online && first.error.orEmpty().contains("timeout", ignoreCase = true)) {
+            onWaking()
+            delay(30_000)
+            return withContext(Dispatchers.IO) { probe(temporary) }
+        }
+        return first
+    }
+
+    suspend fun hasOnlineOpenSwarmServer(onWaking: () -> Unit = {}): Boolean {
+        val server = settingsRepository.cloudServers.first()
+            .firstOrNull { it.role == "OPENSWARM" && it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
+            ?: return false
+        val first = withContext(Dispatchers.IO) { probe(server) }
+        if (first.online) return true
+        if (!first.error.orEmpty().contains("timeout", ignoreCase = true)) return false
+        onWaking()
+        delay(30_000)
+        return withContext(Dispatchers.IO) { probe(server).online }
+    }
 
     suspend fun execute(
         taskId: String,
@@ -225,12 +278,12 @@ class CloudServerClient @Inject constructor(
         onDispatch: suspend (String) -> Unit = {},
     ): String = withContext(Dispatchers.IO) {
         val configured = settingsRepository.cloudServers.first()
-        val candidates = configured.filter { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
+        val candidates = configured.filter { it.role == "OPENSWARM" && it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
         if (candidates.isEmpty()) {
             throw CloudRequestException(
                 stage = "configuration",
                 requestUrl = null,
-                responseBody = "Enable and configure at least one cloud server in Remote settings.",
+                responseBody = "OpenSwarm server offline. Start the Colab notebook and try again.",
             )
         }
 
@@ -245,7 +298,7 @@ class CloudServerClient @Inject constructor(
                 stage = "health_check",
                 requestUrl = "${normalizeServerBase(selected.url)}/health",
                 httpStatus = health.firstOrNull()?.httpCode,
-                responseBody = "No enabled OpenSwarm server reported full readiness from /health. $healthDetail",
+                responseBody = "OpenSwarm server offline. Start the Colab notebook and try again. $healthDetail",
             )
         }
         val rankedHealthy = health.asSequence()
@@ -356,7 +409,7 @@ class CloudServerClient @Inject constructor(
         require(taskId.matches(Regex("[A-Za-z0-9._-]{1,128}"))) { "Invalid cloud task ID." }
         require(action in setOf("pause", "cancel", "resume")) { "Unsupported cloud task control action." }
         val configured = settingsRepository.cloudServers.first()
-            .filter { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
+            .filter { it.role == "OPENSWARM" && it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
         check(configured.isNotEmpty()) { "Enable and configure at least one cloud server in Remote settings." }
         // Controls target already-running work, so a draining/not-ready server
         // with a live HTTP health endpoint must remain reachable for pause/cancel.
@@ -499,7 +552,7 @@ class CloudServerClient @Inject constructor(
     /** Reads the real agent roster and adapter readiness from the fastest healthy configured backend. */
     suspend fun fetchOpenSwarmAgents(): List<RemoteOpenSwarmAgent> {
         val configured = settingsRepository.cloudServers.first()
-            .filter { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
+            .filter { it.role == "OPENSWARM" && it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
         check(configured.isNotEmpty()) { "Enable and configure a cloud server first." }
         val healthy = probeServers(configured).filter { it.online }
         check(healthy.isNotEmpty()) { "No configured OpenSwarm server is healthy." }

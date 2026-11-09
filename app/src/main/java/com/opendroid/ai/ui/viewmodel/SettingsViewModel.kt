@@ -37,6 +37,8 @@ import com.opendroid.ai.data.repository.ProviderCredentialPersistenceState
 import com.opendroid.ai.data.repository.CloudServerConfig
 import com.opendroid.ai.core.browser.CloudServerClient
 import com.opendroid.ai.core.browser.CloudServerHealth
+import com.opendroid.ai.core.browser.OpenSwarmConnectionState
+import com.opendroid.ai.core.browser.mapOpenSwarmHealth
 import com.opendroid.ai.core.service.CloudServerKeepAliveService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import okhttp3.OkHttpClient
@@ -72,6 +74,46 @@ class SettingsViewModel @Inject constructor(
     val cloudKeepAliveEnabled: StateFlow<Boolean> = settingsRepository.cloudKeepAliveEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
     private var cloudHealthJob: Job? = null
+    data class OpenSwarmConnectionCheck(
+        val state: OpenSwarmConnectionState,
+        val message: String,
+    )
+    private val mutableOpenSwarmConnectionCheck = MutableStateFlow<OpenSwarmConnectionCheck?>(null)
+    val openSwarmConnectionCheck: StateFlow<OpenSwarmConnectionCheck?> = mutableOpenSwarmConnectionCheck.asStateFlow()
+
+    fun addOpenSwarmServer(name: String, url: String, token: String) = viewModelScope.launch {
+        runCatching { settingsRepository.addCloudServer(name, url, token) }
+            .onFailure { mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(OpenSwarmConnectionState.OFFLINE, it.message ?: "Could not save OpenSwarm server.") }
+    }
+
+    fun testOpenSwarmConnection(url: String, token: String) = viewModelScope.launch(Dispatchers.IO) {
+        mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(OpenSwarmConnectionState.WAKING, "Checking OpenSwarm /health…")
+        runCatching {
+            cloudServerClient.testOpenSwarmConnection(url, token) {
+                mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(
+                    OpenSwarmConnectionState.WAKING,
+                    "Waking — timeout on first check; retrying once in 30 seconds…",
+                )
+            }
+        }.onSuccess { health ->
+            val state = mapOpenSwarmHealth(
+                health.httpCode, health.ready, health.authReady, health.redisReady,
+                health.checkpointsReady, health.checkpointStorageReady, health.leaseReady,
+                health.leaseCoordinatorReady, health.acceptingNewTasks, health.draining,
+                attempt = 2,
+            )
+            mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(
+                state,
+                if (state == OpenSwarmConnectionState.ONLINE) "OpenSwarm server Online · HTTP 200"
+                else health.readinessMessage ?: health.error ?: "OpenSwarm server is not ready (${health.httpCode ?: "no response"}).",
+            )
+        }.onFailure { failure ->
+            mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(
+                OpenSwarmConnectionState.OFFLINE,
+                failure.message ?: "OpenSwarm connection test failed.",
+            )
+        }
+    }
 
     fun addCloudServer(name: String, url: String, token: String) = viewModelScope.launch {
         runCatching { settingsRepository.addCloudServer(name, url, token) }

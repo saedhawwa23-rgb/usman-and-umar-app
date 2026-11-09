@@ -11,4 +11,5 @@ data class CloudServerEntity(
     val url: String,
     val enabled: Boolean = true,
     val position: Int = 0,
+    val role: String = "OPENSWARM",
 )

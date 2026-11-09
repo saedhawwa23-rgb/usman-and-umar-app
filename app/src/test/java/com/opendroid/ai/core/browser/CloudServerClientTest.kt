@@ -67,37 +67,37 @@ class CloudServerClientTest {
     }
 
     @Test
-    fun `redis health is eligible using the four readiness flags without drive or redis flags`() {
+    fun `health requires the exact Colab readiness flags`() {
         val health = parseCloudServerHealth(
             "redis-node", "Redis node", 200,
             """{"accepting_new_tasks":true,"draining":false,"checkpoint_ready":true,"lease_ready":true}""",
         )
 
-        assertTrue(health.online)
+        assertFalse(health.online)
         assertEquals(true, health.checkpointReady)
         assertEquals(true, health.leaseReady)
         assertEquals(null, health.error)
     }
 
     @Test
-    fun `legacy checkpoint and lease aliases remain eligible without Drive or Redis readiness gates`() {
+    fun `legacy checkpoint and lease aliases do not satisfy exact readiness gates`() {
         val health = parseCloudServerHealth(
             "redis-node", "Redis node", 200,
             """{"status":"ready","accepting_new_tasks":true,"draining":false,"drive_ready":false,"checkpoint_storage_ready":true,"lease_coordinator_ready":true}""",
         )
 
-        assertTrue(health.online)
+        assertFalse(health.online)
         assertEquals(true, health.checkpointReady)
         assertEquals(true, health.leaseReady)
-        assertEquals(null, health.error)
+        assertTrue(health.error.orEmpty().contains("ready="))
     }
 
     @Test
     fun `redis health eligibility rejects each missing or false required readiness flag`() {
-        val healthy = """{"accepting_new_tasks":true,"draining":false,"checkpoint_ready":true,"lease_ready":true}"""
+        val healthy = readyHealthBody
         val notAccepting = healthy.replace("\"accepting_new_tasks\":true", "\"accepting_new_tasks\":false")
         val draining = healthy.replace("\"draining\":false", "\"draining\":true")
-        val missingCheckpoint = healthy.replace("\"checkpoint_ready\":true,", "")
+        val missingCheckpoint = healthy.replace("\"checkpoints_ready\":true,", "")
         val missingLease = healthy.replace(",\"lease_ready\":true", "")
 
         listOf(notAccepting, draining, missingCheckpoint, missingLease).forEach { body ->
@@ -370,7 +370,7 @@ class CloudServerClientTest {
         return SettingsRepository(dataStore, TestCredentialStore(token), runStartupMigration = false)
     }
 
-    private val readyHealthBody = """{"status":"ready","server_id":"backend-1","instance_id":"instance-a","uptime_seconds":1234,"accepting_new_tasks":true,"draining":false,"redis_ready":true,"checkpoint_storage_ready":true,"lease_coordinator_ready":true,"active_tasks":3,"recovery_state":"recovering","recovery_reason":"restoring checkpoint"}"""
+    private val readyHealthBody = """{"status":"ready","ready":true,"auth_ready":true,"server_id":"backend-1","instance_id":"instance-a","uptime_seconds":1234,"accepting_new_tasks":true,"draining":false,"redis_ready":true,"checkpoints_ready":true,"checkpoint_storage_ready":true,"lease_ready":true,"lease_coordinator_ready":true,"active_tasks":3,"recovery_state":"recovering","recovery_reason":"restoring checkpoint"}"""
 
     private class TestCredentialStore(private val serverToken: String) : ProviderCredentialStore {
         override val recoveryState: StateFlow<ProviderCredentialRecoveryState> =

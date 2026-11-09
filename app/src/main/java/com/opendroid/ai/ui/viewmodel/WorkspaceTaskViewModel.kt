@@ -14,6 +14,7 @@ import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.opendroid.ai.core.agent.SmartLocalAiRouter
 import com.opendroid.ai.core.browser.BrowserUseRemoteProtocol
 import com.opendroid.ai.core.browser.CloudServerClient
+import com.opendroid.ai.core.browser.requireOpenSwarmOnline
 import com.opendroid.ai.core.browser.RemoteOpenSwarmAgent
 import com.opendroid.ai.core.termux.TermuxIntegration
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
@@ -32,7 +33,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
+private const val ENABLE_NON_OPENSWARM_ROUTES = false
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -244,9 +246,26 @@ class WorkspaceTaskViewModel @Inject constructor(
                 _message.value = "This task has no supported execution mode."
                 return@launch
             }
+            if (!ENABLE_NON_OPENSWARM_ROUTES && mode != TaskExecutionMode.CLOUD_OPENSWARM) {
+                _message.value = "Only the OpenSwarm cloud route is enabled in this build."
+                return@launch
+            }
             if (mode != TaskExecutionMode.TERMUX_SCRIPT && !hasValidatedInternet()) {
                 moveToNetworkWait(task)
                 return@launch
+            }
+            if (mode == TaskExecutionMode.CLOUD_OPENSWARM) {
+                val online = runCatching {
+                    cloudServerClient.hasOnlineOpenSwarmServer {
+                        _message.value = "OpenSwarm server Waking — retrying once in 30 seconds…"
+                    }
+                }.getOrDefault(false)
+                val eligibility = runCatching { requireOpenSwarmOnline(online) }
+                if (eligibility.isFailure) {
+                    _message.value = eligibility.exceptionOrNull()?.message
+                        ?: "OpenSwarm server offline. Start the Colab notebook and try again."
+                    return@launch
+                }
             }
             try {
                 val running = prepareRunning(task)

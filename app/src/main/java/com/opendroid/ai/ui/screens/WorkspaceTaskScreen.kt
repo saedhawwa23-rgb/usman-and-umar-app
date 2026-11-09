@@ -67,6 +67,8 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 private enum class TaskuaryPage(val label: String) { INBOX("Inbox"), DASHBOARD("Dashboard"), BOARD("Kanban") }
+private const val ENABLE_NON_OPENSWARM_ROUTES = false
+private val HIDDEN_LOCAL_AGENT_IDS = setOf("terminal", "files", "browser", "delivery")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,7 +94,7 @@ fun WorkspaceTaskScreen(
     val openSwarmAgents by viewModel.openSwarmAgents.collectAsState()
     val openSwarmRosterLoading by viewModel.openSwarmRosterLoading.collectAsState()
     var rawText by remember { mutableStateOf("") }
-    var mode by remember { mutableStateOf(TaskExecutionMode.LOCAL_AI_APP) }
+    var mode by remember { mutableStateOf(TaskExecutionMode.CLOUD_OPENSWARM) }
     var cloudTarget by remember { mutableStateOf("auto") }
     var providerPackage by remember(installedAiApps) {
         val saved = InstalledAiAppPreferences.selectedPackage(context)
@@ -160,7 +162,7 @@ fun WorkspaceTaskScreen(
             }
             item {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ModeMenu(mode = mode, onSelect = { mode = it }, modifier = Modifier.weight(1f))
+                    ModeMenu(mode = mode, onSelect = { mode = it }, modifier = Modifier.weight(1f), enableNonOpenSwarmRoutes = ENABLE_NON_OPENSWARM_ROUTES)
                     if (mode == TaskExecutionMode.LOCAL_AI_APP) {
                         Column(Modifier.weight(1f)) {
                             ProviderMenu(
@@ -225,7 +227,7 @@ fun WorkspaceTaskScreen(
                         Text("OPEN SWARM AGENT TEAM", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
                         Text(
                             if (openSwarmAgents.isEmpty()) "Load the real agent roster from a healthy configured cloud server."
-                            else "${openSwarmAgents.size} registered specialist agents",
+                            else "${openSwarmAgents.count { ENABLE_NON_OPENSWARM_ROUTES || it.id !in HIDDEN_LOCAL_AGENT_IDS }} registered specialist agents",
                             color = AppTheme.colors.textPrimary,
                             fontSize = 14.sp,
                         )
@@ -234,7 +236,7 @@ fun WorkspaceTaskScreen(
                             enabled = !openSwarmRosterLoading && cloudServers.any { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() },
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text(if (openSwarmRosterLoading) "Checking agent team..." else "Refresh OpenSwarm agents") }
-                        openSwarmAgents.forEach { agent ->
+                        openSwarmAgents.filter { ENABLE_NON_OPENSWARM_ROUTES || it.id !in HIDDEN_LOCAL_AGENT_IDS }.forEach { agent ->
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Column(Modifier.weight(1f)) {
                                     Text(agent.name, color = AppTheme.colors.textPrimary, fontSize = 13.sp)
@@ -250,7 +252,7 @@ fun WorkspaceTaskScreen(
                     }
                 }
             }
-            item {
+            if (ENABLE_NON_OPENSWARM_ROUTES) item {
                 Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
                     Column(Modifier.fillMaxWidth().padding(12.dp)) {
                         Text("CLOUD BROWSER USE SETTINGS", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
@@ -322,7 +324,7 @@ fun WorkspaceTaskScreen(
                     }
                 }
             }
-            item {
+            if (ENABLE_NON_OPENSWARM_ROUTES) item {
                 Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
                     Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) {
@@ -379,7 +381,7 @@ fun WorkspaceTaskScreen(
 }
 
 @Composable
-private fun ModeMenu(mode: TaskExecutionMode, onSelect: (TaskExecutionMode) -> Unit, modifier: Modifier = Modifier) {
+private fun ModeMenu(mode: TaskExecutionMode, onSelect: (TaskExecutionMode) -> Unit, modifier: Modifier = Modifier, enableNonOpenSwarmRoutes: Boolean = false) {
     var expanded by remember { mutableStateOf(false) }
     Column(modifier) {
         Button(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
@@ -390,7 +392,7 @@ private fun ModeMenu(mode: TaskExecutionMode, onSelect: (TaskExecutionMode) -> U
             }, fontSize = 12.sp)
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            TaskExecutionMode.entries.forEach { item ->
+            TaskExecutionMode.entries.filter { enableNonOpenSwarmRoutes || it == TaskExecutionMode.CLOUD_OPENSWARM }.forEach { item ->
                 DropdownMenuItem(text = { Text(item.name.replace('_', ' ')) }, onClick = { onSelect(item); expanded = false })
             }
         }
@@ -449,11 +451,11 @@ private fun CloudTargetMenu(
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val options = listOf("auto" to "Auto / Load Balance") + servers
-        .filter { it.enabled }
+    val options = listOf("auto" to "OpenSwarm (online server)") + servers
+        .filter { it.enabled && it.role == "OPENSWARM" }
         .map { it.id to it.name.ifBlank { "Cloud Server" } }
     val selectedLabel = options.firstOrNull { it.first == target }?.second
-        ?: if (target == "auto") "Auto / Load Balance" else "Selected server"
+        ?: if (target == "auto") "OpenSwarm (online server)" else "Selected server"
     Column(modifier) {
         Button(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
             Text(selectedLabel, fontSize = 12.sp)

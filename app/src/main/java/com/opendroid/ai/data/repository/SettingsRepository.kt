@@ -13,6 +13,7 @@ import com.opendroid.ai.core.security.CredentialStoreResult
 import com.opendroid.ai.core.security.ProviderCredentialId
 import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
 import com.opendroid.ai.core.security.ProviderCredentialStore
+import com.opendroid.ai.core.browser.validateOpenSwarmTunnelUrl
 import com.opendroid.ai.data.models.AutoReplyConfig
 import com.opendroid.ai.data.models.LLMConfig
 import com.opendroid.ai.data.db.dao.CloudServerDao
@@ -54,6 +55,7 @@ data class CloudServerConfig(
     val url: String,
     val enabled: Boolean = true,
     @kotlinx.serialization.Transient val token: String = "",
+    val role: String = "OPENSWARM",
 )
 
 internal fun normalizeCloudServerUrl(value: String): String {
@@ -100,7 +102,7 @@ class SettingsRepository internal constructor(
     val cloudServers: Flow<List<CloudServerConfig>> = if (cloudServerDao != null) {
         cloudServerDao.observeAll().map { rows ->
             rows.map { row ->
-                CloudServerConfig(row.id, row.name, row.url, row.enabled, readDynamicCloudToken(row.id))
+                CloudServerConfig(row.id, row.name, row.url, row.enabled, readDynamicCloudToken(row.id), row.role)
             }
         }.flowOn(Dispatchers.IO)
     } else {
@@ -149,20 +151,20 @@ class SettingsRepository internal constructor(
         check(cloudServers.first().size < MAX_CLOUD_SERVERS) {
             "A cluster can contain at most $MAX_CLOUD_SERVERS cloud servers."
         }
-        val server = CloudServerConfig(UUID.randomUUID().toString(), name.trim().ifBlank { "Cloud Server" }.take(80), normalizeCloudServerUrl(url))
+        val server = CloudServerConfig(UUID.randomUUID().toString(), name.trim().ifBlank { "OpenSwarm Colab" }.take(80), validateOpenSwarmTunnelUrl(url), role = "OPENSWARM")
         saveCloudServer(server, token)
         return server
     }
 
     suspend fun saveCloudServer(server: CloudServerConfig, token: String = server.token) {
-        val normalized = server.copy(name = server.name.trim().ifBlank { "Cloud Server" }.take(80), url = normalizeCloudServerUrl(server.url), token = "")
+        val normalized = server.copy(name = server.name.trim().ifBlank { "OpenSwarm Colab" }.take(80), url = validateOpenSwarmTunnelUrl(server.url), token = "", role = "OPENSWARM")
         saveDynamicCloudToken(normalized.id, token)
         if (cloudServerDao != null) {
             val rows = cloudServerDao.observeAll().first()
             val position = rows.firstOrNull { it.id == normalized.id }?.position
                 ?: ((rows.maxOfOrNull { it.position } ?: -1) + 1)
             cloudServerDao.upsert(
-                CloudServerEntity(normalized.id, normalized.name, normalized.url, normalized.enabled, position)
+                CloudServerEntity(normalized.id, normalized.name, normalized.url, normalized.enabled, position, normalized.role)
             )
         } else {
             val current = cloudServers.first().map { it.copy(token = "") }.filterNot { it.id == normalized.id }
@@ -198,7 +200,7 @@ class SettingsRepository internal constructor(
         } ?: legacyCloudServers(preferences)
         if (legacy.isEmpty()) return
         dao.upsertAll(legacy.mapIndexed { index, server ->
-            CloudServerEntity(server.id, server.name, normalizeCloudServerUrl(server.url), server.enabled, index)
+            CloudServerEntity(server.id, server.name, normalizeCloudServerUrl(server.url), server.enabled, index, "OPENSWARM")
         })
         dataStore.edit { it.remove(cloudServersKey) }
     }

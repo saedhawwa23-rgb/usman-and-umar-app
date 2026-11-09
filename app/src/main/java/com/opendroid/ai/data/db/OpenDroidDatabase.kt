@@ -78,7 +78,7 @@ import com.opendroid.ai.data.db.dao.SocialAuditLogDao
         CloudServerEntity::class,
         GoogleDriveAccountEntity::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = true
 )
 abstract class OpenDroidDatabase : RoomDatabase() {
@@ -571,6 +571,13 @@ abstract class OpenDroidDatabase : RoomDatabase() {
                 database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryError TEXT")
                 database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryRetryable INTEGER")
                 database.execSQL("ALTER TABLE conversations ADD COLUMN imageBase64 TEXT")
+            }
+        }
+
+        /** Adds a non-secret role label to the existing cloud server profiles. */
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE cloud_servers ADD COLUMN role TEXT NOT NULL DEFAULT 'OPENSWARM'")
             }
         }
     }

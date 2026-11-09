@@ -99,6 +99,7 @@ fun SettingsScreen(
     val cloudServerHealth by viewModel.cloudServerHealth.collectAsState()
     val pingingCloudServers by viewModel.pingingCloudServers.collectAsState()
     val cloudKeepAliveEnabled by viewModel.cloudKeepAliveEnabled.collectAsState()
+    val openSwarmConnectionCheck by viewModel.openSwarmConnectionCheck.collectAsState()
     var expandedCloudServerIds by remember { mutableStateOf(emptySet<String>()) }
     var newServerName by remember { mutableStateOf("") }
     var newServerUrl by remember { mutableStateOf("") }
@@ -421,17 +422,29 @@ fun SettingsScreen(
                             Text("Detected tunnel URL is ready. Enter its APP_CLIENT_TOKEN, then add the server.", color = AccentCyan, fontSize = 11.sp)
                         }
                         OutlinedTextField(value = newServerName, onValueChange = { newServerName = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server name") })
-                        OutlinedTextField(value = newServerUrl, onValueChange = { newServerUrl = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server HTTPS URL") })
+                        OutlinedTextField(value = newServerUrl, onValueChange = { newServerUrl = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("OpenSwarm tunnel URL (HTTPS)") }, placeholder = { Text("https://name.loca.lt") })
                         OutlinedTextField(value = newServerToken, onValueChange = { newServerToken = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("New server APP_CLIENT_TOKEN") })
                         Button(
                             onClick = {
-                                viewModel.addCloudServer(newServerName, newServerUrl, newServerToken)
+                                viewModel.addOpenSwarmServer(newServerName, newServerUrl, newServerToken)
                                 newServerName = ""
                                 newServerUrl = ""
                                 newServerToken = ""
                             },
                             enabled = newServerUrl.isNotBlank() && newServerToken.isNotBlank() && cloudServers.size < 10,
                         ) { Text(if (cloudServers.size < 10) "+ Add Cloud Server" else "Cluster Full") }
+                        OutlinedButton(
+                            onClick = { viewModel.testOpenSwarmConnection(newServerUrl, newServerToken) },
+                            enabled = newServerUrl.isNotBlank() && newServerToken.isNotBlank(),
+                        ) { Text("Test connection") }
+                        openSwarmConnectionCheck?.let { check ->
+                            val color = when (check.state) {
+                                com.opendroid.ai.core.browser.OpenSwarmConnectionState.ONLINE -> Color(0xFF35C759)
+                                com.opendroid.ai.core.browser.OpenSwarmConnectionState.WAKING -> Color(0xFFE5A23B)
+                                com.opendroid.ai.core.browser.OpenSwarmConnectionState.OFFLINE -> Color(0xFFE5484D)
+                            }
+                            Text(check.message, color = color, fontSize = 12.sp)
+                        }
 
                         if (showColabWizard) {
                             ColabSetupWizardDialog(

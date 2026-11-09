@@ -329,6 +329,22 @@ class OpenDroidDatabaseMigrationTest {
     }
 
     @Test
+    fun `migration 14 to 15 preserves configured server and defaults its role to OpenSwarm`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.deleteDatabase(TEST_DATABASE)
+        helper.createDatabase(databasePath, 14).use { db ->
+            db.execSQL("INSERT INTO cloud_servers (id,name,url,enabled,position) VALUES ('server-1','Colab','https://sample.loca.lt',1,0)")
+        }
+        val migrated = helper.runMigrationsAndValidate(databasePath, 15, true, OpenDroidDatabase.MIGRATION_14_15)
+        migrated.query("SELECT name,url,role FROM cloud_servers WHERE id='server-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Colab", cursor.getString(0))
+            assertEquals("https://sample.loca.lt", cursor.getString(1))
+            assertEquals("OPENSWARM", cursor.getString(2))
+        }
+    }
+
+    @Test
     fun `Room preserves ten Colab server rows and long tunnel URLs without truncation`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val providedTunnelUrls = listOf(
