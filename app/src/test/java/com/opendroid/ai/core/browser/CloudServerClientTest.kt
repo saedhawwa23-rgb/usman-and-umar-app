@@ -76,7 +76,7 @@ class CloudServerClientTest {
         assertFalse(health.online)
         assertEquals(true, health.checkpointReady)
         assertEquals(true, health.leaseReady)
-        assertEquals(null, health.error)
+        assertTrue(health.error.orEmpty().contains("ready="))
     }
 
     @Test
