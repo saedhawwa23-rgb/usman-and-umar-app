@@ -34,13 +34,14 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlin.coroutines.coroutineContext
-private const val ENABLE_NON_OPENSWARM_ROUTES = false
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+
+private const val ENABLE_NON_OPENSWARM_ROUTES = false
 
 data class BrowserUseRunState(
     val phase: Phase = Phase.IDLE,

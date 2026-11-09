@@ -242,7 +242,7 @@ class CloudServerClient @Inject constructor(
     )
 
     suspend fun testOpenSwarmConnection(url: String, token: String, onWaking: () -> Unit = {}): CloudServerHealth {
-        val normalized = com.opendroid.ai.data.repository.validateOpenSwarmTunnelUrl(url)
+        val normalized = validateOpenSwarmTunnelUrl(url)
         val temporary = CloudServerConfig("connection-test", "OpenSwarm Colab", normalized, true, token, "OPENSWARM")
         val first = withContext(Dispatchers.IO) { probe(temporary) }
         if (!first.online && first.error.orEmpty().contains("timeout", ignoreCase = true)) {
