@@ -17,6 +17,18 @@ The backend has a specialist registry for Manager/Orchestrator, Planner, Researc
 
 Task lifecycle data, ordered task events, results, execution receipts, checkpoints, and lease metadata are stored as one JSON document in Upstash Redis under `task_{task_id}`. The adapter uses the Upstash REST API with JSON-array `SET` and `GET` commands through Python `requests`. Agent persistent memory remains a separate local SQLite feature; it is not part of task checkpoint persistence.
 
+Production task persistence is Redis-only: the Colab notebook requires `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`, and validates a live JSON round-trip before starting the API. Google Drive and Firestore are not required by this backend. A local SQLite task-state fallback exists only for development and tests and reports the service as not ready; it must not be used as evidence that a production Colab node is eligible.
+
+## Android Unified Agent and tool discovery
+
+The Android app exposes three distinct chat targets: the direct API-model conversation, direct Cloud OpenSwarm execution, and **Unified Agent**. Unified Agent uses the user's selected API provider for planning and tool calls, while dispatching registered tools through local Android actions and the authenticated OpenSwarm connector. It is an Android client-side loop; it does not turn the backend's request/response task API into a background queue or imply that the API provider itself can access the phone.
+
+Before planning, the agent refreshes the backend tool capabilities and registers only tools with an app-owned argument schema, a configured adapter, and a recognized risk label. High-risk or destructive calls wait for an explicit, one-call approval in the Android UI; secret-like argument fields are redacted in the dialog. The agent is bounded to 12 model steps and 10 minutes, treats tool output as untrusted input, records visible activity in chat, and does not automatically retry a failed tool dispatch that may already have produced side effects.
+
+FMHY discovery is an Android connector feature implemented through the backend's existing `browser.extract` capability. It requests only `https://fmhy.net` with `allowed_domains` fixed to `fmhy.net`, validates and bounds extracted public HTTPS links, then exposes read-only tools whose host is fixed to each discovered resource and whose sole argument is a local path. The model cannot override the host or allowlist through those tools. Extracted content and links remain untrusted data; discovery does not authorize login, CAPTCHA handling, purchases, or other account actions.
+
+Chat-message delivery state and the queued outbox are persisted locally by the Android Room database, independently of the backend's Redis task documents. Messages appear in the UI immediately and are updated through `QUEUED`, `SENDING`, `SENT`, `COMPLETED`, or `FAILED` states; this local outbox is not a substitute for remote Redis task persistence. The Redis lease/update limitations described below still apply: REST GET followed by SET is best-effort and is not atomic distributed coordination.
+
 ## Upstash configuration
 
 Create an Upstash Redis database and copy its REST URL and REST token. Add these values as Colab Secrets named `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`, enable notebook access, and keep the token private. Also configure `APP_CLIENT_TOKEN`; use the same value in the Android app. The notebook runs a temporary JSON `SET`/`GET`/`DEL` probe before starting FastAPI and does not print secret contents.

@@ -118,6 +118,7 @@ fun ChatScreen(
     val visibleAgentState by viewModel.visibleAgentState.collectAsState()
     val cloudTaskState by viewModel.cloudTaskState.collectAsState()
     val chatError by viewModel.chatError.collectAsState()
+    val pendingConnectorApproval by viewModel.pendingConnectorApproval.collectAsState()
     // Id of whichever chat (if any) has a task actively running, regardless of which
     // chat is currently displayed - drives the chat-picker's "still running" indicator.
     val runningSessionId by viewModel.runningSessionId.collectAsState()
@@ -714,13 +715,23 @@ fun ChatScreen(
                     ) {
                         Box {
                             FilterChip(
-                                selected = chatTarget == ChatTarget.CLOUD_OPENSWARM,
+                                selected = chatTarget != ChatTarget.API_MODEL,
                                 onClick = { targetMenuExpanded = true },
-                                label = { Text(if (chatTarget == ChatTarget.CLOUD_OPENSWARM) "Cloud OpenSwarm" else "API Model", fontSize = 11.sp) },
+                                label = {
+                                    Text(
+                                        when (chatTarget) {
+                                            ChatTarget.API_MODEL -> "API Model"
+                                            ChatTarget.CLOUD_OPENSWARM -> "Cloud OpenSwarm"
+                                            ChatTarget.UNIFIED_AGENT -> "Unified Agent"
+                                        },
+                                        fontSize = 11.sp,
+                                    )
+                                },
                             )
                             DropdownMenu(expanded = targetMenuExpanded, onDismissRequest = { targetMenuExpanded = false }) {
                                 DropdownMenuItem(text = { Text("API Model") }, onClick = { chatTarget = ChatTarget.API_MODEL; targetMenuExpanded = false })
                                 DropdownMenuItem(text = { Text("Cloud OpenSwarm") }, onClick = { chatTarget = ChatTarget.CLOUD_OPENSWARM; targetMenuExpanded = false })
+                                DropdownMenuItem(text = { Text("Unified Agent (API + tools)") }, onClick = { chatTarget = ChatTarget.UNIFIED_AGENT; targetMenuExpanded = false })
                             }
                         }
                         FilterChip(
@@ -972,7 +983,7 @@ fun ChatScreen(
                         } else {
                             selectedPluginIds - pluginId
                         }
-                        if (checked) chatTarget = ChatTarget.CLOUD_OPENSWARM
+                        if (checked && chatTarget == ChatTarget.API_MODEL) chatTarget = ChatTarget.CLOUD_OPENSWARM
                     },
                     onBack = { showPluginSelector = false },
                     onConfirm = {
@@ -1061,6 +1072,25 @@ fun ChatScreen(
                     }) { Icon(Icons.Default.Share, null); Spacer(Modifier.width(4.dp)); Text("Share") }
                 }
             }
+        )
+    }
+    pendingConnectorApproval?.let { pending ->
+        AlertDialog(
+            onDismissRequest = viewModel::denyConnectorToolCall,
+            containerColor = DarkSurface,
+            title = { Text("Approve this tool call?", color = TextPrimary) },
+            text = {
+                Text(
+                    "${pending.toolName}\n\nArguments:\n${pending.argumentsJson}\n\nApproval applies to this call only.",
+                    color = TextSecondary,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::approveConnectorToolCall) { Text("Approve") }
+            },
+            dismissButton = {
+                TextButton(onClick = viewModel::denyConnectorToolCall) { Text("Deny") }
+            },
         )
     }
 }

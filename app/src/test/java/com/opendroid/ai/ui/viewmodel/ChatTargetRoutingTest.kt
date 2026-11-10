@@ -22,5 +22,9 @@ class ChatTargetRoutingTest {
             ChatTarget.CLOUD_OPENSWARM,
             resolveChatTarget(ChatTarget.CLOUD_OPENSWARM, emptyList()),
         )
+        assertEquals(
+            ChatTarget.UNIFIED_AGENT,
+            resolveChatTarget(ChatTarget.UNIFIED_AGENT, listOf("openswarm_agent")),
+        )
     }
 }
