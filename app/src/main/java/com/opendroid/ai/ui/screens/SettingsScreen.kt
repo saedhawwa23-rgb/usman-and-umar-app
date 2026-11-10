@@ -61,7 +61,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import android.content.Context
 import android.content.ClipboardManager
 import android.content.Intent
-import android.net.Uri
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.launch
@@ -410,7 +410,7 @@ fun SettingsScreen(
                                     showColabWizard = true
                                     colabWizardStep = 0
                                     runCatching {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(COLAB_NOTEBOOK_URL)))
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, COLAB_NOTEBOOK_URL.toUri()))
                                     }
                                 },
                                 enabled = cloudServers.size < SettingsRepository.MAX_CLOUD_SERVERS,
@@ -454,7 +454,7 @@ fun SettingsScreen(
                                 onDismiss = { showColabWizard = false },
                                 onLaunchNotebook = {
                                     runCatching {
-                                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(COLAB_NOTEBOOK_URL)))
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, COLAB_NOTEBOOK_URL.toUri()))
                                     }
                                 },
                             )
