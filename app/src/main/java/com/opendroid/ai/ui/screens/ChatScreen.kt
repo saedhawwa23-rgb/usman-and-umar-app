@@ -256,14 +256,11 @@ fun ChatScreen(
         chatTarget = ChatTarget.API_MODEL
     }
 
-    // Scroll to bottom on history change. Keyed on currentSessionId too: keying on
-    // history.size alone left the scroll position from the PREVIOUS chat in place
-    // whenever the newly switched-to chat happened to have the same message count -
-    // including currentSessionId forces a re-anchor to the bottom on every chat switch.
-    LaunchedEffect(currentSessionId, history.size, visibleAgentState) {
-        if (history.isNotEmpty()) {
-            listState.animateScrollToItem(history.size - 1)
-        }
+    // With reverseLayout, item 0 is the visual bottom. A newly received message
+    // becomes item 0 and is brought into view; changing sessions also re-anchors
+    // even when both conversations contain the same number of messages.
+    LaunchedEffect(currentSessionId, history.size, history.lastOrNull()?.id, visibleAgentState) {
+        listState.animateScrollToItem(0)
     }
 
     val speechRecognizer = remember { SpeechRecognitionEngine(context) }
@@ -509,6 +506,7 @@ fun ChatScreen(
                 // Messages List
                 LazyColumn(
                     state = listState,
+                    reverseLayout = true,
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
@@ -541,7 +539,7 @@ fun ChatScreen(
                             }
                         }
                     }
-                    items(history, key = { it.id }) { msg ->
+                    items(history.asReversed(), key = { it.id }) { msg ->
                         ChatBubble(
                             message = msg,
                             viewModel = viewModel,
@@ -1022,7 +1020,22 @@ fun ChatScreen(
                         scope.launch {
                             attachmentSheetState.hide()
                             showAttachmentSheet = false
-                            documentLauncher.launch(arrayOf("text/*", "application/json", "application/xml", "application/csv", "application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+                            documentLauncher.launch(
+                                arrayOf(
+                                    "text/*",
+                                    "application/json",
+                                    "application/xml",
+                                    "application/csv",
+                                    "application/pdf",
+                                    "application/msword",
+                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                    "application/vnd.android.package-archive",
+                                    "application/zip",
+                                    "application/x-zip-compressed",
+                                    "application/octet-stream",
+                                    "application/x-binary",
+                                )
+                            )
                         }
                     }
                     AttachmentOption("Plugins & AI apps", Icons.Default.Extension) { showPluginSelector = true }

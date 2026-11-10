@@ -4,7 +4,7 @@ import java.net.URI
 import java.util.Locale
 
 internal const val COLAB_NOTEBOOK_URL =
-    "https://colab.research.google.com/github/saedhawwa23-rgb/usman-and-umar-app/blob/feature/hybrid-task-orchestrator/USMAN_COLAB_BACKEND.ipynb"
+    "https://colab.research.google.com/github/saedhawwa23-rgb/usman-and-umar-app/blob/feature/hybrid-task-orchestrator/USMAN_OPENSWARM_NODE.ipynb"
 
 /** Extract only HTTPS Colab tunnel origins from clipboard text; ignore unrelated or unsafe URLs. */
 internal fun findColabTunnelUrl(clipboardText: String?): String? {
