@@ -98,8 +98,8 @@ jobs:
           out=dist
           mkdir -p "$out"
           test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.6.1'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='25'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.7.0'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='26'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
           certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt")
           expected_sha1=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | awk -F': ' '/SHA1:/{print toupper($2); exit}')
@@ -110,9 +110,9 @@ jobs:
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
           grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' "$out/PROOT_ELF.txt"
           sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
-          cp "$apk" "$out/USMAN-AND-UMAR-v3.6.1-openswarm.apk"
+          cp "$apk" "$out/USMAN-AND-UMAR-v3.7.0.apk"
           cp cloud-backend/redis_task_storage.py "$out/redis_task_storage.py"
-          sha256sum "$out/USMAN-AND-UMAR-v3.6.1-openswarm.apk" | tee "$out/SHA256SUMS.txt"
+          sha256sum "$out/USMAN-AND-UMAR-v3.7.0.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nref=%s\n' "$(git rev-parse HEAD)" "${GITHUB_REF_NAME}" > "$out/BUILD_METADATA.txt"
 
       - name: Upload APK and verification files (no GitHub Release)

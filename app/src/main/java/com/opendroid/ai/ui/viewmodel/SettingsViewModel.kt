@@ -89,13 +89,16 @@ class SettingsViewModel @Inject constructor(
     fun testOpenSwarmConnection(url: String, token: String) = viewModelScope.launch(Dispatchers.IO) {
         mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(OpenSwarmConnectionState.WAKING, "Checking OpenSwarm /health…")
         runCatching {
-            cloudServerClient.testOpenSwarmConnection(url, token) {
+            val health = cloudServerClient.testOpenSwarmConnection(url, token) {
                 mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(
                     OpenSwarmConnectionState.WAKING,
                     "Waking — timeout on first check; retrying once in 30 seconds…",
                 )
             }
-        }.onSuccess { health ->
+            val toolsFailure = if (health.online) runCatching { cloudServerClient.fetchOpenSwarmTools(url, token) }
+                .exceptionOrNull()?.message else null
+            health to toolsFailure
+        }.onSuccess { (health, toolsFailure) ->
             val state = mapOpenSwarmHealth(
                 health.httpCode, health.ready, health.authReady, health.redisReady,
                 health.checkpointsReady, health.checkpointStorageReady, health.leaseReady,
@@ -104,7 +107,8 @@ class SettingsViewModel @Inject constructor(
             )
             mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(
                 state,
-                if (state == OpenSwarmConnectionState.ONLINE) "OpenSwarm server Online · HTTP 200"
+                if (state == OpenSwarmConnectionState.ONLINE && toolsFailure != null) "OpenSwarm health is Online, but GET /tools failed: $toolsFailure"
+                else if (state == OpenSwarmConnectionState.ONLINE) "OpenSwarm server Online · HTTP 200"
                 else health.readinessMessage ?: health.error ?: "OpenSwarm server is not ready (${health.httpCode ?: "no response"}).",
             )
         }.onFailure { failure ->

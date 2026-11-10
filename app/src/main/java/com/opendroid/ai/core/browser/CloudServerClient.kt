@@ -17,6 +17,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.flow.first
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Interceptor
@@ -25,6 +26,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.coroutines.resumeWithException
 
 /** Result of a live `/health` probe. Eligibility follows accepting, drain, checkpoint, and lease flags. */
 data class CloudServerHealth(
@@ -147,6 +149,15 @@ data class RemoteOpenSwarmAgent(
     val adapterConfigured: Boolean,
 )
 
+data class OpenSwarmRemoteTool(
+    val id: String,
+    val description: String,
+    val permissions: List<String>,
+    val risk: String,
+    val adapterConfigured: Boolean,
+    val reason: String? = null,
+)
+
 internal const val CLOUD_LOG_TAG = "CloudOpenSwarm"
 
 /** Structured failure details shown to the user and written to Logcat without credentials. */
@@ -238,6 +249,76 @@ class CloudServerClient @Inject constructor(
         .callTimeout(5, TimeUnit.SECONDS)
         .addInterceptor(LocalTunnelReminderInterceptor)
         .build()
+
+    /** Fetches the authenticated capability manifest from the single configured OpenSwarm node. */
+    suspend fun fetchOpenSwarmTools(url: String? = null, token: String? = null): List<OpenSwarmRemoteTool> = withContext(Dispatchers.IO) {
+        val server = if (url != null) {
+            val validUrl = validateOpenSwarmTunnelUrl(url)
+            CloudServerConfig(id = "connection-test", name = "OpenSwarm", url = validUrl, token = token.orEmpty(), enabled = true, role = "OPENSWARM")
+        } else {
+            val servers = settingsRepository.cloudServers.first().filter { it.role == "OPENSWARM" && it.url.isNotBlank() }
+            check(servers.size == OpenSwarmRouteConfig.MAX_CONNECTED_NODES) { "Only one OpenSwarm Colab node can be connected." }
+            servers.single().also { check(it.enabled && it.token.isNotBlank()) { "Configure and enable the OpenSwarm Colab node first." } }
+        }
+        val request = Request.Builder().url("${serverBaseUrl(server.url)}/tools")
+            .header("Authorization", "Bearer ${server.token}").get().build()
+        client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IOException("OpenSwarm GET /tools returned HTTP ${response.code}: ${sanitizeCloudDiagnostic(body, listOf(server.token))}")
+            val tools = JSONObject(body).optJSONArray("tools") ?: JSONArray()
+            buildList {
+                for (index in 0 until tools.length()) {
+                    val item = tools.optJSONObject(index) ?: continue
+                    val permissions = item.optJSONArray("permissions") ?: JSONArray()
+                    add(OpenSwarmRemoteTool(
+                        id = item.optString("id"),
+                        description = item.optString("description"),
+                        permissions = (0 until permissions.length()).map { permissions.optString(it) },
+                        risk = item.optString("risk", "critical").lowercase(),
+                        adapterConfigured = item.optBoolean("adapter_configured", false),
+                        reason = item.optString("reason").takeIf { it.isNotBlank() },
+                    ))
+                }
+            }.also(OpenSwarmToolManifestCache::update)
+        }
+    }
+
+    /** Executes one capability using the existing backend payload and explicit approval contract. */
+    suspend fun executeOpenSwarmTool(capabilityId: String, payload: JSONObject, approved: Boolean = false): JSONObject = withContext(Dispatchers.IO) {
+        require(capabilityId.matches(Regex("[a-zA-Z0-9._-]{1,100}"))) { "Invalid OpenSwarm capability ID." }
+        val servers = settingsRepository.cloudServers.first().filter { it.role == "OPENSWARM" && it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
+        check(servers.size == OpenSwarmRouteConfig.MAX_CONNECTED_NODES) { "Only one OpenSwarm Colab node can be connected." }
+        val server = servers.single()
+        val body = JSONObject().put("payload", payload).put("approved", approved).toString()
+        val request = Request.Builder().url("${serverBaseUrl(server.url)}/tools/${capabilityId}/execute")
+            .header("Authorization", "Bearer ${server.token}")
+            .post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build()
+        cancellableJsonRequest(request, server.token, "OpenSwarm tool ${capabilityId}")
+    }
+
+    private suspend fun cancellableJsonRequest(request: Request, secret: String, label: String): JSONObject =
+        suspendCancellableCoroutine { continuation ->
+            val call = client.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : okhttp3.Callback {
+                override fun onFailure(call: okhttp3.Call, e: IOException) {
+                    if (continuation.isActive) continuation.resumeWithException(e)
+                }
+
+                override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+                    try {
+                        response.use {
+                            val body = it.body?.string().orEmpty()
+                            if (!it.isSuccessful) throw IOException("$label returned HTTP ${it.code}: ${sanitizeCloudDiagnostic(body, listOf(secret))}")
+                            val parsed = JSONObject(body)
+                            if (continuation.isActive) continuation.resumeWith(Result.success(parsed))
+                        }
+                    } catch (failure: Throwable) {
+                        if (continuation.isActive) continuation.resumeWithException(failure)
+                    }
+                }
+            })
+        }
 
     /** Probes every enabled configured server concurrently and orders healthy servers by latency. */
     suspend fun pingAll(includeDisabled: Boolean = false): List<CloudServerHealth> {

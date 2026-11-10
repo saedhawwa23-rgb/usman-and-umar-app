@@ -150,6 +150,39 @@ class CloudServerClientTest {
     }
 
     @Test
+    fun `OpenSwarm manifest and execute use authenticated existing endpoints`() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse.Builder().code(200).body("""{"tools":[{"id":"browser.extract","description":"Extract page","permissions":["network"],"risk":"low","adapter_configured":true},{"id":"files.read","risk":"low","adapter_configured":false}]}""").build())
+        server.enqueue(MockResponse.Builder().code(200).body("""{"status":"executed","capability_id":"browser.extract","result":{"verified":true}}""").build())
+        server.start()
+        try {
+            val token = "manifest-bearer-secret"
+            val client = newCloudClient(server.url("/").toString().trimEnd('/'), token)
+            val tools = client.fetchOpenSwarmTools()
+            assertEquals(listOf("browser.extract", "files.read"), tools.map { it.id })
+            assertTrue(tools.first().adapterConfigured)
+            assertFalse(tools.last().adapterConfigured)
+            assertEquals(tools, OpenSwarmToolManifestCache.snapshot())
+            val listRequest = server.takeRequest()
+            assertEquals("/tools", listRequest.target)
+            assertEquals("Bearer $token", listRequest.headers["Authorization"])
+
+            val response = client.executeOpenSwarmTool("browser.extract", JSONObject("""{"url":"https://example.com"}"""))
+            assertEquals("executed", response.getString("status"))
+            val execute = server.takeRequest()
+            assertEquals("POST", execute.method)
+            assertEquals("/tools/browser.extract/execute", execute.target)
+            assertEquals("Bearer $token", execute.headers["Authorization"])
+            val body = JSONObject(execute.body!!.utf8())
+            assertFalse(body.getBoolean("approved"))
+            assertEquals("https://example.com", body.getJSONObject("payload").getString("url"))
+            assertFalse(execute.body!!.utf8().contains(token))
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
     fun `OpenSwarm payload matches realistic execute schema and never serializes bearer credentials`() {
         val body = buildOpenSwarmPayload(
             taskId = "chat-1730838420000",

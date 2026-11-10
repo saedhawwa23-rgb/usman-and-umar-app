@@ -6,6 +6,7 @@ USMAN AND UMAR is an Android automation assistant built on the OpenDroid codebas
 
 - **Cloud reasoning:** OpenRouter is selected for new installations. Other configured providers are available from Settings. Provider credentials are stored through the app's protected credential store; requests require a configured provider and, where applicable, an API key.
 - **Tool execution:** The cloud model can request registered tools through the OpenAI-compatible tool-calling protocol. The app validates and dispatches each tool locally; Android actions remain subject to their existing grants and approval rules.
+- **OpenSwarm Colab tools (v3.7.0):** The existing universal tool registry loads the authenticated `/tools` manifest at connection testing and session start. App-owned schemas expose configured read-only browser, research, workspace-file, data, and GitHub capabilities under `colab_` names; writes and command execution are not included in Phase 1.
 - **GitHub discovery:** Public repository search and inspection use GitHub's REST API. The app can save a repository as supported project context, make it active, inspect metadata/README/root entries, and start a real `git clone` through the Termux `RUN_COMMAND` API.
 - **Termux commands:** Commands execute in the installed Termux environment, not in a simulated shell. Termux must allow external app commands, and the app must have Termux's `RUN_COMMAND` permission. Command output and exit status are returned through the callback contract.
 - **No bundled local inference:** The app no longer packages a GGUF model, llama.cpp module, or LiteRT local inference engine. Termux remains an optional user-authorized execution backend; it is not an AI reasoning engine.
@@ -18,7 +19,7 @@ GitHub and Termux capabilities require connectivity or an installed/configured T
 |---|---|
 | Minimum Android SDK | 28 (Android 9) |
 | Target Android SDK | 34 (Android 14) |
-| Current app version | `3.6.0` (versionCode 24) |
+| Current app version | `3.7.0` (versionCode 26) |
 | Packaging | Android application; no model asset or inference JNI module |
 
 Build with JDK 21 and the Android SDK installed:

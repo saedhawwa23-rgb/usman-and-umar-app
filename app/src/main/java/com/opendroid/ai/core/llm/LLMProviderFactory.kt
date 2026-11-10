@@ -211,10 +211,11 @@ class WrappedLLMProvider(
 
     override suspend fun generate(
         messages: List<com.opendroid.ai.data.models.ChatMessage>,
-        tools: List<ToolDefinition>
+        tools: List<ToolDefinition>,
+        systemPrompt: String
     ): Flow<StreamChunk> = flow {
         val request = LLMRequest(
-            systemPrompt = "You are a helpful Android development assistant. Use supplied tools when needed; do not invent tool results.",
+            systemPrompt = systemPrompt,
             messages = messages,
             maxTokens = 2048,
             responseFormat = ResponseFormat.TEXT,

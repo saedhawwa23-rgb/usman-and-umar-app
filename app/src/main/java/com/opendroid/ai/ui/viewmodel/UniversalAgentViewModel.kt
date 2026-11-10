@@ -6,35 +6,53 @@ import com.opendroid.ai.core.connector.CloudflareConnectorManager
 import com.opendroid.ai.core.connector.CloudflareServiceState
 import com.opendroid.ai.core.connector.UniversalAgentEvent
 import com.opendroid.ai.core.connector.CloudToolAgent
+import com.opendroid.ai.core.connector.ConnectorApprovalCoordinator
+import com.opendroid.ai.core.connector.PendingConnectorApproval
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 
 @HiltViewModel
 class UniversalAgentViewModel @Inject constructor(
     private val agent: CloudToolAgent,
-    private val cloudflare: CloudflareConnectorManager
+    private val cloudflare: CloudflareConnectorManager,
+    private val approvals: ConnectorApprovalCoordinator,
 ) : ViewModel() {
     private val mutableEvents = MutableStateFlow<List<UniversalAgentEvent>>(emptyList())
     val events: StateFlow<List<UniversalAgentEvent>> = mutableEvents.asStateFlow()
     private val mutableRunning = MutableStateFlow(false)
     val running: StateFlow<Boolean> = mutableRunning.asStateFlow()
+    val pendingApproval: StateFlow<PendingConnectorApproval?> = approvals.pending
+    private var runJob: Job? = null
     val cloudflareState: StateFlow<CloudflareServiceState> = cloudflare.state
 
     init { viewModelScope.launch { cloudflare.refresh() } }
 
     fun run(goal: String) {
         if (goal.isBlank() || mutableRunning.value) return
-        viewModelScope.launch {
+        runJob = viewModelScope.launch {
             mutableRunning.value = true
             mutableEvents.value = emptyList()
-            mutableEvents.value = agent.run(goal).events
-            mutableRunning.value = false
+            try {
+                mutableEvents.value = agent.run(goal).events
+            } catch (cancelled: CancellationException) {
+                mutableEvents.value = mutableEvents.value + UniversalAgentEvent("cancelled", "Stopped by user; any in-flight request was cancelled where supported.")
+                throw cancelled
+            } finally {
+                mutableRunning.value = false
+                runJob = null
+            }
         }
     }
+
+    fun stop() { runJob?.cancel() }
+    fun approvePendingCall() { approvals.decide(true) }
+    fun denyPendingCall() { approvals.decide(false) }
 
     fun connectCloudflare(token: String) { viewModelScope.launch { cloudflare.connect(token) } }
     fun disconnectCloudflare() { cloudflare.disconnect() }

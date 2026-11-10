@@ -26,7 +26,7 @@ data class ConnectorTool(
     val risk: ConnectorRisk = ConnectorRisk.READ_ONLY,
     val credential: ConnectorCredentialRef? = null
 ) {
-    val qualifiedName: String get() = "connector_${connectorId}__${name}"
+    val qualifiedName: String get() = if (connectorId == "colab") "colab_$name" else "connector_${connectorId}__${name}"
 }
 
 data class ConnectorInvocation(
@@ -164,6 +164,9 @@ class UniversalToolRegistry @Inject constructor() {
             connector.execute(invocation, credentials).also {
                 log.append(ConnectorExecutionRecord(invocation.invocationId, connector.id, invocation.tool.name, invocation.tool.risk, if (it.success) "success" else "failed", it.error))
             }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            log.append(ConnectorExecutionRecord(invocation.invocationId, connector.id, invocation.tool.name, invocation.tool.risk, "cancelled"))
+            throw cancelled
         } catch (t: Throwable) {
             log.append(ConnectorExecutionRecord(invocation.invocationId, connector.id, invocation.tool.name, invocation.tool.risk, "failed", t.message ?: "connector error"))
             ConnectorResult(false, error = t.message ?: "Connector execution failed")
