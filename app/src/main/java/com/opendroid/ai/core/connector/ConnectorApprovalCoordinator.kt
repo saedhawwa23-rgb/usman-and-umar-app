@@ -60,10 +60,7 @@ class ConnectorApprovalCoordinator @Inject constructor() {
 
 class UserApprovalGate(private val coordinator: ConnectorApprovalCoordinator) : ConnectorApprovalGate {
     override suspend fun decide(invocation: ConnectorInvocation): ApprovalDecision {
-        val actionNeedsApproval = invocation.tool.risk.severity >= ConnectorRisk.SENSITIVE.severity ||
-            Regex("(?i)(write|create|execute|delete|deploy|publish|send|payment|command)").containsMatchIn(invocation.tool.name) ||
-            Regex("(?i)(^|[._-])run([._-]|$)").containsMatchIn(invocation.tool.name)
-        if (!actionNeedsApproval) return ApprovalDecision.ALLOW
+        if (!requiresExplicitApproval(invocation.tool)) return ApprovalDecision.ALLOW
         return try {
             if (coordinator.request(invocation)) ApprovalDecision.ALLOW else ApprovalDecision.DENY
         } catch (cancelled: CancellationException) {
@@ -71,3 +68,8 @@ class UserApprovalGate(private val coordinator: ConnectorApprovalCoordinator) : 
         }
     }
 }
+
+internal fun requiresExplicitApproval(tool: ConnectorTool): Boolean =
+    tool.risk.severity >= ConnectorRisk.SENSITIVE.severity ||
+        Regex("(?i)(write|create|execute|delete|deploy|publish|send|payment|command)").containsMatchIn(tool.name) ||
+        Regex("(?i)(^|[._-])run([._-]|$)").containsMatchIn(tool.name)

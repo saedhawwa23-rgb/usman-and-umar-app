@@ -8,26 +8,40 @@ import org.junit.Test
 
 class OpenSwarmToolCatalogTest {
     @Test
-    fun `only adapter configured low risk capabilities become model tools`() {
+    fun `only adapter configured schema supported capabilities become model tools`() {
         val tools = OpenSwarmToolCatalog.modelTools(listOf(
             remote("browser.extract", configured = true),
             remote("files.read", configured = false, reason = "workspace not mounted"),
             remote("files.write", configured = true, risk = "high"),
             remote("terminal.execute", configured = true, risk = "critical"),
         ))
-        assertEquals(listOf("colab_browser_extract"), tools.map { it.name })
+        assertEquals(listOf("colab_browser_extract", "colab_files_write", "colab_terminal_execute"), tools.map { it.name })
     }
 
     @Test
-    fun `unavailable resources include adapter and risk reasons`() {
+    fun `unavailable resources include adapter and schema reasons`() {
         val summary = OpenSwarmToolCatalog.unavailableSummary(listOf(
             remote("files.read", false, reason = "workspace not mounted"),
-            remote("files.write", true, risk = "high"),
             remote("future.tool", false),
         ))
         assertTrue(summary.contains("workspace not mounted"))
-        assertTrue(summary.contains("risk is high"))
         assertTrue(summary.contains("no app-owned parameter schema"))
+    }
+
+    @Test
+    fun `write and execution schemas are exact and validated`() {
+        assertEquals("files.write", OpenSwarmToolCatalog.capabilityFor("colab_files_write"))
+        assertEquals("documents.create", OpenSwarmToolCatalog.capabilityFor("colab_documents_create"))
+        assertEquals("terminal.execute", OpenSwarmToolCatalog.capabilityFor("colab_terminal_execute"))
+        assertTrue(runCatching {
+            OpenSwarmToolCatalog.validate("colab_terminal_execute", """{"argv":["python3","script.py"],"timeout_seconds":15}""")
+        }.isSuccess)
+        assertTrue(runCatching {
+            OpenSwarmToolCatalog.validate("colab_terminal_execute", """{"argv":[]}""")
+        }.isFailure)
+        assertTrue(runCatching {
+            OpenSwarmToolCatalog.validate("colab_documents_create", """{"path":"report.md","content":"text"}""")
+        }.isFailure)
     }
 
     @Test

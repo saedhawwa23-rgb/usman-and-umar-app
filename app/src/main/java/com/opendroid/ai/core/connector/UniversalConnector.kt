@@ -33,7 +33,8 @@ data class ConnectorInvocation(
     val invocationId: String = UUID.randomUUID().toString(),
     val tool: ConnectorTool,
     val argumentsJson: String,
-    val credential: ConnectorCredentialRef? = tool.credential
+    val credential: ConnectorCredentialRef? = tool.credential,
+    val approvedByUser: Boolean = false,
 )
 
 data class ConnectorResult(
@@ -152,16 +153,18 @@ class UniversalToolRegistry @Inject constructor() {
         if (arguments == null || !arguments.isJsonObject) {
             return ConnectorResult(false, error = "Tool arguments must be a JSON object")
         }
-        val decision = approval.decide(invocation)
+        val canonicalInvocation = invocation.copy(tool = registeredTool, credential = registeredTool.credential)
+        val decision = approval.decide(canonicalInvocation)
         if (decision != ApprovalDecision.ALLOW) {
             val status = if (decision == ApprovalDecision.DENY) "denied" else "approval_required"
             log.append(ConnectorExecutionRecord(invocation.invocationId, invocation.tool.connectorId, invocation.tool.name, invocation.tool.risk, status))
             return ConnectorResult(false, error = if (decision == ApprovalDecision.DENY) "Connector action denied" else "User approval required")
         }
-        val connector = connectorFor(invocation.tool.connectorId)
+        val connector = connectorFor(registeredTool.connectorId)
             ?: return ConnectorResult(false, error = "Connector is not registered")
         return try {
-            connector.execute(invocation, credentials).also {
+            val authorizedInvocation = canonicalInvocation.copy(approvedByUser = canonicalInvocation.approvedByUser || requiresExplicitApproval(registeredTool))
+            connector.execute(authorizedInvocation, credentials).also {
                 log.append(ConnectorExecutionRecord(invocation.invocationId, connector.id, invocation.tool.name, invocation.tool.risk, if (it.success) "success" else "failed", it.error))
             }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {

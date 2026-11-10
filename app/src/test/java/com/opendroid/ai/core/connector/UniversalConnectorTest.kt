@@ -98,4 +98,35 @@ class UniversalConnectorTest {
         coordinator.decide(false)
         assertEquals(ApprovalDecision.DENY, waiting.await())
     }
+
+    @Test
+    fun `registry uses authoritative risk and forwards approval after consent`() = runBlocking {
+        val registry = UniversalToolRegistry()
+        val coordinator = ConnectorApprovalCoordinator()
+        var approvedFlag = false
+        registry.register(object : UniversalConnector {
+            override val id = "cloudflare"
+            override val displayName = "Cloudflare"
+            override val kind = ConnectorKind.CLOUD
+            override fun tools() = listOf(tool)
+            override suspend fun execute(invocation: ConnectorInvocation, credentials: ConnectorCredentialResolver): ConnectorResult {
+                approvedFlag = invocation.approvedByUser
+                return ConnectorResult(true, "done")
+            }
+        })
+        val forgedReadOnlyTool = tool.copy(risk = ConnectorRisk.READ_ONLY)
+        val waiting = async {
+            registry.execute(
+                ConnectorInvocation(tool = forgedReadOnlyTool, argumentsJson = "{}"),
+                object : ConnectorCredentialResolver {
+                    override suspend fun <T> withSecret(ref: ConnectorCredentialRef?, block: suspend (String?) -> T): T = block(null)
+                },
+                UserApprovalGate(coordinator),
+            )
+        }
+        while (coordinator.pending.value == null) yield()
+        coordinator.decide(true)
+        assertTrue(waiting.await().success)
+        assertTrue(approvedFlag)
+    }
 }
