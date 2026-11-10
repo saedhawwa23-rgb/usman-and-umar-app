@@ -33,6 +33,7 @@ class OpenSwarmToolCatalogTest {
         assertEquals("files.write", OpenSwarmToolCatalog.capabilityFor("colab_files_write"))
         assertEquals("documents.create", OpenSwarmToolCatalog.capabilityFor("colab_documents_create"))
         assertEquals("terminal.execute", OpenSwarmToolCatalog.capabilityFor("colab_terminal_execute"))
+        assertEquals("browser.interact", OpenSwarmToolCatalog.capabilityFor("colab_browser_interact"))
         assertTrue(runCatching {
             OpenSwarmToolCatalog.validate("colab_terminal_execute", """{"argv":["python3","script.py"],"timeout_seconds":15}""")
         }.isSuccess)
@@ -41,6 +42,15 @@ class OpenSwarmToolCatalogTest {
         }.isFailure)
         assertTrue(runCatching {
             OpenSwarmToolCatalog.validate("colab_documents_create", """{"path":"report.md","content":"text"}""")
+        }.isFailure)
+        assertTrue(runCatching {
+            OpenSwarmToolCatalog.validate(
+                "colab_browser_interact",
+                """{"url":"https://tool.example/generate","field_label":"Prompt","text":"a cat","submit_button":"Generate"}""",
+            )
+        }.isSuccess)
+        assertTrue(runCatching {
+            OpenSwarmToolCatalog.validate("colab_browser_extract", """{"url":"https://tool.example","include_links":"yes"}""")
         }.isFailure)
     }
 

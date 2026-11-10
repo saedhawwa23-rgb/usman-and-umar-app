@@ -155,6 +155,24 @@ class OpenSwarmInspectionApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 503)
         self.assertIn("no configured execution adapter", response.json()["detail"])
 
+    async def test_browser_interaction_endpoint_requires_approval_flag(self):
+        payload = {
+            "url": "https://tool.example/generate",
+            "field_label": "Prompt",
+            "text": "a cat",
+            "submit_button": "Generate",
+        }
+        with patch("browser_scraper.run_playwright_interaction", new=AsyncMock(return_value={"text": "Generated"})) as browser, \
+             patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
+            headers = {"Authorization": "Bearer test-secret"}
+            denied = await self.client.post("/tools/browser.interact/execute", headers=headers, json={"payload": payload})
+            allowed = await self.client.post("/tools/browser.interact/execute", headers=headers, json={"payload": payload, "approved": True})
+        self.assertEqual(denied.status_code, 403)
+        self.assertIn("requires explicit user approval", denied.json()["detail"])
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(allowed.json()["result"], {"text": "Generated"})
+        browser.assert_awaited_once()
+
     async def test_task_inspection_returns_not_found_for_unknown_task(self):
         with patch.dict(os.environ, {"APP_CLIENT_TOKEN": "test-secret"}):
             response = await self.client.get(

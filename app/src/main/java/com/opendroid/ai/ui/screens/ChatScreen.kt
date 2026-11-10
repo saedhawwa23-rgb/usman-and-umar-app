@@ -91,6 +91,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -1075,18 +1076,61 @@ fun ChatScreen(
         )
     }
     pendingConnectorApproval?.let { pending ->
+        val arguments = remember(pending.argumentsJson) {
+            runCatching { JSONObject(pending.argumentsJson) }.getOrNull()
+        }
+        val browserInteraction = pending.toolName.endsWith("browser_interact")
         AlertDialog(
             onDismissRequest = viewModel::denyConnectorToolCall,
             containerColor = DarkSurface,
-            title = { Text("Approve this tool call?", color = TextPrimary) },
-            text = {
+            title = {
                 Text(
-                    "${pending.toolName}\n\nArguments:\n${pending.argumentsJson}\n\nApproval applies to this call only.",
-                    color = TextSecondary,
+                    if (browserInteraction) "Approve external browser action?" else "Approve this tool call?",
+                    color = TextPrimary,
                 )
             },
+            text = {
+                Column(
+                    modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(pending.toolName, color = AccentCyan, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    if (browserInteraction && arguments != null) {
+                        Text("URL", color = TextSecondary, fontSize = 12.sp)
+                        Text(arguments.optString("url"), color = TextPrimary, fontSize = 13.sp)
+                        if (arguments.optString("url").startsWith("http://", ignoreCase = true)) {
+                            Text(
+                                "Warning: HTTP is unencrypted; submitted text may be visible on the network.",
+                                color = Color(0xFFFFB74D),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        Text("Fill “${arguments.optString("field_label") }” with", color = TextSecondary, fontSize = 12.sp)
+                        Surface(color = Color.Black.copy(alpha = 0.28f), shape = RoundedCornerShape(10.dp)) {
+                            Text(
+                                arguments.optString("text").take(4_000),
+                                modifier = Modifier.padding(10.dp),
+                                color = TextPrimary,
+                                fontSize = 13.sp,
+                            )
+                        }
+                        Text("Then click: ${arguments.optString("submit_button")}", color = TextPrimary, fontSize = 13.sp)
+                        Text(
+                            "This approval authorizes only this one field-and-button action. Any later browser action requires a new approval. External page content is untrusted.",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                        )
+                    } else {
+                        Text("Arguments:\n${pending.argumentsJson}", color = TextSecondary)
+                        Text("Approval applies to this call only.", color = TextSecondary, fontSize = 12.sp)
+                    }
+                }
+            },
             confirmButton = {
-                TextButton(onClick = viewModel::approveConnectorToolCall) { Text("Approve") }
+                TextButton(onClick = viewModel::approveConnectorToolCall) {
+                    Text(if (browserInteraction) "Approve this action" else "Approve")
+                }
             },
             dismissButton = {
                 TextButton(onClick = viewModel::denyConnectorToolCall) { Text("Deny") }

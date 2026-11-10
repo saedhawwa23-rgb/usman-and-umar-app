@@ -40,7 +40,7 @@ def build_default_registry() -> AgentRegistry:
         ("manager", "Manager / Orchestrator", "Plans work, delegates specialists, tracks execution and assembles results.", ("planning", "delegation", "coordination"), True),
         ("planner", "Planner", "Decomposes objectives into ordered, dependency-aware steps.", ("planning", "dependencies"), True),
         ("research", "Research", "Searches public web results, synthesizes source evidence and compares claims.", ("source_synthesis", "source_analysis"), True),
-        ("browser", "Browser", "Uses bounded Playwright navigation and page extraction.", ("browser.navigate", "browser.extract", "browser.click"), False),
+        ("browser", "Browser", "Uses bounded Playwright navigation, page extraction, and explicitly approved text-only interaction.", ("browser.navigate", "browser.extract", "browser.click", "browser.interact"), False),
         ("coder", "Coding", "Produces code and patches; execution is only claimed when a runner verifies it.", ("code.generate", "code.review", "files.write"), True),
         ("terminal", "Terminal", "Runs approved commands in a configured isolated execution adapter.", ("terminal.execute",), False),
         ("github", "GitHub", "Reads repository files, creates approved commits and opens pull requests through a configured token.", ("github.read", "github.write", "github.pull_request"), False),

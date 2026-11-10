@@ -100,6 +100,44 @@ class CapabilityTests(unittest.IsolatedAsyncioTestCase):
             await registry.execute("github.push", {})
         self.assertEqual(await registry.execute("github.push", {}, approved=True), {"ok": True})
 
+    async def test_browser_interaction_requires_user_approval_before_adapter_runs(self):
+        registry = build_default_capability_registry()
+        interaction = {
+            "url": "https://tool.example/generate",
+            "field_label": "Prompt",
+            "text": "a cat",
+            "submit_button": "Generate",
+        }
+        capability = next(item for item in registry.describe() if item["id"] == "browser.interact")
+        self.assertEqual(capability["risk"], "high")
+        with self.assertRaises(PermissionError):
+            await registry.execute("browser.interact", interaction)
+        with patch("browser_scraper.run_playwright_interaction", new=AsyncMock(return_value={"text": "Generated"})) as browser:
+            result = await registry.execute("browser.interact", interaction, approved=True)
+        self.assertEqual(result, {"text": "Generated"})
+        browser.assert_awaited_once_with(
+            "https://tool.example/generate",
+            field_label="Prompt",
+            text="a cat",
+            submit_button="Generate",
+        )
+
+    async def test_browser_extract_uses_dynamic_external_url_and_optional_link_discovery(self):
+        registry = build_default_capability_registry()
+        with patch("browser_scraper.run_playwright_task", new=AsyncMock(return_value="Tool page and links")) as browser:
+            result = await registry.execute("browser.extract", {
+                "url": "https://tool.example/generate",
+                "include_links": True,
+            })
+        self.assertEqual(result["text"], "Tool page and links")
+        browser.assert_awaited_once_with(
+            "https://tool.example/generate",
+            action="scrape",
+            allowed_domains=None,
+            include_title=True,
+            include_links=True,
+        )
+
     async def test_unconfigured_capability_never_fakes_success(self):
         registry = CapabilityRegistry()
         registry.register(Capability("drive.upload", "Upload file", "cloud"))
@@ -201,6 +239,210 @@ class BrowserScraperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "Page title: Example Domain\n\nExample Domain")
 
 
+class BrowserInteractionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_browser_route_guard_aborts_non_public_dns_targets(self):
+        import browser_scraper
+        from types import SimpleNamespace
+
+        class Page:
+            async def route(self, pattern, handler):
+                self.pattern = pattern
+                self.handler = handler
+
+        class Route:
+            def __init__(self, url):
+                self.request = SimpleNamespace(url=url)
+                self.continued = False
+                self.aborted = False
+            async def continue_(self):
+                self.continued = True
+            async def abort(self):
+                self.aborted = True
+
+        async def resolve_public(url):
+            if "private.example" in url:
+                raise ValueError("private DNS target")
+
+        page = Page()
+        with patch.object(browser_scraper, "_assert_public_dns", side_effect=resolve_public):
+            await browser_scraper._guard_public_requests(page)
+            public = Route("https://tool.example/asset.js")
+            private = Route("https://private.example/resource")
+            await page.handler(public)
+            await page.handler(private)
+
+        self.assertEqual(page.pattern, "**/*")
+        self.assertTrue(public.continued)
+        self.assertFalse(public.aborted)
+        self.assertTrue(private.aborted)
+        self.assertFalse(private.continued)
+
+    async def test_fmhy_extraction_includes_validated_external_anchor_urls(self):
+        import browser_scraper
+
+        class Page:
+            url = "https://fmhy.net/"
+            async def goto(self, *_args, **_kwargs):
+                return None
+            async def inner_text(self, *_args, **_kwargs):
+                return "FMHY resources"
+            async def eval_on_selector_all(self, selector, _script):
+                self_outer.assertEqual(selector, "a[href]")
+                return [
+                    {"text": "Image tool", "href": "https://tool.example/generate?mode=fast"},
+                    {"text": "Local", "href": "https://127.0.0.1/private"},
+                ]
+            async def title(self):
+                return "FMHY"
+
+        class Browser:
+            async def new_page(self):
+                return Page()
+            async def close(self):
+                return None
+
+        class Chromium:
+            async def launch(self, **_kwargs):
+                return Browser()
+
+        class Playwright:
+            chromium = Chromium()
+
+        class PlaywrightContext:
+            async def __aenter__(self):
+                return Playwright()
+            async def __aexit__(self, *_args):
+                return None
+
+        self_outer = self
+        with patch.object(browser_scraper, "async_playwright", return_value=PlaywrightContext()):
+            result = await browser_scraper.run_playwright_task(
+                "https://fmhy.net", allowed_domains=["fmhy.net"], include_title=True, include_links=True
+            )
+        self.assertIn("https://tool.example/generate?mode=fast", result)
+        self.assertNotIn("127.0.0.1", result)
+
+    async def test_approved_interaction_fills_prompt_and_clicks_named_generate_button(self):
+        import browser_scraper
+
+        events = []
+        submission_url = "https://tool.example/generate"
+
+        class Locator:
+            def __init__(self, kind):
+                self.kind = kind
+                self.first = self
+            async def count(self):
+                return 1
+            async def evaluate_all(self, _script):
+                return [{"tag": "textarea", "type": "text", "name": "prompt", "id": "prompt", "label": "Prompt", "disabled": False, "readOnly": False}]
+            async def evaluate(self, _script):
+                if self.kind == "generate":
+                    return submission_url
+                return {"tag": "textarea", "type": "text", "disabled": False, "readOnly": False}
+            async def fill(self, value, **_kwargs):
+                events.append(("fill", value))
+            async def click(self, **_kwargs):
+                events.append(("click", self.kind))
+
+        class Page:
+            url = "https://tool.example/generate"
+            async def goto(self, *_args, **_kwargs):
+                events.append(("goto", self.url))
+            def locator(self, _selector):
+                return Locator("fields")
+            def get_by_label(self, _label):
+                return Locator("prompt")
+            def get_by_role(self, *_args, **_kwargs):
+                return Locator("generate")
+            async def wait_for_timeout(self, _ms):
+                return None
+            async def title(self):
+                return "Demo Generator"
+            async def inner_text(self, *_args, **_kwargs):
+                return "Generated result"
+
+        class Browser:
+            async def new_page(self):
+                return Page()
+            async def close(self):
+                return None
+
+        class Chromium:
+            async def launch(self, **_kwargs):
+                return Browser()
+
+        class Playwright:
+            chromium = Chromium()
+
+        class PlaywrightContext:
+            async def __aenter__(self):
+                return Playwright()
+            async def __aexit__(self, *_args):
+                return None
+
+        with patch.object(browser_scraper, "async_playwright", return_value=PlaywrightContext()):
+            result = await browser_scraper.run_playwright_interaction(
+                "https://tool.example/generate", field_label="Prompt", text="a cat", submit_button="Generate"
+            )
+        self.assertEqual(events[-2:], [("fill", "a cat"), ("click", "generate")])
+        self.assertEqual(result["text"], "Generated result")
+        self.assertEqual(result["final_url"], "https://tool.example/generate")
+
+        submission_url = "https://other.example/submit"
+        events.clear()
+        with patch.object(browser_scraper, "async_playwright", return_value=PlaywrightContext()):
+            with self.assertRaisesRegex(ValueError, "different public origin"):
+                await browser_scraper.run_playwright_interaction(
+                    "https://tool.example/generate", field_label="Prompt", text="a cat", submit_button="Generate"
+                )
+        self.assertFalse(any(event[0] in {"fill", "click"} for event in events))
+
+    async def test_interaction_blocks_sensitive_fields_and_purchase_buttons(self):
+        import browser_scraper
+
+        with self.assertRaisesRegex(ValueError, "payments"):
+            await browser_scraper.run_playwright_interaction(
+                "https://shop.example/", field_label="Prompt", text="item", submit_button="Purchase"
+            )
+
+        class Fields:
+            async def evaluate_all(self, _script):
+                return [{"tag": "input", "type": "password", "name": "password", "id": "password", "label": "Password"}]
+
+        class Page:
+            url = "https://tool.example/"
+            async def goto(self, *_args, **_kwargs):
+                return None
+            def locator(self, _selector):
+                return Fields()
+
+        class Browser:
+            async def new_page(self):
+                return Page()
+            async def close(self):
+                return None
+
+        class Chromium:
+            async def launch(self, **_kwargs):
+                return Browser()
+
+        class Playwright:
+            chromium = Chromium()
+
+        class PlaywrightContext:
+            async def __aenter__(self):
+                return Playwright()
+            async def __aexit__(self, *_args):
+                return None
+
+        with patch.object(browser_scraper, "async_playwright", return_value=PlaywrightContext()):
+            with self.assertRaisesRegex(ValueError, "credential, secret, payment"):
+                await browser_scraper.run_playwright_interaction(
+                    "https://tool.example/", field_label="Password", text="secret", submit_button="Generate"
+                )
+
+
 class ResearchAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_search_retrieves_source_page_text_before_marking_research_verified(self):
         html = '<a class="result__a" href="https://example.com/article">Example Article</a>'
@@ -223,7 +465,7 @@ class ResearchAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["sources"][0]["retrieved"])
         browser_fetch.assert_awaited_once_with(
             "https://example.com/article", action="scrape", allowed_domains=["example.com"],
-            include_title=True,
+            include_title=True, include_links=False,
         )
 
 

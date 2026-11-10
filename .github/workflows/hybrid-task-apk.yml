@@ -112,7 +112,7 @@ jobs:
           sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
           cp "$apk" "$out/USMAN-AND-UMAR-v3.8.0.apk"
           cp cloud-backend/redis_task_storage.py "$out/redis_task_storage.py"
-          sha256sum "$out/USMAN-AND-UMAR-v3.7.0.apk" | tee "$out/SHA256SUMS.txt"
+          sha256sum "$out/USMAN-AND-UMAR-v3.8.0.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nref=%s\n' "$(git rev-parse HEAD)" "${GITHUB_REF_NAME}" > "$out/BUILD_METADATA.txt"
 
       - name: Upload APK and verification files (no GitHub Release)

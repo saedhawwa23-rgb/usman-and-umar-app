@@ -1,17 +1,15 @@
 package com.opendroid.ai.core.connector
 
-import com.google.gson.JsonParser
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class FmhyResourceParserTest {
     @Test
-    fun `parser keeps only safe https hosts and deduplicates normalized URLs`() {
+    fun `parser keeps only public http and https hosts and deduplicates normalized URLs`() {
         val text = """
             https://good.example/page https://good.example:443/page.
-            http://plain.example https://user:pass@auth.example/path
+            http://plain.example http://plain-port.example:8080/path https://user:pass@auth.example/path
             https://port.example:8443/path https://localhost/path
             https://127.0.0.1/private https://192.168.1.2/private
             https://[::1]/private https://good.example/other
@@ -19,8 +17,20 @@ class FmhyResourceParserTest {
 
         val resources = FmhyResourceParser.parse(text)
 
-        assertEquals(listOf("https://good.example/page", "https://good.example/other"), resources.map { it.url })
-        assertEquals(listOf("good.example", "good.example"), resources.map { it.host })
+        assertEquals(
+            listOf(
+                "https://good.example/page",
+                "http://plain.example/",
+                "http://plain-port.example:8080/path",
+                "https://port.example:8443/path",
+                "https://good.example/other",
+            ),
+            resources.map { it.url },
+        )
+        assertEquals(
+            listOf("good.example", "plain.example", "plain-port.example", "port.example", "good.example"),
+            resources.map { it.host },
+        )
     }
 
     @Test
@@ -38,35 +48,18 @@ class FmhyResourceParserTest {
     }
 
     @Test
-    fun `site path payload cannot change url or allowed host`() {
-        val payload = JsonParser.parseString(
-            FmhyResourceParser.lockedExtractionPayload("media.example", "{\"path\":\"/guides/start\"}")
-        ).asJsonObject
-
-        assertEquals("https://media.example/guides/start", payload.get("url").asString)
-        assertEquals(listOf("media.example"), payload.getAsJsonArray("allowed_domains").map { it.asString })
-        assertFalse(runCatching {
-            FmhyResourceParser.lockedExtractionPayload("media.example", "{\"path\":\"https://evil.example/\"}")
-        }.isSuccess)
-        assertFalse(runCatching {
-            FmhyResourceParser.lockedExtractionPayload("media.example", "{\"path\":\"/ok\",\"allowed_domains\":[\"evil.example\"]}")
-        }.isSuccess)
-        assertFalse(runCatching {
-            FmhyResourceParser.lockedExtractionPayload("media.example", "{\"path\":\"//evil.example/path\"}")
-        }.isSuccess)
-    }
-
-    @Test
-    fun `resource hosts map to unique stable site tool names`() {
+    fun `FMHY outbound links map dynamically to arbitrary public http and https destinations`() {
         val resources = FmhyResourceParser.parse(
-            "https://foo-bar.example/a https://foo.bar.example/b https://foo-bar.example/c"
+            "AI generator: https://tool-one.example/generate?model=fast " +
+                "another tool: http://tools.example.org:8080/create " +
+                "repeat: https://tool-one.example/generate?model=fast"
         )
-        val mapping = FmhyResourceParser.toolMapping(resources)
 
-        assertEquals(setOf("foo-bar.example", "foo.bar.example"), mapping.keys)
-        assertEquals(2, mapping.values.distinct().size)
-        assertTrue(mapping.values.all { it.matches(Regex("site_[a-z0-9_]+_[a-f0-9]{12,64}")) })
-        assertEquals(mapping, FmhyResourceParser.toolMapping(resources))
-        assertFalse(mapping.values.contains("discover_fmhy_resources"))
+        assertEquals(
+            listOf("https://tool-one.example/generate?model=fast", "http://tools.example.org:8080/create"),
+            resources.map { it.url },
+        )
+        assertEquals(listOf("tool-one.example", "tools.example.org"), resources.map { it.host })
+        assertTrue(resources.all { it.url.startsWith("https://") || it.url.startsWith("http://") })
     }
 }

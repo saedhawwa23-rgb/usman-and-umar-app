@@ -207,9 +207,19 @@ def build_default_capability_registry(memory_store: Any | None = None) -> Capabi
         if not isinstance(allowed, list) or any(not isinstance(item, str) for item in allowed):
             raise ValueError("allowed_domains must be a list of hostnames.")
         text = await run_playwright_task(
-            url, action="scrape", allowed_domains=allowed or None, include_title=True
+            url, action="scrape", allowed_domains=allowed or None, include_title=True,
+            include_links=payload.get("include_links") is True,
         )
         return {"url": url, "text": text, "verified": bool(text.strip())}
+
+    async def browser_interact(payload: dict[str, Any]) -> dict[str, Any]:
+        from browser_scraper import run_playwright_interaction
+        return await run_playwright_interaction(
+            str(payload.get("url") or ""),
+            field_label=str(payload.get("field_label") or ""),
+            text=str(payload.get("text") or ""),
+            submit_button=str(payload.get("submit_button") or ""),
+        )
 
     async def research_search(payload: dict[str, Any]) -> dict[str, Any]:
         query = str(payload.get("query") or "").strip()
@@ -463,7 +473,8 @@ def build_default_capability_registry(memory_store: Any | None = None) -> Capabi
                 "state": result.get("state"), "verified": bool(result.get("html_url"))}
 
     entries = (
-        Capability("browser.extract", "Navigate to an approved public URL and extract page text.", "cloud", ("network",), "low"),
+        Capability("browser.extract", "Navigate to a validated public URL and extract page text and optional links.", "cloud", ("network",), "low"),
+        Capability("browser.interact", "Fill one labeled non-sensitive text field and click one named button on a public page after explicit approval.", "cloud", ("network", "external_interaction"), "high"),
         Capability("research.search", "Search public web results and return source titles and URLs.", "cloud", ("network",), "low"),
         Capability("code.generate", "Generate or review source code using the configured reasoning provider.", "cloud", ("model",), "low"),
         Capability("terminal.execute", "Run an approved command inside a Bubblewrap sandbox with no network and a workspace-only writable mount.", "cloud", ("terminal",), "critical"),
@@ -489,7 +500,8 @@ def build_default_capability_registry(memory_store: Any | None = None) -> Capabi
     github_configured = bool(os.getenv("GITHUB_TOKEN", "").strip())
     for item in entries:
         executors = {
-            "browser.extract": browser_extract, "research.search": research_search,
+            "browser.extract": browser_extract, "browser.interact": browser_interact,
+            "research.search": research_search,
             "files.read": file_read, "files.write": file_write, "files.list": file_list,
             "data.analyze": data_analyze, "documents.create": document_create,
             "github.read": github_read, "github.write": github_write,
