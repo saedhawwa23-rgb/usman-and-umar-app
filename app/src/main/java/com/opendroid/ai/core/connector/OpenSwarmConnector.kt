@@ -60,7 +60,7 @@ class OpenSwarmConnector @Inject constructor(
         val payload = JsonParser.parseString(validated).asJsonObject
         val response = client.executeOpenSwarmTool(spec.capabilityId, JSONObject(gson.toJson(payload)), approved = false)
         if (response.optString("status") != "executed") return ConnectorResult(false, error = response.toString())
-        ConnectorResult(true, response.opt("result")?.toString().orEmpty().take(24_000))
+        return ConnectorResult(true, response.opt("result")?.toString().orEmpty().take(24_000))
     }
 
     private val discoveryTool = ConnectorTool(
