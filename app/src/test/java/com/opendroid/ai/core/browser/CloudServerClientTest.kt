@@ -117,7 +117,7 @@ class CloudServerClientTest {
             }.exceptionOrNull()
             assertTrue(failure is CloudRequestException)
             assertTrue(failure?.message.orEmpty().contains("stage=health_check"))
-            assertTrue(failure?.message.orEmpty().contains("accepting_new_tasks=missing"))
+            assertTrue(failure?.message.orEmpty().contains("OpenSwarm server offline. Start the Colab notebook and try again."))
             assertEquals("/health", server.takeRequest().target)
             assertEquals(1, server.requestCount)
         } finally {
