@@ -14,6 +14,7 @@ import com.opendroid.ai.core.security.ProviderCredentialId
 import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
 import com.opendroid.ai.core.security.ProviderCredentialStore
 import com.opendroid.ai.core.browser.validateOpenSwarmTunnelUrl
+import com.opendroid.ai.core.browser.OpenSwarmRouteConfig
 import com.opendroid.ai.data.models.AutoReplyConfig
 import com.opendroid.ai.data.models.LLMConfig
 import com.opendroid.ai.data.db.dao.CloudServerDao
@@ -75,7 +76,7 @@ class SettingsRepository internal constructor(
     private val cloudServerDao: CloudServerDao? = null,
 ) {
     companion object {
-        const val MAX_CLOUD_SERVERS = 10
+        const val MAX_CLOUD_SERVERS = OpenSwarmRouteConfig.MAX_CONNECTED_NODES
     }
     @Inject
     constructor(
@@ -158,6 +159,9 @@ class SettingsRepository internal constructor(
 
     suspend fun saveCloudServer(server: CloudServerConfig, token: String = server.token) {
         val normalized = server.copy(name = server.name.trim().ifBlank { "OpenSwarm Colab" }.take(80), url = validateOpenSwarmTunnelUrl(server.url), token = "", role = "OPENSWARM")
+        check(cloudServers.first().none { it.id != normalized.id }) {
+            "Only one OpenSwarm Colab node can be connected. Remove the existing node first."
+        }
         saveDynamicCloudToken(normalized.id, token)
         if (cloudServerDao != null) {
             val rows = cloudServerDao.observeAll().first()

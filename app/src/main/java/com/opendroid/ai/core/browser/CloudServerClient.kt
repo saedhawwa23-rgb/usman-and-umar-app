@@ -104,8 +104,10 @@ internal fun parseCloudServerHealth(
         if (checkpointReady != true) add("checkpoint_ready=${checkpointReady ?: "missing"}")
         if (leaseReady != true) add("lease_ready=${leaseReady ?: "missing"}")
     }
-    val reportedError = text("error")
-    val reason = recoveryReason ?: reportedError ?: readinessIssues.joinToString(", ").takeIf { it.isNotEmpty() }
+    val backendMessage = text("detail") ?: text("message") ?: text("error") ?: text("reason")
+        ?: body.trim().takeIf { json == null && it.isNotBlank() }
+            ?.let { sanitizeCloudDiagnostic(it.take(300), secrets) }
+    val reason = recoveryReason ?: backendMessage ?: readinessIssues.joinToString(", ").takeIf { it.isNotEmpty() }
     return CloudServerHealth(
         serverId = serverId,
         serverName = serverName,
@@ -124,7 +126,7 @@ internal fun parseCloudServerHealth(
         activeTasks = int("active_tasks"),
         recoveryState = recoveryState,
         recoveryReason = reason,
-        readinessMessage = text("detail") ?: reason,
+        readinessMessage = backendMessage ?: reason,
         ready = ready,
         authReady = authReady,
         redisReady = redisReady,
@@ -219,6 +221,7 @@ internal fun cloudExecuteOkHttpClient(): OkHttpClient = OkHttpClient.Builder()
 class CloudServerClient @Inject constructor(
     private val settingsRepository: SettingsRepository,
 ) {
+    internal var endpointBaseOverrideForTests: String? = null
     private val client = cloudExecuteOkHttpClient()
 
     private val controlClient = OkHttpClient.Builder()
@@ -237,9 +240,16 @@ class CloudServerClient @Inject constructor(
         .build()
 
     /** Probes every enabled configured server concurrently and orders healthy servers by latency. */
-    suspend fun pingAll(includeDisabled: Boolean = false): List<CloudServerHealth> = probeServers(
-        settingsRepository.cloudServers.first().filter { it.role == "OPENSWARM" && (includeDisabled || it.enabled) && it.url.isNotBlank() },
-    )
+    suspend fun pingAll(includeDisabled: Boolean = false): List<CloudServerHealth> {
+        val configured = settingsRepository.cloudServers.first()
+            .filter { it.role == "OPENSWARM" && (includeDisabled || it.enabled) && it.url.isNotBlank() }
+        if (configured.size > OpenSwarmRouteConfig.MAX_CONNECTED_NODES) {
+            return configured.map { server ->
+                CloudServerHealth(server.id, server.name, online = false, error = "Only one OpenSwarm Colab node can be connected.")
+            }
+        }
+        return probeServers(configured)
+    }
 
     suspend fun testOpenSwarmConnection(url: String, token: String, onWaking: () -> Unit = {}): CloudServerHealth {
         val normalized = validateOpenSwarmTunnelUrl(url)
@@ -254,9 +264,10 @@ class CloudServerClient @Inject constructor(
     }
 
     suspend fun hasOnlineOpenSwarmServer(onWaking: () -> Unit = {}): Boolean {
-        val server = settingsRepository.cloudServers.first()
-            .firstOrNull { it.role == "OPENSWARM" && it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
-            ?: return false
+        val profiles = settingsRepository.cloudServers.first()
+            .filter { it.role == "OPENSWARM" && it.url.isNotBlank() }
+        if (profiles.size != OpenSwarmRouteConfig.MAX_CONNECTED_NODES) return false
+        val server = profiles.singleOrNull { it.enabled && it.token.isNotBlank() } ?: return false
         val first = withContext(Dispatchers.IO) { probe(server) }
         if (first.online) return true
         if (!first.error.orEmpty().contains("timeout", ignoreCase = true)) return false
@@ -278,7 +289,15 @@ class CloudServerClient @Inject constructor(
         onDispatch: suspend (String) -> Unit = {},
     ): String = withContext(Dispatchers.IO) {
         val configured = settingsRepository.cloudServers.first()
-        val candidates = configured.filter { it.role == "OPENSWARM" && it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
+        val profiles = configured.filter { it.role == "OPENSWARM" && it.url.isNotBlank() }
+        if (profiles.size != OpenSwarmRouteConfig.MAX_CONNECTED_NODES) {
+            throw CloudRequestException(
+                stage = "configuration",
+                requestUrl = null,
+                responseBody = "OpenSwarm server offline. Start the Colab notebook and try again.",
+            )
+        }
+        val candidates = profiles.filter { it.enabled && it.token.isNotBlank() }
         if (candidates.isEmpty()) {
             throw CloudRequestException(
                 stage = "configuration",
@@ -291,14 +310,11 @@ class CloudServerClient @Inject constructor(
         val healthyIds = health.filter { it.online }.mapTo(hashSetOf()) { it.serverId }
         if (healthyIds.isEmpty()) {
             val selected = candidates.first()
-            val healthDetail = health.joinToString("; ") { result ->
-                "${result.serverName}: ${result.error ?: "offline"}${result.httpCode?.let { " (HTTP $it)" }.orEmpty()}"
-            }
             throw CloudRequestException(
                 stage = "health_check",
-                requestUrl = "${normalizeServerBase(selected.url)}/health",
+                requestUrl = "${serverBaseUrl(selected.url)}/health",
                 httpStatus = health.firstOrNull()?.httpCode,
-                responseBody = "OpenSwarm server offline. Start the Colab notebook and try again. $healthDetail",
+                responseBody = "OpenSwarm server offline. Start the Colab notebook and try again.",
             )
         }
         val rankedHealthy = health.asSequence()
@@ -340,7 +356,7 @@ class CloudServerClient @Inject constructor(
 
         var lastError: CloudRequestException? = null
         for ((position, server) in ordered.withIndex()) {
-            val baseUrl = normalizeServerBase(server.url)
+            val baseUrl = serverBaseUrl(server.url)
             val requestUrl = "$baseUrl/execute"
             val safeUrl = safeDiagnosticUrl(requestUrl)
             try {
@@ -408,9 +424,13 @@ class CloudServerClient @Inject constructor(
     suspend fun controlTask(taskId: String, action: String, targetId: String? = null): String {
         require(taskId.matches(Regex("[A-Za-z0-9._-]{1,128}"))) { "Invalid cloud task ID." }
         require(action in setOf("pause", "cancel", "resume")) { "Unsupported cloud task control action." }
-        val configured = settingsRepository.cloudServers.first()
-            .filter { it.role == "OPENSWARM" && it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
-        check(configured.isNotEmpty()) { "Enable and configure at least one cloud server in Remote settings." }
+        val profiles = settingsRepository.cloudServers.first()
+            .filter { it.role == "OPENSWARM" && it.url.isNotBlank() }
+        check(profiles.size == OpenSwarmRouteConfig.MAX_CONNECTED_NODES) {
+            "Only one OpenSwarm Colab node can be connected."
+        }
+        val configured = profiles.filter { it.enabled && it.token.isNotBlank() }
+        check(configured.isNotEmpty()) { "Enable and configure the OpenSwarm Colab node in Remote settings." }
         // Controls target already-running work, so a draining/not-ready server
         // with a live HTTP health endpoint must remain reachable for pause/cancel.
         // New task dispatch continues to require the stricter `online` predicate.
@@ -430,7 +450,7 @@ class CloudServerClient @Inject constructor(
         for (server in ordered) {
             var serverAcceptedRequest = false
             try {
-                val baseUrl = normalizeServerBase(server.url)
+                val baseUrl = serverBaseUrl(server.url)
                 val request = Request.Builder()
                     .url("$baseUrl/tasks/$taskId/$action")
                     .header("Authorization", "Bearer ${server.token}")
@@ -488,7 +508,7 @@ class CloudServerClient @Inject constructor(
 
     /** Wait until the active specialist finishes and the backend persists a PAUSED checkpoint. */
     private suspend fun awaitPausedCheckpoint(server: CloudServerConfig, taskId: String): String {
-        val baseUrl = normalizeServerBase(server.url)
+        val baseUrl = serverBaseUrl(server.url)
         repeat(180) {
             delay(1_000)
             val request = Request.Builder()
@@ -520,7 +540,7 @@ class CloudServerClient @Inject constructor(
 
     /** A successful control POST is only a request; confirmation requires terminal task state. */
     private suspend fun awaitCancellationConfirmation(server: CloudServerConfig, taskId: String): String {
-        val baseUrl = normalizeServerBase(server.url)
+        val baseUrl = serverBaseUrl(server.url)
         repeat(180) {
             delay(1_000)
             val request = Request.Builder()
@@ -551,13 +571,17 @@ class CloudServerClient @Inject constructor(
 
     /** Reads the real agent roster and adapter readiness from the fastest healthy configured backend. */
     suspend fun fetchOpenSwarmAgents(): List<RemoteOpenSwarmAgent> {
-        val configured = settingsRepository.cloudServers.first()
-            .filter { it.role == "OPENSWARM" && it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
-        check(configured.isNotEmpty()) { "Enable and configure a cloud server first." }
+        val profiles = settingsRepository.cloudServers.first()
+            .filter { it.role == "OPENSWARM" && it.url.isNotBlank() }
+        check(profiles.size == OpenSwarmRouteConfig.MAX_CONNECTED_NODES) {
+            "Only one OpenSwarm Colab node can be connected."
+        }
+        val configured = profiles.filter { it.enabled && it.token.isNotBlank() }
+        check(configured.isNotEmpty()) { "Enable and configure the OpenSwarm Colab node first." }
         val healthy = probeServers(configured).filter { it.online }
         check(healthy.isNotEmpty()) { "No configured OpenSwarm server is healthy." }
         val server = configured.first { candidate -> candidate.id == healthy.first().serverId }
-        val baseUrl = normalizeServerBase(server.url)
+        val baseUrl = serverBaseUrl(server.url)
         fun getJson(path: String): JSONObject {
             val request = Request.Builder().url("$baseUrl$path")
                 .header("Authorization", "Bearer ${server.token}").get().build()
@@ -600,7 +624,7 @@ class CloudServerClient @Inject constructor(
     private fun probe(server: CloudServerConfig): CloudServerHealth {
         val started = System.nanoTime()
         return try {
-            val builder = Request.Builder().url("${normalizeServerBase(server.url)}/health").get()
+            val builder = Request.Builder().url("${serverBaseUrl(server.url)}/health").get()
             server.token.takeIf { it.isNotBlank() }?.let { builder.header("Authorization", "Bearer $it") }
             healthClient.newCall(builder.build()).execute().use { response ->
                 val body = response.body?.string().orEmpty()
@@ -625,10 +649,10 @@ class CloudServerClient @Inject constructor(
         }
     }
 
-    private fun normalizeServerBase(raw: String): String = raw.trimEnd('/')
-        .removeSuffix("/execute")
-        .removeSuffix("/health")
-        .trimEnd('/')
+    private fun serverBaseUrl(raw: String): String {
+        endpointBaseOverrideForTests?.let { return it }
+        return validateOpenSwarmTunnelUrl(raw)
+    }
 
 }
 

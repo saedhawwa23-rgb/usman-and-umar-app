@@ -5,6 +5,18 @@ import java.util.Locale
 
 enum class OpenSwarmConnectionState { ONLINE, WAKING, OFFLINE }
 
+object OpenSwarmRouteConfig {
+    const val ENABLE_NON_OPENSWARM_ROUTES = false
+    const val MAX_CONNECTED_NODES = 1
+    private val hiddenAgentTokens = setOf("terminal", "file manager", "files", "browser", "delivery")
+
+    fun isHiddenAgent(id: String, name: String): Boolean {
+        if (ENABLE_NON_OPENSWARM_ROUTES) return false
+        val identity = "$id $name".lowercase(Locale.ROOT).replace('_', ' ').replace('-', ' ')
+        return hiddenAgentTokens.any(identity::contains)
+    }
+}
+
 internal fun validateOpenSwarmTunnelUrl(value: String): String {
     val candidate = value.trim().trimEnd('/')
     require(candidate.isNotBlank()) { "Enter the OpenSwarm Colab tunnel URL." }
@@ -19,8 +31,10 @@ internal fun validateOpenSwarmTunnelUrl(value: String): String {
     }
     val host = uri.host?.lowercase(Locale.ROOT)
         ?: throw IllegalArgumentException("Enter a valid HTTPS Colab tunnel URL.")
-    val acceptedHost = (host.endsWith(".loca.lt") && host.removeSuffix(".loca.lt").isNotBlank()) ||
-        (host.endsWith(".trycloudflare.com") && host.removeSuffix(".trycloudflare.com").isNotBlank())
+    val acceptedHost = listOf(".loca.lt", ".trycloudflare.com").any { suffix ->
+        val name = host.removeSuffix(suffix)
+        host.endsWith(suffix) && name.matches(Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"))
+    }
     require(acceptedHost) {
         "Only https://<name>.loca.lt and https://*.trycloudflare.com URLs are supported."
     }

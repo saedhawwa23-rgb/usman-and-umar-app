@@ -1,5 +1,8 @@
 package com.opendroid.ai.data.repository
 
+import android.content.Context
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -7,6 +10,7 @@ import com.opendroid.ai.core.security.CredentialStoreResult
 import com.opendroid.ai.core.security.ProviderCredentialId
 import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
 import com.opendroid.ai.core.security.ProviderCredentialStore
+import com.opendroid.ai.data.db.OpenDroidDatabase
 import com.opendroid.ai.data.models.LLMConfig
 import java.nio.file.Files
 import kotlinx.coroutines.CoroutineScope
@@ -24,6 +28,35 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SettingsRepositoryProviderCredentialsTest {
+
+    @Test
+    fun `OpenSwarm token round trips through credential store and never enters Room or DataStore`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val database = Room.inMemoryDatabaseBuilder(context, OpenDroidDatabase::class.java)
+            .allowMainThreadQueries()
+            .build()
+        val dataStore = newDataStore()
+        val credentials = InMemoryProviderCredentialStore()
+        val token = "openswarm-token-roundtrip-sentinel-v361"
+        try {
+            val repository = SettingsRepository(
+                dataStore = dataStore,
+                providerCredentialStore = credentials,
+                runStartupMigration = false,
+                cloudServerDao = database.cloudServerDao(),
+            )
+            val saved = repository.addCloudServer("Colab", "https://named-node.loca.lt", token)
+            val row = database.cloudServerDao().observeAll().first().single()
+
+            assertEquals("OPENSWARM", row.role)
+            assertFalse(row.toString().contains(token))
+            assertEquals(token, repository.cloudServers.first().single().token)
+            assertFalse(dataStore.data.first().toString().contains(token))
+            assertEquals(token, credentials.values[ProviderCredentialId.ApiKey("openswarm-cloud-server-${saved.id}")])
+        } finally {
+            database.close()
+        }
+    }
 
     @Test
     fun `legacy LLMConfig credentials are migrated then stripped from the DataStore JSON`() = runBlocking {

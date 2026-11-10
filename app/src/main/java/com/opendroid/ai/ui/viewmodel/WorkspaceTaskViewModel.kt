@@ -14,6 +14,7 @@ import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.opendroid.ai.core.agent.SmartLocalAiRouter
 import com.opendroid.ai.core.browser.BrowserUseRemoteProtocol
 import com.opendroid.ai.core.browser.CloudServerClient
+import com.opendroid.ai.core.browser.OpenSwarmRouteConfig
 import com.opendroid.ai.core.browser.requireOpenSwarmOnline
 import com.opendroid.ai.core.browser.RemoteOpenSwarmAgent
 import com.opendroid.ai.core.termux.TermuxIntegration
@@ -41,8 +42,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
-
-private const val ENABLE_NON_OPENSWARM_ROUTES = false
 
 data class BrowserUseRunState(
     val phase: Phase = Phase.IDLE,
@@ -248,7 +247,7 @@ class WorkspaceTaskViewModel @Inject constructor(
                 _message.value = "This task has no supported execution mode."
                 return@launch
             }
-            if (!ENABLE_NON_OPENSWARM_ROUTES && mode != TaskExecutionMode.CLOUD_OPENSWARM) {
+            if (!OpenSwarmRouteConfig.ENABLE_NON_OPENSWARM_ROUTES && mode != TaskExecutionMode.CLOUD_OPENSWARM) {
                 _message.value = "Only the OpenSwarm cloud route is enabled in this build."
                 return@launch
             }

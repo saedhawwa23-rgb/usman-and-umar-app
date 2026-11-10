@@ -111,7 +111,7 @@ class CloudServerClientTest {
         server.enqueue(MockResponse.Builder().code(200).body("{}").build())
         server.start()
         try {
-            val client = CloudServerClient(newSettingsRepository(server.url("/").toString().trimEnd('/'), "legacy-health-token"))
+            val client = newCloudClient(server.url("/").toString().trimEnd('/'), "legacy-health-token")
             val failure = runCatching {
                 client.execute(taskId = "not-ready", prompt = "Do not dispatch", pluginId = "openswarm_agent")
             }.exceptionOrNull()
@@ -120,6 +120,30 @@ class CloudServerClientTest {
             assertTrue(failure?.message.orEmpty().contains("accepting_new_tasks=missing"))
             assertEquals("/health", server.takeRequest().target)
             assertEquals(1, server.requestCount)
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
+    fun `connection test GETs health with Bearer token and preserves backend message`() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse.Builder().code(401)
+                .body("""{"status":"error","message":"APP_CLIENT_TOKEN rejected by Colab."}""").build(),
+        )
+        server.start()
+        try {
+            val client = newCloudClient(server.url("/").toString().trimEnd('/'), "connection-test-secret")
+            val health = client.testOpenSwarmConnection("https://test-node.loca.lt", "connection-test-secret")
+            val request = server.takeRequest()
+
+            assertEquals("GET", request.method)
+            assertEquals("/health", request.target)
+            assertEquals("Bearer connection-test-secret", request.headers["Authorization"])
+            assertEquals(401, health.httpCode)
+            assertEquals("APP_CLIENT_TOKEN rejected by Colab.", health.readinessMessage)
+            assertFalse(health.online)
         } finally {
             server.close()
         }
@@ -181,7 +205,7 @@ class CloudServerClientTest {
         server.enqueue(MockResponse.Builder().code(200).body("""{"task_id":"task-cancel","state":"CANCELLED"}""").build())
         server.start()
         try {
-            val client = CloudServerClient(newSettingsRepository(server.url("/").toString().trimEnd('/'), "cancel-token"))
+            val client = newCloudClient(server.url("/").toString().trimEnd('/'), "cancel-token")
             val result = JSONObject(client.controlTask("task-cancel", "cancel", "legacy-1"))
             assertEquals("CANCELLED", result.getString("state"))
             assertEquals("/health", server.takeRequest().target)
@@ -225,7 +249,7 @@ class CloudServerClientTest {
         server.start()
         try {
             val token = "test-bearer-that-must-not-enter-json"
-            val client = CloudServerClient(newSettingsRepository(server.url("/").toString().trimEnd('/'), token))
+            val client = newCloudClient(server.url("/").toString().trimEnd('/'), token)
             val response = client.execute(
                 taskId = "chat-1730838420000",
                 prompt = "Go to https://example.com and return the page title",
@@ -263,7 +287,7 @@ class CloudServerClientTest {
         server.start()
         try {
             val token = "do-not-expose-this-bearer"
-            val client = CloudServerClient(newSettingsRepository(server.url("/").toString().trimEnd('/'), token))
+            val client = newCloudClient(server.url("/").toString().trimEnd('/'), token)
             val failure = runCatching {
                 client.execute(taskId = "invalid-auth-1", prompt = "Check status", pluginId = "openswarm_agent")
             }.exceptionOrNull()
@@ -295,7 +319,7 @@ class CloudServerClientTest {
         server.start()
         try {
             val token = "structured-secret"
-            val client = CloudServerClient(newSettingsRepository(server.url("/").toString().trimEnd('/'), token))
+            val client = newCloudClient(server.url("/").toString().trimEnd('/'), token)
             val failure = runCatching {
                 client.execute(taskId = "task-42", prompt = "Run task", pluginId = "openswarm_agent")
             }.exceptionOrNull()
@@ -315,7 +339,7 @@ class CloudServerClientTest {
 
     @Test
     fun `unavailable tunnel is reported at the health check stage without attempting execute`() = runBlocking {
-        val client = CloudServerClient(newSettingsRepository("http://127.0.0.1:1", "offline-test-token"))
+        val client = newCloudClient("http://127.0.0.1:1", "offline-test-token")
 
         val failure = runCatching {
             client.execute(taskId = "offline-1", prompt = "Check status", pluginId = "openswarm_agent")
@@ -351,6 +375,11 @@ class CloudServerClientTest {
             server.close()
         }
     }
+
+    private fun newCloudClient(endpoint: String, token: String): CloudServerClient =
+        CloudServerClient(newSettingsRepository("https://mock-node.loca.lt", token)).apply {
+            endpointBaseOverrideForTests = endpoint
+        }
 
     private fun newSettingsRepository(url: String, token: String): SettingsRepository {
         val dataStore = PreferenceDataStoreFactory.create(

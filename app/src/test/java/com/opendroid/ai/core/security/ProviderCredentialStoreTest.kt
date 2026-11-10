@@ -33,6 +33,20 @@ class ProviderCredentialStoreTest {
     }
 
     @Test
+    fun `OpenSwarm APP CLIENT token is encrypted at rest and reads back through its credential ID`() {
+        val records = InMemoryCredentialRecords()
+        val store = newStore(records = records)
+        val credential = ProviderCredentialId.ApiKey("openswarm-cloud-server-colab-id")
+        val secret = "openswarm-token-roundtrip-sentinel-v361"
+
+        assertTrue(store.write(credential, secret) is CredentialStoreResult.Success)
+        val envelope = records.records.values.single()
+        assertTrue(envelope.startsWith("v1."))
+        assertFalse(envelope.contains(secret))
+        assertEquals(secret, (store.read(credential) as CredentialStoreResult.Success).value)
+    }
+
+    @Test
     fun `tampered AES GCM ciphertext is rejected rather than returned`() {
         val records = InMemoryCredentialRecords()
         val store = newStore(records = records)

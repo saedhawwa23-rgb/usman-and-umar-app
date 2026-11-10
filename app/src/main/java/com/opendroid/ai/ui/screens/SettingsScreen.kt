@@ -45,6 +45,7 @@ import com.opendroid.ai.core.llm.ProviderCatalog
 import com.opendroid.ai.core.llm.error.LLMError
 import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
 import com.opendroid.ai.data.repository.ProviderCredentialPersistenceState
+import com.opendroid.ai.data.repository.SettingsRepository
 import com.opendroid.ai.ui.theme.*
 import com.opendroid.ai.ui.viewmodel.SettingsViewModel
 import androidx.compose.runtime.collectAsState
@@ -285,7 +286,7 @@ fun SettingsScreen(
                                 }
                                 Text(if (pingingCloudServers) " Checking…" else " Ping All")
                             }
-                            Text("${cloudServers.size}/10 configured", color = TextSecondary, fontSize = 12.sp)
+                            Text("${cloudServers.size}/${SettingsRepository.MAX_CLOUD_SERVERS} OpenSwarm node configured", color = TextSecondary, fontSize = 12.sp)
                         }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Switch(checked = cloudKeepAliveEnabled, onCheckedChange = viewModel::setCloudKeepAliveEnabled)
@@ -401,8 +402,8 @@ fun SettingsScreen(
             item {
                 Card(modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = CardBackground)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("ADD CLUSTER SERVER · ${cloudServers.size}/10", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
-                        Text("Connect a Colab runtime in four short steps. Server tokens stay in secure app storage.", color = TextSecondary, fontSize = 11.sp)
+                        Text("ADD OPENSWARM COLAB NODE · ${cloudServers.size}/${SettingsRepository.MAX_CLOUD_SERVERS}", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
+                        Text("Connect one Colab runtime in four short steps. Server tokens stay in encrypted app storage.", color = TextSecondary, fontSize = 11.sp)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
                                 onClick = {
@@ -412,7 +413,7 @@ fun SettingsScreen(
                                         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(COLAB_NOTEBOOK_URL)))
                                     }
                                 },
-                                enabled = cloudServers.size < 10,
+                                enabled = cloudServers.size < SettingsRepository.MAX_CLOUD_SERVERS,
                             ) { Text("Launch Colab Notebook") }
                             OutlinedButton(onClick = { showColabWizard = true; colabWizardStep = 0 }) {
                                 Text("Setup guide")
@@ -431,8 +432,8 @@ fun SettingsScreen(
                                 newServerUrl = ""
                                 newServerToken = ""
                             },
-                            enabled = newServerUrl.isNotBlank() && newServerToken.isNotBlank() && cloudServers.size < 10,
-                        ) { Text(if (cloudServers.size < 10) "+ Add Cloud Server" else "Cluster Full") }
+                            enabled = newServerUrl.isNotBlank() && newServerToken.isNotBlank() && cloudServers.size < SettingsRepository.MAX_CLOUD_SERVERS,
+                        ) { Text(if (cloudServers.size < SettingsRepository.MAX_CLOUD_SERVERS) "+ Add OpenSwarm Node" else "One node already configured") }
                         OutlinedButton(
                             onClick = { viewModel.testOpenSwarmConnection(newServerUrl, newServerToken) },
                             enabled = newServerUrl.isNotBlank() && newServerToken.isNotBlank(),

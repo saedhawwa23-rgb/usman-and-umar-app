@@ -53,6 +53,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.opendroid.ai.core.agent.InstalledAiAppPreferences
 import com.opendroid.ai.core.agent.SmartLocalAiRouter
+import com.opendroid.ai.core.browser.OpenSwarmRouteConfig
 import com.usmanandumar.workspace.core.task.TaskExecutionMode
 import com.usmanandumar.workspace.core.task.TaskState
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
@@ -67,8 +68,6 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 private enum class TaskuaryPage(val label: String) { INBOX("Inbox"), DASHBOARD("Dashboard"), BOARD("Kanban") }
-private const val ENABLE_NON_OPENSWARM_ROUTES = false
-private val HIDDEN_LOCAL_AGENT_IDS = setOf("terminal", "files", "browser", "delivery")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -162,7 +161,7 @@ fun WorkspaceTaskScreen(
             }
             item {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ModeMenu(mode = mode, onSelect = { mode = it }, modifier = Modifier.weight(1f), enableNonOpenSwarmRoutes = ENABLE_NON_OPENSWARM_ROUTES)
+                    ModeMenu(mode = mode, onSelect = { mode = it }, modifier = Modifier.weight(1f), enableNonOpenSwarmRoutes = OpenSwarmRouteConfig.ENABLE_NON_OPENSWARM_ROUTES)
                     if (mode == TaskExecutionMode.LOCAL_AI_APP) {
                         Column(Modifier.weight(1f)) {
                             ProviderMenu(
@@ -227,7 +226,7 @@ fun WorkspaceTaskScreen(
                         Text("OPEN SWARM AGENT TEAM", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
                         Text(
                             if (openSwarmAgents.isEmpty()) "Load the real agent roster from a healthy configured cloud server."
-                            else "${openSwarmAgents.count { ENABLE_NON_OPENSWARM_ROUTES || it.id !in HIDDEN_LOCAL_AGENT_IDS }} registered specialist agents",
+                            else "${openSwarmAgents.count { !OpenSwarmRouteConfig.isHiddenAgent(it.id, it.name) }} registered specialist agents",
                             color = AppTheme.colors.textPrimary,
                             fontSize = 14.sp,
                         )
@@ -236,7 +235,7 @@ fun WorkspaceTaskScreen(
                             enabled = !openSwarmRosterLoading && cloudServers.any { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() },
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text(if (openSwarmRosterLoading) "Checking agent team..." else "Refresh OpenSwarm agents") }
-                        openSwarmAgents.filter { ENABLE_NON_OPENSWARM_ROUTES || it.id !in HIDDEN_LOCAL_AGENT_IDS }.forEach { agent ->
+                        openSwarmAgents.filter { !OpenSwarmRouteConfig.isHiddenAgent(it.id, it.name) }.forEach { agent ->
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Column(Modifier.weight(1f)) {
                                     Text(agent.name, color = AppTheme.colors.textPrimary, fontSize = 13.sp)
@@ -252,7 +251,7 @@ fun WorkspaceTaskScreen(
                     }
                 }
             }
-            if (ENABLE_NON_OPENSWARM_ROUTES) item {
+            if (OpenSwarmRouteConfig.ENABLE_NON_OPENSWARM_ROUTES) item {
                 Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
                     Column(Modifier.fillMaxWidth().padding(12.dp)) {
                         Text("CLOUD BROWSER USE SETTINGS", fontSize = 12.sp, color = AppTheme.colors.textSecondary)
@@ -324,7 +323,7 @@ fun WorkspaceTaskScreen(
                     }
                 }
             }
-            if (ENABLE_NON_OPENSWARM_ROUTES) item {
+            if (OpenSwarmRouteConfig.ENABLE_NON_OPENSWARM_ROUTES) item {
                 Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
                     Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) {
