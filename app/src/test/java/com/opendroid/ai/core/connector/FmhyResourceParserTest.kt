@@ -66,8 +66,8 @@ class FmhyResourceParserTest {
     @Test
     fun `site tool payload binds trusted host and permits only rooted safe paths`() {
         val payload = siteToolPayload("tool-one.example", "/catalog/tools")
-        assertEquals("https://tool-one.example/catalog/tools", payload.getString("url"))
-        assertEquals("tool-one.example", payload.getJSONArray("allowed_domains").getString(0))
+        assertEquals("https://tool-one.example/catalog/tools", payload.get("url").asString)
+        assertEquals("tool-one.example", payload.getAsJsonArray("allowed_domains").get(0).asString)
     }
 
     @Test

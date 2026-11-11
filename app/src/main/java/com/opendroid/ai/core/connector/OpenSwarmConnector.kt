@@ -1,6 +1,8 @@
 package com.opendroid.ai.core.connector
 
 import com.google.gson.Gson
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.opendroid.ai.core.browser.CloudServerClient
 import com.opendroid.ai.core.browser.OpenSwarmRemoteTool
@@ -71,7 +73,7 @@ class OpenSwarmConnector @Inject constructor(
                 .getOrElse { return ConnectorResult(false, error = "Site path is invalid.") }
             val payload = runCatching { siteToolPayload(spec.host, path) }
                 .getOrElse { return ConnectorResult(false, error = it.message ?: "Site path is invalid.") }
-            val response = runCatching { client.executeOpenSwarmTool("browser.extract", payload, approved = false) }
+            val response = runCatching { client.executeOpenSwarmTool("browser.extract", JSONObject(payload.toString()), approved = false) }
                 .getOrElse { return ConnectorResult(false, error = it.message ?: "Site read failed.") }
             if (response.optString("status") != "executed") return ConnectorResult(false, error = response.toString())
             return ConnectorResult(true, response.opt("result")?.toString().orEmpty().take(24_000))
@@ -164,17 +166,18 @@ class OpenSwarmConnector @Inject constructor(
 /** Trusted host binding kept in the tool registry; the model can only choose a path. */
 internal data class SiteToolSpec(val host: String, val tool: ConnectorTool)
 
-internal fun siteToolPayload(host: String, path: String): JSONObject {
+internal fun siteToolPayload(host: String, path: String): JsonObject {
     val trustedHost = host.lowercase(Locale.ROOT).trimEnd('.')
     require(trustedHost.matches(Regex("[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?"))) { "Trusted site host is invalid." }
     require(path.startsWith('/')) { "Site paths must start with '/'." }
     require(path.length <= 2048 && path.none { it.isISOControl() }) { "Site path is invalid." }
     require(".." !in path) { "Site path must not contain '..'." }
     require(!path.startsWith("//") && !path.contains('#')) { "Site path is invalid." }
-    return JSONObject()
-        .put("url", "https://$trustedHost$path")
-        .put("allowed_domains", JSONArray().put(trustedHost))
-        .put("include_title", true)
+    return JsonObject().apply {
+        addProperty("url", "https://$trustedHost$path")
+        add("allowed_domains", JsonArray().apply { add(trustedHost) })
+        addProperty("include_title", true)
+    }
 }
 
 internal data class FmhyResource(val url: String, val host: String)
