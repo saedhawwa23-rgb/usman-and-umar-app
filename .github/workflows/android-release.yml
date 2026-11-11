@@ -10,7 +10,7 @@ on:
       tag:
         description: GitHub Release tag to create
         required: true
-        default: v3.6.0-hybrid-orchestrator
+        default: v3.8.2
 
 permissions:
   contents: write
@@ -108,8 +108,8 @@ jobs:
           out=dist
           mkdir -p "$out"
           test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.6.0'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='24'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.8.2'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='28'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
           certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt")
           expected_sha1=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | awk -F': ' '/SHA1:/{print toupper($2); exit}')
@@ -121,25 +121,34 @@ jobs:
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
           grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' "$out/PROOT_ELF.txt"
           sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
-          cp "$apk" "$out/USMAN-AND-UMAR-v3.6.0-hybrid-orchestrator.apk"
-          sha256sum "$out/USMAN-AND-UMAR-v3.6.0-hybrid-orchestrator.apk" | tee "$out/SHA256SUMS.txt"
+          cp "$apk" "$out/USMAN-AND-UMAR-v3.8.2.apk"
+          sha256sum "$out/USMAN-AND-UMAR-v3.8.2.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nref=%s\ntag=%s\n' "$(git rev-parse HEAD)" "${{ inputs.ref }}" "${{ inputs.tag }}" > "$out/BUILD_METADATA.txt"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
         with:
-          tag_name: ${{ inputs.tag || format('v3.6.0-hybrid-orchestrator-{0}', github.run_number) }}
-          name: USMAN AND UMAR ${{ inputs.tag || format('v3.6.0-hybrid-orchestrator-{0}', github.run_number) }}
+          tag_name: ${{ inputs.tag || 'v3.8.2' }}
+          target_commitish: ${{ steps.build-meta.outputs.commit }}
+          name: USMAN AND UMAR ${{ inputs.tag || 'v3.8.2' }}
           body: |
-            Verified Android ARM32 debug APK for the Hybrid Task Orchestrator release.
+            USMAN AND UMAR v3.8.2 — unified agent and on-device safety release.
 
             Commit: `${{ steps.build-meta.outputs.commit }}`
             Package: `com.usmanandumar.app`
-            Version: `3.6.0` (versionCode `24`)
+            Version: `3.8.2` (versionCode `28`)
             ABI: `armeabi-v7a`
 
-            Physical Samsung Galaxy M10 runtime verification remains separate and is not claimed by this release.
+            Highlights:
+            - Chat offers API Model — Chat only and API Model — Chat + tools.
+            - Chat + tools uses the bounded 12-step Unified Agent Loop with cooperative Stop behavior.
+            - On-device controls are guarded by the global Kill Switch and accessibility permission.
+            - FMHY discovery binds dynamic `site.<host>` tools to trusted hosts and validates rooted paths.
+            - Colab Playwright setup uses the explicit `/content/ms-playwright` browser path; browser-use is not a runtime dependency.
+
+            APK signature and SHA-256 checksum are included with the assets. This package uses the repository's stable Android debug signing key; it is not a Play Store production signing key.
+            Physical-device runtime verification remains separate and is not claimed by this release.
           files: dist/*
           fail_on_unmatched_files: true
           draft: false
-          prerelease: true
+          prerelease: false
