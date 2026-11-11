@@ -60,35 +60,21 @@ jobs:
           chmod 600 debug.keystore
           keytool -list -keystore debug.keystore -storepass android -alias androiddebugkey >/dev/null
 
-      - name: Install ARM32 cross-compilation toolchain
-        run: |
-          sudo dpkg --add-architecture armhf
-          sudo tee /etc/apt/sources.list.d/armhf-ports.list >/dev/null <<'EOF'
-          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main universe
-          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe
-          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main universe
-          EOF
-          sudo apt-get update || true
-          sudo apt-get install -y gcc-arm-linux-gnueabihf libseccomp-dev:armhf libtalloc-dev:armhf pkg-config
-
-      - name: Build pinned ARM32 PRoot asset
+      - name: Restore verified ARM32 PRoot asset from preserved v3.8.0 release
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf /tmp/proot
-          git clone https://github.com/termux/proot.git /tmp/proot
-          git -C /tmp/proot checkout --quiet b8c1f5c5c6730dc9d521d5bd5ce1cfeedecde087
-          grep -R --line-number -- '--link2symlink' /tmp/proot/src/cli/proot.c /tmp/proot/src/cli/proot.h
-          make -C /tmp/proot/src -j"$(nproc)" \
-            CROSS_COMPILE=arm-linux-gnueabihf- \
-            CC=arm-linux-gnueabihf-gcc \
-            STRIP=arm-linux-gnueabihf-strip \
-            CFLAGS='-marm -DARM_cpsr=uregs[16] -DPSR_T_BIT=0x00000020' \
-            LDFLAGS="-static -ltalloc -Wl,-z,noexecstack"
-          file /tmp/proot/src/proot | tee /tmp/proot-file.txt
+          source_apk=/tmp/USMAN-AND-UMAR-v3.8.0.apk
+          curl --fail --location --retry 5 --retry-all-errors --retry-delay 3 \
+            https://github.com/saedhawwa23-rgb/usman-and-umar-app/releases/download/v3.8.0/USMAN-AND-UMAR-v3.8.0.apk \
+            --output "$source_apk"
+          echo '1cbd34f95d2a427e3f6253f12e0346f8358bebfa1a728d38e0ce5b7c0f4ab842  '"$source_apk" | sha256sum --check
+          unzip -p "$source_apk" assets/proot/proot > /tmp/proot
+          echo '6ef736d86c8b9a6de61e8b417876594f9d8ad294a7d10b56110e4632cd2e6be7  /tmp/proot' | sha256sum --check
+          file /tmp/proot | tee /tmp/proot-file.txt
           grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' /tmp/proot-file.txt
           mkdir -p app/src/main/assets/proot
-          cp /tmp/proot/src/proot app/src/main/assets/proot/proot
+          cp /tmp/proot app/src/main/assets/proot/proot
           chmod 755 app/src/main/assets/proot/proot
 
       - name: Run unit tests and build debug APK
