@@ -44,6 +44,7 @@ import com.opendroid.ai.core.llm.AIModel
 import com.opendroid.ai.core.llm.ProviderCatalog
 import com.opendroid.ai.core.llm.error.LLMError
 import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
+import com.opendroid.ai.core.connector.KillSwitch
 import com.opendroid.ai.data.repository.ProviderCredentialPersistenceState
 import com.opendroid.ai.data.repository.SettingsRepository
 import com.opendroid.ai.ui.theme.*
@@ -101,6 +102,7 @@ fun SettingsScreen(
     val pingingCloudServers by viewModel.pingingCloudServers.collectAsState()
     val cloudKeepAliveEnabled by viewModel.cloudKeepAliveEnabled.collectAsState()
     val openSwarmConnectionCheck by viewModel.openSwarmConnectionCheck.collectAsState()
+    val killSwitchEngaged by KillSwitch.state.collectAsState()
     var expandedCloudServerIds by remember { mutableStateOf(emptySet<String>()) }
     var newServerName by remember { mutableStateOf("") }
     var newServerUrl by remember { mutableStateOf("") }
@@ -183,6 +185,36 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(bottom = 32.dp)
         ) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().border(
+                        1.dp,
+                        if (killSwitchEngaged) Color(0xFFFF5252) else AccentCyan,
+                        RoundedCornerShape(12.dp),
+                    ),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("DEVICE CONTROL KILL SWITCH", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                            Text(
+                                if (killSwitchEngaged) "ENGAGED · all device actions are blocked" else "RELEASED · approved device tools may run",
+                                fontSize = 12.sp,
+                                color = if (killSwitchEngaged) Color(0xFFFF5252) else TextSecondary,
+                            )
+                        }
+                        Switch(
+                            checked = killSwitchEngaged,
+                            onCheckedChange = { enabled -> if (enabled) KillSwitch.engage() else KillSwitch.release() },
+                        )
+                    }
+                }
+            }
+
             if (providerCredentialRecoveryState == ProviderCredentialRecoveryState.CredentialsMustBeReentered) {
                 item {
                     Card(

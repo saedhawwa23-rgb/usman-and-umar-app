@@ -19,13 +19,8 @@ import com.opendroid.ai.core.agent.ChatToolCall
 import com.opendroid.ai.core.agent.ChatErrorPrimaryAction
 import com.opendroid.ai.core.agent.ChatErrorUiState
 import com.opendroid.ai.core.agent.primaryAction
-import com.opendroid.ai.core.browser.BrowserUseRemoteProtocol
-import com.opendroid.ai.core.browser.CloudRequestException
-import com.opendroid.ai.core.browser.CloudServerClient
-import com.opendroid.ai.core.browser.OpenSwarmResponse
-import com.opendroid.ai.core.browser.OpenSwarmResponseDecoder
 import com.opendroid.ai.core.browser.sanitizeCloudDiagnostic
-import com.opendroid.ai.core.connector.CloudToolAgent
+import com.opendroid.ai.core.connector.UnifiedAgentLoop
 import com.opendroid.ai.core.connector.ConnectorApprovalCoordinator
 import com.opendroid.ai.data.models.AutoMode
 import com.opendroid.ai.data.models.ChatDeliveryState
@@ -58,13 +53,10 @@ import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 
-enum class ChatTarget { API_MODEL, CLOUD_OPENSWARM, UNIFIED_AGENT }
+enum class ChatTarget { API_MODEL, UNIFIED_AGENT }
 
-/** OpenSwarm is an execution backend, so selecting its plugin must bypass local/API planning. */
-internal fun resolveChatTarget(target: ChatTarget, pluginIds: List<String>): ChatTarget =
-    if (target == ChatTarget.API_MODEL && "openswarm_agent" in pluginIds) {
-        ChatTarget.CLOUD_OPENSWARM
-    } else target
+/** Plugin selection never changes modes; Chat only remains a tool-free API-model request. */
+internal fun resolveChatTarget(target: ChatTarget, @Suppress("UNUSED_PARAMETER") pluginIds: List<String>): ChatTarget = target
 
 data class CloudTaskUiState(
     val taskId: String,
@@ -81,9 +73,8 @@ class ChatViewModel @Inject constructor(
     private val conversationRepository: ConversationRepository,
     private val settingsRepository: SettingsRepository,
     private val termuxIntegration: TermuxIntegration,
-    private val cloudServerClient: CloudServerClient,
     private val localAiAppExecutor: LocalAiAppExecutor,
-    private val cloudToolAgent: CloudToolAgent,
+    private val unifiedAgentLoop: UnifiedAgentLoop,
     private val connectorApprovals: ConnectorApprovalCoordinator,
 ) : ViewModel() {
 
@@ -97,6 +88,7 @@ class ChatViewModel @Inject constructor(
     private var lastSubmissionAtMillis: Long = 0
     private var lastOutgoingTimestamp: Long = 0
     private var unifiedAgentJob: Job? = null
+    private var unifiedAgentStopToken: java.util.concurrent.atomic.AtomicBoolean? = null
 
     val pendingConnectorApproval = connectorApprovals.pending
 
@@ -205,12 +197,6 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private fun updateCloudTaskUnlessTerminal(taskId: String, transform: (CloudTaskUiState) -> CloudTaskUiState) {
-        val terminalStatuses = setOf("COMPLETED", "FAILED", "CANCELLED")
-        _cloudTaskState.value?.takeIf { it.taskId == taskId && it.status !in terminalStatuses }?.let { current ->
-            _cloudTaskState.value = transform(current)
-        }
-    }
 
     /**
      * [agentState], but forced to [AgentState.Idle] whenever it actually describes a
@@ -284,11 +270,7 @@ class ChatViewModel @Inject constructor(
         lastOutgoingTimestamp = messageTimestamp
 
         val messageId = UUID.randomUUID().toString()
-        val taskId = when (effectiveTarget) {
-            ChatTarget.CLOUD_OPENSWARM -> "chat-${UUID.randomUUID()}"
-            ChatTarget.UNIFIED_AGENT -> "agent-$messageId"
-            ChatTarget.API_MODEL -> null
-        }
+        val taskId = if (effectiveTarget == ChatTarget.UNIFIED_AGENT) "agent-$messageId" else null
         val metadata = JSONObject()
             .put("plugins", JSONArray(pluginIds.distinct()))
             .put("think_harder", thinkHarder)
@@ -306,11 +288,6 @@ class ChatViewModel @Inject constructor(
             deliveryRetryable = false,
         )
         optimisticOutgoing.value = optimisticOutgoing.value + PendingOutgoing(sessionId, queued)
-        if (effectiveTarget == ChatTarget.CLOUD_OPENSWARM) {
-            // OpenSwarm execution always stays on the cloud path; AutoMode never redirects it.
-            android.util.Log.i("CloudOpenSwarm", "dispatch_route=cloud_openswarm manual_mode_does_not_redirect=true")
-        }
-
         viewModelScope.launch {
             recoveryComplete.await()
             val pinnedSession = sessionId ?: conversationRepository.ensureCurrentSessionId()
@@ -324,16 +301,12 @@ class ChatViewModel @Inject constructor(
                     conversationRepository.updateMessageDelivery(messageId, ChatDeliveryState.SENDING)
                     val sending = queued.copy(deliveryState = ChatDeliveryState.SENDING)
                     when (effectiveTarget) {
-                        ChatTarget.CLOUD_OPENSWARM -> {
-                            val pinnedTaskId = requireNotNull(taskId)
-                            _cloudTaskState.value = CloudTaskUiState(pinnedTaskId, pinnedSession, "RUNNING")
-                            runCloudOpenSwarm(sending, pinnedSession, pluginIds, thinkHarder, imageBase64)
-                        }
                         ChatTarget.UNIFIED_AGENT -> {
                             val pinnedTaskId = requireNotNull(taskId)
                             _cloudTaskState.value = CloudTaskUiState(
                                 pinnedTaskId, pinnedSession, "RUNNING", engine = "unified_agent"
                             )
+                            unifiedAgentStopToken = java.util.concurrent.atomic.AtomicBoolean(false)
                             unifiedAgentJob = viewModelScope.launch {
                                 runUnifiedAgent(sending, pinnedSession, imageBase64, pinnedTaskId)
                             }
@@ -402,6 +375,8 @@ class ChatViewModel @Inject constructor(
         imageBase64: String?,
         taskId: String,
     ) {
+        val stopToken = unifiedAgentStopToken ?: java.util.concurrent.atomic.AtomicBoolean(false)
+        unifiedAgentStopToken = stopToken
         val assistantId = "unified-reply-${userMessage.id}"
         conversationRepository.insertMessage(
             sessionId,
@@ -414,7 +389,12 @@ class ChatViewModel @Inject constructor(
             ),
         )
         try {
-            val result = cloudToolAgent.run(userMessage.text, maxSteps = 12, imageBase64 = imageBase64)
+            val result = unifiedAgentLoop.run(
+                userMessage.text,
+                maxSteps = UnifiedAgentLoop.MAX_STEPS,
+                imageBase64 = imageBase64,
+                stopRequested = stopToken,
+            )
             val attemptedDispatch = result.events.any { it.type == "dispatch" }
             val reachedProvider = result.events.any { it.type in setOf("dispatch", "result", "completed") }
             if (reachedProvider) {
@@ -480,132 +460,11 @@ class ChatViewModel @Inject constructor(
             updateCloudTask(taskId) { it.copy(status = "FAILED", message = detail) }
         } finally {
             unifiedAgentJob = null
+            unifiedAgentStopToken = null
         }
     }
 
-    private suspend fun runCloudOpenSwarm(
-        userMessage: ChatMessage,
-        sessionId: String,
-        pluginIds: List<String>,
-        thinkHarder: Boolean,
-        imageBase64: String?,
-    ) {
-        val taskId = userMessage.deliveryTaskId ?: "chat-${UUID.randomUUID()}"
-        val assistantId = "cloud-reply-${userMessage.id}"
-        conversationRepository.insertMessage(
-            sessionId,
-            ChatMessage(
-                assistantId,
-                "",
-                ChatMessage.Sender.AGENT,
-                timestamp = userMessage.timestamp + 1,
-                modelBadge = "Cloud OpenSwarm",
-            ),
-        )
-        try {
-            val body = cloudServerClient.execute(
-                taskId = taskId,
-                prompt = userMessage.text,
-                pluginId = if ("openswarm_agent" in pluginIds) "openswarm_agent" else pluginIds.firstOrNull() ?: "openswarm_agent",
-                pluginIds = pluginIds.ifEmpty { listOf("openswarm_agent") },
-                thinkHarder = thinkHarder,
-                imageBase64 = imageBase64,
-                onLog = { log -> android.util.Log.i("CloudOpenSwarm", log) },
-                onDispatch = { serverId ->
-                    conversationRepository.updateMessageDelivery(
-                        userMessage.id, ChatDeliveryState.SENT, taskId = taskId
-                    )
-                    updateCloudTask(taskId) { it.copy(serverId = serverId) }
-                },
-            )
-            val result = BrowserUseRemoteProtocol.parseSuccess(body).result
-            when (val decoded = OpenSwarmResponseDecoder.decode(result)) {
-                is OpenSwarmResponse.Completed -> {
-                    val streamed = StringBuilder()
-                    decoded.output.chunked(48).forEach { chunk ->
-                        streamed.append(chunk)
-                        conversationRepository.updateMessageText(assistantId, streamed.toString())
-                        delay(18)
-                    }
-                    conversationRepository.updateMessageDelivery(
-                        userMessage.id, ChatDeliveryState.COMPLETED, taskId = taskId,
-                    )
-                    updateCloudTask(taskId) { it.copy(status = "COMPLETED", message = null) }
-                }
-                is OpenSwarmResponse.InProgress -> {
-                    conversationRepository.updateMessageText(assistantId, decoded.message)
-                    conversationRepository.updateMessageDelivery(
-                        userMessage.id, ChatDeliveryState.SENT, taskId = taskId,
-                    )
-                    // A control/unverified response is not proof of completion. Keep it
-                    // visible as progress, but do not mark the request successful.
-                    updateCloudTask(taskId) { it.copy(status = "UNKNOWN", message = decoded.message) }
-                }
-                is OpenSwarmResponse.Failed -> {
-                    val message = "Cloud OpenSwarm failed: ${decoded.message}"
-                    conversationRepository.updateMessageText(assistantId, message)
-                    conversationRepository.updateMessageDelivery(
-                        userMessage.id, ChatDeliveryState.FAILED, decoded.message,
-                        retryable = true, taskId = taskId,
-                    )
-                    updateCloudTask(taskId) { it.copy(status = "FAILED", message = decoded.message) }
-                }
-                is OpenSwarmResponse.LegacyText -> {
-                    val openSwarmRequested = pluginIds.isEmpty() || "openswarm_agent" in pluginIds
-                    if (openSwarmRequested) {
-                        val message = "Manager Agent returned an unverified response. The task is not marked complete."
-                        conversationRepository.updateMessageText(assistantId, message)
-                        conversationRepository.updateMessageDelivery(
-                            userMessage.id, ChatDeliveryState.SENT, taskId = taskId,
-                        )
-                        updateCloudTask(taskId) { it.copy(status = "UNKNOWN", message = message) }
-                    } else {
-                        // Keep the historical plain-text response path for non-OpenSwarm
-                        // cloud plugins, while leaving its delivery state unverified.
-                        conversationRepository.updateMessageText(assistantId, decoded.text)
-                        conversationRepository.updateMessageDelivery(
-                            userMessage.id, ChatDeliveryState.SENT, taskId = taskId,
-                        )
-                        updateCloudTask(taskId) {
-                            it.copy(status = "UNKNOWN", message = "Legacy plain-text response; completion was not verified.")
-                        }
-                    }
-                }
-            }
-        } catch (failure: Exception) {
-            if (failure is kotlinx.coroutines.CancellationException) throw failure
-            val detail = (failure as? CloudRequestException)?.technicalDetails().orEmpty().ifBlank {
-                "stage=response_processing exception_class=${failure.javaClass.simpleName} request_url=not-available http_status=none response_body=${sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank { "<empty>" }}"
-            }
-            android.util.Log.e("CloudOpenSwarm", detail)
-            val failureSummary = OpenSwarmResponseDecoder.cleanFailureMessage(
-                if (failure is CloudRequestException) failure.userFacingSummary() else failure.message,
-                fallback = "The task result could not be verified.",
-            )
-            val userDetail = "Cloud OpenSwarm failed: $failureSummary"
-            conversationRepository.updateMessageText(assistantId, userDetail)
-            val retryable = when (failure) {
-                is CloudRequestException -> failure.stage in setOf("configuration", "health_check", "connect", "dns_resolution") ||
-                    (failure.stage == "http_response" && failure.httpStatus in setOf(400, 401, 403, 404, 408, 422, 429, 503))
-                else -> failure !is java.net.SocketTimeoutException
-            }
-            val outcomeUnknown = failure is java.net.SocketTimeoutException ||
-                (failure as? CloudRequestException)?.stage == "network_io" ||
-                (failure as? CloudRequestException)?.errorCode == "EXECUTION_OUTCOME_UNKNOWN"
-            conversationRepository.updateMessageDelivery(
-                userMessage.id,
-                ChatDeliveryState.FAILED,
-                failureSummary,
-                retryable = retryable && !outcomeUnknown,
-                taskId = taskId,
-            )
-            updateCloudTask(taskId) {
-                it.copy(status = if (outcomeUnknown) "UNKNOWN" else "FAILED", message = failureSummary)
-            }
-        }
-    }
-
-    /** Retry reuses the existing visible/user row; a fresh cloud attempt gets one new backend task ID. */
+    /** Retry reuses the existing visible/user row and preserves its API-only or tools mode. */
     fun retryMessage(messageId: String, sessionId: String?, context: Context) {
         if (sessionId == null || !retryingMessageIds.add(messageId)) return
         viewModelScope.launch {
@@ -614,23 +473,13 @@ class ChatViewModel @Inject constructor(
                 val message = conversationRepository.getMessages(sessionId).first()
                     .firstOrNull { it.id == messageId && it.sender == ChatMessage.Sender.USER } ?: return@launch
                 if (message.deliveryState != ChatDeliveryState.FAILED || message.deliveryRetryable != true) return@launch
-                val cloudRetry = message.deliveryTarget == ChatTarget.CLOUD_OPENSWARM.name
                 val unifiedRetry = message.deliveryTarget == ChatTarget.UNIFIED_AGENT.name
-                val metadata = runCatching { JSONObject(message.deliveryMetadata.orEmpty()) }.getOrNull()
-                val pluginsJson = metadata?.optJSONArray("plugins") ?: JSONArray()
-                val plugins = (0 until pluginsJson.length()).map { pluginsJson.optString(it) }.filter { it.isNotBlank() }
-                val thinkHarder = metadata?.optBoolean("think_harder", false) ?: false
                 val retry = message.copy(
                     deliveryState = ChatDeliveryState.QUEUED,
-                    deliveryTaskId = if (cloudRetry) "chat-${UUID.randomUUID()}" else message.deliveryTaskId,
                     deliveryError = null,
                     deliveryRetryable = false,
                 )
-                if (cloudRetry) {
-                    conversationRepository.insertMessage(sessionId, retry)
-                } else {
-                    conversationRepository.updateMessageDelivery(messageId, ChatDeliveryState.QUEUED, error = null, retryable = false)
-                }
+                conversationRepository.updateMessageDelivery(messageId, ChatDeliveryState.QUEUED, error = null, retryable = false)
 
                 sendQueueMutex.withLock {
                     conversationRepository.updateMessageDelivery(
@@ -638,21 +487,12 @@ class ChatViewModel @Inject constructor(
                         ChatDeliveryState.SENDING,
                         taskId = retry.deliveryTaskId,
                     )
-                    if (cloudRetry) {
-                        val taskId = requireNotNull(retry.deliveryTaskId)
-                        _cloudTaskState.value = CloudTaskUiState(taskId, sessionId, "RUNNING")
-                        runCloudOpenSwarm(
-                            retry.copy(deliveryState = ChatDeliveryState.SENDING),
-                            sessionId,
-                            plugins,
-                            thinkHarder,
-                            retry.imageBase64,
-                        )
-                    } else if (unifiedRetry) {
+                    if (unifiedRetry) {
                         val taskId = retry.deliveryTaskId ?: "agent-${retry.id}"
                         _cloudTaskState.value = CloudTaskUiState(
                             taskId, sessionId, "RUNNING", engine = "unified_agent"
                         )
+                        unifiedAgentStopToken = java.util.concurrent.atomic.AtomicBoolean(false)
                         unifiedAgentJob = viewModelScope.launch {
                             runUnifiedAgent(retry, sessionId, retry.imageBase64, taskId)
                         }
@@ -990,30 +830,10 @@ class ChatViewModel @Inject constructor(
         val cloud = _cloudTaskState.value
         if (cloud?.engine == "unified_agent" && cloud.status == "RUNNING") {
             updateCloudTask(cloud.taskId) {
-                it.copy(status = "CANCEL_REQUESTED", message = "Stopping the Unified Agent loop.")
+                it.copy(status = "RUNNING", message = "Stop requested; finishing the current API/tool call.")
             }
+            unifiedAgentStopToken?.set(true)
             connectorApprovals.cancelPending()
-            unifiedAgentJob?.cancel()
-        } else if (cloud != null && cloud.status in setOf("RUNNING", "CANCEL_REQUESTED", "UNKNOWN")) {
-            if (cloud.status == "CANCEL_REQUESTED") return
-            updateCloudTask(cloud.taskId) {
-                it.copy(status = "CANCEL_REQUESTED", message = "Cancellation requested; waiting for a safe checkpoint.")
-            }
-            viewModelScope.launch {
-                try {
-                    val response = cloudServerClient.controlTask(cloud.taskId, "cancel", cloud.serverId)
-                    val state = runCatching { org.json.JSONObject(response).optString("state") }.getOrDefault("")
-                    updateCloudTaskUnlessTerminal(cloud.taskId) { current -> current.copy(
-                        status = if (state == "CANCELLED") "CANCELLED" else if (state == "CANCEL_REQUESTED") "CANCEL_REQUESTED" else "UNKNOWN",
-                        message = if (state == "CANCELLED") "Cancellation confirmed at a safe checkpoint." else "Cancellation requested; server status is ${state.ifBlank { "unknown" }}.",
-                    ) }
-                } catch (failure: Exception) {
-                    updateCloudTaskUnlessTerminal(cloud.taskId) { current -> current.copy(
-                        status = "UNKNOWN",
-                        message = "Cancellation could not be confirmed. The task may still be running. ${sanitizeCloudDiagnostic(failure.message.orEmpty())}",
-                    ) }
-                }
-            }
         } else {
             agentLoop.cancelCurrentTask()
         }

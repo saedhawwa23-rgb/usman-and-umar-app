@@ -17,8 +17,8 @@ android {
         applicationId "com.usmanandumar.app"
         minSdk 28
         targetSdk 34
-        versionCode 27
-        versionName "3.8.0"
+        versionCode 28
+        versionName "3.8.2"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

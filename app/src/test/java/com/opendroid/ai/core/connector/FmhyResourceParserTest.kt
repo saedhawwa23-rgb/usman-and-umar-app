@@ -62,4 +62,23 @@ class FmhyResourceParserTest {
         assertEquals(listOf("tool-one.example", "tools.example.org"), resources.map { it.host })
         assertTrue(resources.all { it.url.startsWith("https://") || it.url.startsWith("http://") })
     }
+
+    @Test
+    fun `site tool payload binds trusted host and permits only rooted safe paths`() {
+        val payload = siteToolPayload("tool-one.example", "/catalog/tools")
+        assertEquals("https://tool-one.example/catalog/tools", payload.getString("url"))
+        assertEquals("tool-one.example", payload.getJSONArray("allowed_domains").getString(0))
+    }
+
+    @Test
+    fun `site tool payload rejects parent traversal`() {
+        val failure = runCatching { siteToolPayload("tool-one.example", "/catalog/../private") }.exceptionOrNull()
+        assertTrue("Expected traversal path to be rejected", failure is IllegalArgumentException)
+    }
+
+    @Test
+    fun `site tool payload rejects unrooted paths and invalid hosts`() {
+        assertTrue(runCatching { siteToolPayload("tool-one.example", "catalog") }.isFailure)
+        assertTrue(runCatching { siteToolPayload("attacker.example/path", "/") }.isFailure)
+    }
 }

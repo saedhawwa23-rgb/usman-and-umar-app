@@ -583,12 +583,12 @@ fun ChatScreen(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = when (cloudTask.status) {
-                                            "RUNNING" -> "Browsing…"
-                                            "CANCEL_REQUESTED" -> "Cancellation requested; waiting for a safe checkpoint…"
-                                            "CANCELLED" -> "Cancelled at a safe checkpoint."
+                                            "RUNNING" -> "Chat + tools is working…"
+                                            "CANCEL_REQUESTED" -> "Stop requested; waiting for a safe checkpoint…"
+                                            "CANCELLED" -> "Chat + tools stopped."
                                             "UNKNOWN" -> "Task outcome unknown; check the task before retrying."
-                                            "FAILED" -> "Cloud task failed."
-                                            else -> "Cloud task completed."
+                                            "FAILED" -> "Chat + tools failed."
+                                            else -> "Chat + tools completed."
                                         },
                                         color = if (cloudTask.status in setOf("FAILED", "UNKNOWN")) AccentRed else TextSecondary,
                                         fontSize = 12.sp,
@@ -596,7 +596,7 @@ fun ChatScreen(
                                     cloudTask.message?.let { Text(it, color = TextSecondary, fontSize = 10.sp) }
                                 }
                                 if (cloudTask.status == "RUNNING") {
-                                    TextButton(onClick = { viewModel.stopTask() }) { Text("Cancel", color = AccentRed) }
+                                    TextButton(onClick = { viewModel.stopTask() }) { Text("Stop", color = AccentRed) }
                                 }
                             }
                         }
@@ -714,23 +714,18 @@ fun ChatScreen(
                     ) {
                         Box {
                             FilterChip(
-                                selected = chatTarget != ChatTarget.API_MODEL,
+                                selected = true,
                                 onClick = { targetMenuExpanded = true },
                                 label = {
                                     Text(
-                                        when (chatTarget) {
-                                            ChatTarget.API_MODEL -> "API Model"
-                                            ChatTarget.CLOUD_OPENSWARM -> "Cloud OpenSwarm"
-                                            ChatTarget.UNIFIED_AGENT -> "Unified Agent"
-                                        },
+                                        "API Model — ${if (chatTarget == ChatTarget.UNIFIED_AGENT) "Chat + tools" else "Chat only"}",
                                         fontSize = 11.sp,
                                     )
                                 },
                             )
                             DropdownMenu(expanded = targetMenuExpanded, onDismissRequest = { targetMenuExpanded = false }) {
-                                DropdownMenuItem(text = { Text("API Model") }, onClick = { chatTarget = ChatTarget.API_MODEL; targetMenuExpanded = false })
-                                DropdownMenuItem(text = { Text("Cloud OpenSwarm") }, onClick = { chatTarget = ChatTarget.CLOUD_OPENSWARM; targetMenuExpanded = false })
-                                DropdownMenuItem(text = { Text("Unified Agent (API + tools)") }, onClick = { chatTarget = ChatTarget.UNIFIED_AGENT; targetMenuExpanded = false })
+                                DropdownMenuItem(text = { Text("API Model — Chat only") }, onClick = { chatTarget = ChatTarget.API_MODEL; targetMenuExpanded = false })
+                                DropdownMenuItem(text = { Text("API Model — Chat + tools") }, onClick = { chatTarget = ChatTarget.UNIFIED_AGENT; targetMenuExpanded = false })
                             }
                         }
                         FilterChip(
@@ -982,7 +977,7 @@ fun ChatScreen(
                         } else {
                             selectedPluginIds - pluginId
                         }
-                        if (checked && chatTarget == ChatTarget.API_MODEL) chatTarget = ChatTarget.CLOUD_OPENSWARM
+                        if (checked && chatTarget == ChatTarget.API_MODEL) chatTarget = ChatTarget.UNIFIED_AGENT
                     },
                     onBack = { showPluginSelector = false },
                     onConfirm = {

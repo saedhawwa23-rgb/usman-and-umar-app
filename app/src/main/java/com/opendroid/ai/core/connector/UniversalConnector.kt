@@ -13,8 +13,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /** Connector families are intentionally generic so new services do not require agent changes. */
-enum class ConnectorKind { MCP, REST, OAUTH, CLI, WEBHOOK, DEVELOPER_PLATFORM, CLOUD, HOSTING }
-enum class ConnectorRisk(val severity: Int) { READ_ONLY(1), REVERSIBLE(2), SENSITIVE(3), DESTRUCTIVE(4) }
+enum class ConnectorKind { MCP, REST, OAUTH, CLI, WEBHOOK, DEVELOPER_PLATFORM, CLOUD, HOSTING, DEVICE }
+enum class ConnectorRisk(val severity: Int) { READ_ONLY(1), REVERSIBLE(2), SENSITIVE(3), HIGH(4), CRITICAL(5), DESTRUCTIVE(5) }
 
 data class ConnectorCredentialRef(val id: String, val kind: String = "api_key")
 
@@ -24,9 +24,13 @@ data class ConnectorTool(
     val description: String,
     val parametersJsonSchema: String,
     val risk: ConnectorRisk = ConnectorRisk.READ_ONLY,
-    val credential: ConnectorCredentialRef? = null
+    val credential: ConnectorCredentialRef? = null,
+    /** Stable model-facing function name, set only by the trusted registry. */
+    val toolNameOverride: String? = null,
+    /** Trusted resource host bound by registration, never sourced from model arguments. */
+    val host: String? = null,
 ) {
-    val qualifiedName: String get() = if (connectorId == "colab") "colab_$name" else "connector_${connectorId}__${name}"
+    val qualifiedName: String get() = toolNameOverride ?: if (connectorId == "colab") "colab_$name" else "connector_${connectorId}__${name}"
 }
 
 data class ConnectorInvocation(
@@ -154,11 +158,16 @@ class UniversalToolRegistry @Inject constructor() {
             return ConnectorResult(false, error = "Tool arguments must be a JSON object")
         }
         val canonicalInvocation = invocation.copy(tool = registeredTool, credential = registeredTool.credential)
+        if (registeredTool.connectorId == "device" && KillSwitch.isEngaged) {
+            val blocked = "Kill switch engaged: all device actions are blocked."
+            log.append(ConnectorExecutionRecord(invocation.invocationId, "device", invocation.tool.name, invocation.tool.risk, "blocked", blocked))
+            return ConnectorResult(false, error = blocked)
+        }
         val decision = approval.decide(canonicalInvocation)
         if (decision != ApprovalDecision.ALLOW) {
             val status = if (decision == ApprovalDecision.DENY) "denied" else "approval_required"
             log.append(ConnectorExecutionRecord(invocation.invocationId, invocation.tool.connectorId, invocation.tool.name, invocation.tool.risk, status))
-            return ConnectorResult(false, error = if (decision == ApprovalDecision.DENY) "Connector action denied" else "User approval required")
+            return ConnectorResult(false, error = if (decision == ApprovalDecision.DENY) "user denied" else "User approval required")
         }
         val connector = connectorFor(registeredTool.connectorId)
             ?: return ConnectorResult(false, error = "Connector is not registered")

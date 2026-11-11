@@ -5,9 +5,9 @@ import org.junit.Test
 
 class ChatTargetRoutingTest {
     @Test
-    fun `OpenSwarm plugin bypasses API manual target`() {
+    fun `chat only never routes a Colab request even when a cloud plugin id is selected`() {
         assertEquals(
-            ChatTarget.CLOUD_OPENSWARM,
+            ChatTarget.API_MODEL,
             resolveChatTarget(ChatTarget.API_MODEL, listOf("openswarm_agent")),
         )
     }
@@ -17,10 +17,6 @@ class ChatTargetRoutingTest {
         assertEquals(
             ChatTarget.API_MODEL,
             resolveChatTarget(ChatTarget.API_MODEL, listOf("github_search")),
-        )
-        assertEquals(
-            ChatTarget.CLOUD_OPENSWARM,
-            resolveChatTarget(ChatTarget.CLOUD_OPENSWARM, emptyList()),
         )
         assertEquals(
             ChatTarget.UNIFIED_AGENT,

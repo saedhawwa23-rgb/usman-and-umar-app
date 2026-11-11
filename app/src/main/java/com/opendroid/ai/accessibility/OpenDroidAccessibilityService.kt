@@ -49,7 +49,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
 @AndroidEntryPoint
-class OpenDroidAccessibilityService : AccessibilityService() {
+class UsmanAccessibilityService : AccessibilityService() {
 
     @Inject
     lateinit var agentLoop: AgentLoop
@@ -547,7 +547,7 @@ class OpenDroidAccessibilityService : AccessibilityService() {
             // client in the background, rather than claiming it was terminated.
             performGlobalAction(GLOBAL_ACTION_HOME)
             localAiHandler.postDelayed({
-                startActivity(Intent(this@OpenDroidAccessibilityService, com.opendroid.ai.MainActivity::class.java).apply {
+                startActivity(Intent(this@UsmanAccessibilityService, com.opendroid.ai.MainActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 })
             }, 250)
@@ -904,11 +904,14 @@ class OpenDroidAccessibilityService : AccessibilityService() {
 
     companion object {
         @Volatile
-        private var instance: OpenDroidAccessibilityService? = null
+        private var instance: UsmanAccessibilityService? = null
 
-        fun getInstance(): OpenDroidAccessibilityService? = instance
+        fun getInstance(): UsmanAccessibilityService? = instance
 
         fun startLocalAiTask(taskId: String, packageName: String, appLabel: String, prompt: String): Boolean =
             instance?.beginLocalAiTask(taskId, packageName, appLabel, prompt) ?: false
     }
 }
+
+/** Source-compatible name retained for pre-existing app components. */
+typealias OpenDroidAccessibilityService = UsmanAccessibilityService
