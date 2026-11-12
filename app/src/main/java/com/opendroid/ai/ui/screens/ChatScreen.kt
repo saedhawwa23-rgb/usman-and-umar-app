@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -135,7 +136,7 @@ fun ChatScreen(
     val runningElsewhere = runningSessionId != null && runningSessionId != currentSessionId
 
     val listState = rememberLazyListState()
-    var composerHeightPx by remember { mutableStateOf(0) }
+    var composerHeightPx by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
     val imeVisible = WindowInsets.ime.getBottom(density) > 0
     var inputQuery by remember { mutableStateOf("") }

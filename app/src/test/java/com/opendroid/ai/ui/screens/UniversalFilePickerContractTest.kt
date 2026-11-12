@@ -58,7 +58,8 @@ class UniversalFilePickerContractTest {
             addItem(ClipData.Item(second))
             addItem(ClipData.Item(first))
         }
-        val intent = Intent().setData(first).setClipData(clip)
+        val intent = Intent().setData(first)
+        intent.clipData = clip
         assertEquals(listOf(first, second), UniversalFilePickerContract().parseResult(Activity.RESULT_OK, intent))
         assertTrue(UniversalFilePickerContract().parseResult(Activity.RESULT_CANCELED, intent).isEmpty())
     }
