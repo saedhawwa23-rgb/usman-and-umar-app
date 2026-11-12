@@ -72,7 +72,7 @@ async def _assert_public_dns(url: str) -> None:
         raise ValueError("The requested hostname does not resolve exclusively to public IP addresses.")
 
 
-async def _guard_public_requests(page: Any, allowed_domains: list[str]) -> None:
+async def _guard_public_requests(page: Any, allowed_domains: list[str] | None = None) -> None:
     if not hasattr(page, "route"):
         return  # Lightweight test doubles do not implement Playwright routing.
 
@@ -85,7 +85,7 @@ async def _guard_public_requests(page: Any, allowed_domains: list[str]) -> None:
             if scheme not in {"http", "https"}:
                 raise ValueError("Only public HTTP(S) browser requests are allowed.")
             request_host, _ = _public_http_url(route.request.url)
-            if not _host_allowed(request_host, allowed_domains):
+            if allowed_domains is not None and not _host_allowed(request_host, allowed_domains):
                 raise ValueError("The browser request is outside the exact approved host allowlist.")
             await _assert_public_dns(route.request.url)
         except (ValueError, OSError, asyncio.TimeoutError):
