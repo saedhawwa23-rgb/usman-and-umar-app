@@ -11,6 +11,7 @@ import com.opendroid.ai.core.llm.prompts.PlanningPrompts
 import com.opendroid.ai.core.memory.MemoryManager
 import com.opendroid.ai.core.memory.ExecutionHistoryPrivacy
 import com.opendroid.ai.data.models.AutoMode
+import com.opendroid.ai.data.models.ChatDeliveryState
 import com.opendroid.ai.data.models.ChatMessage
 import com.opendroid.ai.data.models.Plan
 import com.opendroid.ai.data.models.PlanStatus
@@ -218,7 +219,13 @@ class AgentLoop @Inject constructor(
      * pre-multi-session behavior: a null session is always assumed to answer whatever
      * prompt is currently pending, and otherwise falls back to resolving "current".
      */
-    fun processQuery(query: String, context: Context, explicitSessionId: String? = null) {
+    fun processQuery(
+        query: String,
+        context: Context,
+        explicitSessionId: String? = null,
+        attachmentImageBase64: String? = null,
+        prePersistedUserMessage: ChatMessage? = null,
+    ): Job {
         // processQuery is also the delivery path for a reply to a pending
         // awaitUserResponse() prompt (see below). That's ONLY true when this message comes
         // from the SAME session the waiting task is pinned to (waitingSessionId) - a
@@ -273,22 +280,33 @@ class AgentLoop @Inject constructor(
                 // Only capture the screen when the query actually asks about it.
                 // Attaching a screenshot to every request would silently send
                 // whatever is on screen (messages, banking apps, ...) to the LLM.
-                val screenshotBase64 = if (needsScreenContext(query)) {
+                val screenshotBase64 = if (attachmentImageBase64 == null && needsScreenContext(query)) {
                     com.opendroid.ai.accessibility.OpenDroidAccessibilityService.getInstance()?.takeScreenshotAndEncode()
                 } else {
                     null
                 }
 
-                // Save user message
-                val userMsg = ChatMessage(
+                // Reuse the durable outbox row created by ChatViewModel for Send. The
+                // unique message id remains the idempotency key across queueing/retries.
+                val userMsg = prePersistedUserMessage?.copy(
+                    text = query,
+                    sender = ChatMessage.Sender.USER,
+                    imageBase64 = attachmentImageBase64 ?: screenshotBase64
+                ) ?: ChatMessage(
                     id = UUID.randomUUID().toString(),
                     text = query,
                     sender = ChatMessage.Sender.USER,
                     modelBadge = null,
-                    imageBase64 = screenshotBase64
+                    imageBase64 = attachmentImageBase64 ?: screenshotBase64
                 )
                 memoryManager.storeMessage(userMsg, sessionId)
-                conversationRepository.insertMessage(sessionId, userMsg)
+                val alreadyPersisted = prePersistedUserMessage != null &&
+                    conversationRepository.getMessages(sessionId).first().any { it.id == userMsg.id }
+                if (!alreadyPersisted) conversationRepository.insertMessage(sessionId, userMsg)
+                if (prePersistedUserMessage != null) {
+                    userMsg.imageBase64?.let { conversationRepository.updateMessageImage(userMsg.id, it) }
+                    conversationRepository.updateMessageDelivery(userMsg.id, ChatDeliveryState.SENT)
+                }
 
                 if (isAnsweringPendingQuestion) {
                     // Re-validate at delivery time, not just at schedule time: only
@@ -298,7 +316,10 @@ class AgentLoop @Inject constructor(
                     // is nothing to buffer it for; just drop it.
                     val pending = pendingUserInput
                     if (pending != null && pending.requestId == pendingAtScheduleTime?.requestId) {
-                        pending.deferred.complete(query)
+                    pending.deferred.complete(query)
+                    }
+                    if (prePersistedUserMessage != null) {
+                        conversationRepository.updateMessageDelivery(userMsg.id, ChatDeliveryState.COMPLETED)
                     }
                     return@launch
                 }
@@ -307,16 +328,44 @@ class AgentLoop @Inject constructor(
                 queryMutex.withLock {
                     processQueryLocked(userMsg, query, context, sessionId)
                 }
+                if (prePersistedUserMessage != null) {
+                    val error = _agentState.value as? AgentState.Error
+                    if (error == null) {
+                        conversationRepository.updateMessageDelivery(userMsg.id, ChatDeliveryState.COMPLETED)
+                    } else {
+                        val failure = deliveryFailure(userMsg.id, sessionId, error.message)
+                        conversationRepository.updateMessageDelivery(
+                            userMsg.id, ChatDeliveryState.FAILED, failure.first, retryable = failure.second
+                        )
+                    }
+                }
             } catch (e: CancellationException) {
+                if (prePersistedUserMessage != null) withContext(NonCancellable) {
+                    conversationRepository.updateMessageDelivery(
+                        prePersistedUserMessage.id,
+                        ChatDeliveryState.FAILED,
+                        "The request was interrupted before completion. Retry to run it again.",
+                        retryable = true,
+                    )
+                }
                 throw e
             } catch (e: Exception) {
                 _agentState.value = AgentState.Error(e.localizedMessage ?: "Unknown processing error")
+                if (prePersistedUserMessage != null) {
+                    conversationRepository.updateMessageDelivery(
+                        prePersistedUserMessage.id,
+                        ChatDeliveryState.FAILED,
+                        e.localizedMessage ?: e.javaClass.simpleName,
+                        retryable = true,
+                    )
+                }
             }
         }
 
         if (!isAnsweringPendingQuestion) {
             currentJob = job
         }
+        return job
     }
 
     /**
@@ -327,7 +376,7 @@ class AgentLoop @Inject constructor(
      * Falls back to the session's last user message if [requestId] doesn't resolve to
      * one (e.g. a plan re-evaluation failure, whose requestId is a plan id).
      */
-    fun retryRequest(requestId: String, sessionId: String, context: Context) {
+    fun retryRequest(requestId: String, sessionId: String, context: Context): Job {
         val waitingSession = waitingSessionId
         if (waitingSession != null && waitingSession != sessionId) {
             abandonWaitingTask(waitingSession)
@@ -345,16 +394,57 @@ class AgentLoop @Inject constructor(
                     it.id == requestId && it.sender == ChatMessage.Sender.USER
                 } ?: messages.lastOrNull { it.sender == ChatMessage.Sender.USER } ?: return@launch
 
+                conversationRepository.updateMessageDelivery(userMsg.id, ChatDeliveryState.SENDING)
+                conversationRepository.updateMessageDelivery(userMsg.id, ChatDeliveryState.SENT)
+
                 queryMutex.withLock {
                     processQueryLocked(userMsg, userMsg.text, context, sessionId)
                 }
+                val error = _agentState.value as? AgentState.Error
+                if (error == null) {
+                    conversationRepository.updateMessageDelivery(userMsg.id, ChatDeliveryState.COMPLETED)
+                } else {
+                    val failure = deliveryFailure(userMsg.id, sessionId, error.message)
+                    conversationRepository.updateMessageDelivery(
+                        userMsg.id, ChatDeliveryState.FAILED, failure.first, retryable = failure.second
+                    )
+                }
             } catch (e: CancellationException) {
+                withContext(NonCancellable) {
+                    conversationRepository.updateMessageDelivery(
+                        requestId,
+                        ChatDeliveryState.FAILED,
+                        "The request was interrupted before completion. Retry to run it again.",
+                        retryable = true,
+                    )
+                }
                 throw e
             } catch (e: Exception) {
                 _agentState.value = AgentState.Error(e.localizedMessage ?: "Unknown processing error")
+                conversationRepository.updateMessageDelivery(
+                    requestId,
+                    ChatDeliveryState.FAILED,
+                    e.localizedMessage ?: e.javaClass.simpleName,
+                    retryable = true,
+                )
             }
         }
         currentJob = job
+        return job
+    }
+
+    /** Uses only the LLM error model's redacted fields; never persists a raw body or secret. */
+    private fun deliveryFailure(requestId: String, sessionId: String, fallback: String): Pair<String, Boolean> {
+        val error = _chatError.value?.takeIf { it.requestId == requestId && it.sessionId == sessionId }
+            ?: return fallback to true
+        val details = buildString {
+            append("category=").append(error.category.code)
+            append(" provider=").append(error.provider)
+            append(" model=").append(error.model)
+            append(" http_status=").append(error.httpStatus?.toString() ?: "none")
+            error.redactedDetail?.toString()?.takeIf(String::isNotBlank)?.let { append(' ').append(it) }
+        }
+        return details to error.retryable
     }
 
     private suspend fun processQueryLocked(userMsg: ChatMessage, query: String, context: Context, sessionId: String) {
@@ -514,7 +604,7 @@ class AgentLoop @Inject constructor(
                 $relevantContext
             """.trimIndent()
 
-            val lastMsgs = conversationRepository.getLastMessages(sessionId, 10).map { msg ->
+            val lastMsgs = conversationRepository.getLastMessagesUpTo(sessionId, userMsg.timestamp, 10).map { msg ->
                 val withImage = if (msg.id == userMsg.id) {
                     msg.copy(imageBase64 = userMsg.imageBase64)
                 } else {
@@ -536,6 +626,7 @@ class AgentLoop @Inject constructor(
                 id = replyId,
                 text = currentReplyText,
                 sender = ChatMessage.Sender.AGENT,
+                timestamp = userMsg.timestamp + 1,
                 modelBadge = provider.name
             )
 
@@ -639,7 +730,7 @@ class AgentLoop @Inject constructor(
                                 systemPrompt = sysPrompt,
                                 messages = listOf(userMsg),
                                 temperature = 0.2f,
-                                maxTokens = 1500,
+                                maxTokens = 4096,
                                 responseFormat = ResponseFormat.JSON
                             )
                         )
@@ -680,7 +771,7 @@ class AgentLoop @Inject constructor(
                                 )
                             ),
                             temperature = 0.1f,
-                            maxTokens = 1500,
+                            maxTokens = 4096,
                             responseFormat = ResponseFormat.JSON
                         )
                     )
@@ -693,7 +784,7 @@ class AgentLoop @Inject constructor(
                         systemPrompt = sysPrompt,
                         messages = listOf(userMsg),
                         temperature = 0.1f,
-                        maxTokens = 1500,
+                        maxTokens = 4096,
                         responseFormat = ResponseFormat.JSON
                     )
                 )
@@ -1561,70 +1652,39 @@ class AgentLoop @Inject constructor(
     }
 
     private fun parsePlanFromLlmResponse(raw: String, userGoal: String): Plan {
-        val stripped = stripMarkdownFences(raw)
-
-        // Prefer wrapper action before unwrapping plan — handles {"action":"...","plan":null}.
-        try {
-            val root = json.parseToJsonElement(stripped)
-            if (root is JsonObject) {
-                val action = root["action"]?.jsonPrimitive?.contentOrNull
-                    ?.takeIf { it.isNotBlank() && it != "null" }
-                val planElement = root["plan"]
-                val hasPlanObject = planElement is JsonObject
-
-                if (action != null && !hasPlanObject) {
-                    val params = jsonObjectToStringMap(root["params"]?.jsonObject)
-                    return buildSingleStepPlan(userGoal, action, params)
-                }
-
-                if (hasPlanObject) {
-                    return normalizePlan(json.decodeFromString<Plan>(planElement.toString()))
-                }
-            }
-        } catch (_: Exception) {
-            // Fall through to direct Plan parsing
+        val root = PlanJsonRepair.parse(raw)
+        val planObject = findPlanJsonObject(root) ?: throw IllegalArgumentException("No plan object found in LLM response")
+        val action = (planObject["action"] as? kotlinx.serialization.json.JsonPrimitive)
+            ?.contentOrNull?.takeIf { it.isNotBlank() && it != "null" }
+        if (action != null && "steps" !in planObject && "planId" !in planObject) {
+            val params = jsonObjectToStringMap(planObject["params"]?.jsonObject)
+            return buildSingleStepPlan(userGoal, action, params)
         }
 
-        val cleaned = cleanPlanJson(raw)
-        try {
-            return normalizePlan(json.decodeFromString<Plan>(cleaned))
-        } catch (_: Exception) {
-            // Continue with wrapper/single-action parsing below
-        }
-
-        val root = json.parseToJsonElement(cleaned)
-        if (root is JsonObject) {
-            root["plan"]?.let { planElement ->
-                if (planElement is JsonObject) {
-                    try {
-                        return normalizePlan(json.decodeFromString<Plan>(planElement.toString()))
-                    } catch (_: Exception) {
-                        // fall through
-                    }
-                }
-            }
-
-            val action = root["action"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() && it != "null" }
-            if (action != null) {
-                val params = jsonObjectToStringMap(root["params"]?.jsonObject)
-                return buildSingleStepPlan(userGoal, action, params)
-            }
-        }
-
+        runCatching { return normalizePlan(json.decodeFromString<Plan>(planObject.toString())) }
         throw IllegalArgumentException("Could not parse a valid plan from LLM response")
     }
 
-    private fun stripMarkdownFences(raw: String): String {
-        var content = raw.trim()
-        if (content.startsWith("```json")) {
-            content = content.removePrefix("```json")
-        } else if (content.startsWith("```")) {
-            content = content.removePrefix("```")
+    private fun findPlanJsonObject(element: kotlinx.serialization.json.JsonElement, depth: Int = 0): JsonObject? {
+        if (depth > 4) return null
+        val objectValue = element as? JsonObject ?: return null
+        if ("steps" in objectValue || "planId" in objectValue) return objectValue
+        if ((objectValue["action"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.contentOrNull?.isNotBlank() == true
+        ) return objectValue
+
+        for (key in listOf("plan", "result", "data", "output", "response")) {
+            val nested = objectValue[key] ?: continue
+            val nestedObject = when (nested) {
+                is JsonObject -> nested
+                is kotlinx.serialization.json.JsonPrimitive -> if (nested.isString) {
+                    runCatching { PlanJsonRepair.parse(nested.content) as? JsonObject }.getOrNull()
+                } else null
+                else -> null
+            } ?: continue
+            findPlanJsonObject(nestedObject, depth + 1)?.let { return it }
         }
-        if (content.endsWith("```")) {
-            content = content.removeSuffix("```")
-        }
-        return content.trim()
+        return objectValue
     }
 
     private fun normalizePlan(plan: Plan): Plan {
@@ -1665,23 +1725,6 @@ class AgentLoop @Inject constructor(
         return obj.mapValues { (_, value) ->
             value.jsonPrimitive.contentOrNull ?: value.toString().trim('"')
         }
-    }
-
-    private fun cleanPlanJson(raw: String): String {
-        var content = stripMarkdownFences(raw)
-        try {
-            val jsonElement = json.parseToJsonElement(content)
-            if (jsonElement is JsonObject) {
-                val planElement = jsonElement["plan"]
-                // Only unwrap when plan is an object — preserve wrappers with "plan": null.
-                if (planElement is JsonObject) {
-                    return planElement.toString()
-                }
-            }
-        } catch (e: Exception) {
-            // Silently ignore parsing errors here and let downstream deserialization report them if needed
-        }
-        return content
     }
 
     /**

@@ -154,6 +154,20 @@ class TermuxIntegration @Inject constructor(
      */
     fun run(task: TermuxTask): Result<Int> = run(TermuxCommand(task.label, task.executable, task.arguments.toList()))
 
+    /** Runs one explicitly selected bash/python script through Termux RUN_COMMAND. */
+    fun runCode(language: String, source: String): Result<Int> = runCatching {
+        require(source.isNotBlank()) { "The script is empty." }
+        require(source.length <= 64_000) { "Scripts are limited to 64,000 characters." }
+        val executable = when (language.lowercase()) {
+            "bash", "sh" -> "bash"
+            "python", "py" -> "python"
+            else -> error("Only bash/sh and python/py code blocks can be executed.")
+        }
+        val label = "Execute $executable task script"
+        val args = if (executable == "bash") listOf("-lc", source) else listOf("-c", source)
+        run(TermuxCommand(label, executable, args)).getOrThrow()
+    }
+
     fun cloneGitHubRepository(url: String): Result<Int> = runCatching { TermuxGitHubClone.command(url) }
         .fold(onSuccess = ::run, onFailure = { Result.failure(it) })
 

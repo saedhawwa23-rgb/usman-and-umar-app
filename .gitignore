@@ -24,6 +24,11 @@ local.properties
 *.keystore
 *.jks
 
+# Cloud deployment secrets are supplied through Render, never committed.
+cloud-backend/.env
+cloud-backend/.env.*
+!cloud-backend/.env.example
+
 # gradle.properties IS tracked: it holds build settings the project cannot
 # build without (android.useAndroidX and friends). Signing credentials must
 # never go in it — put them in ~/.gradle/gradle.properties or pass them as
@@ -32,3 +37,7 @@ local.properties
 # Local AI assistant guidance — not tracked
 CLAUDE.md
 docs/superpowers/
+
+# Python bytecode
+__pycache__/
+*.py[cod]

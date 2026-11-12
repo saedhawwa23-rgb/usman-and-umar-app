@@ -34,6 +34,14 @@ import com.opendroid.ai.core.security.CredentialStoreResult
 import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
 import com.opendroid.ai.core.security.ProviderCredentialStore
 import com.opendroid.ai.data.repository.ProviderCredentialPersistenceState
+import com.opendroid.ai.data.repository.CloudServerConfig
+import com.opendroid.ai.core.browser.CloudServerClient
+import com.opendroid.ai.core.browser.CloudServerHealth
+import com.opendroid.ai.core.connector.OpenSwarmConnector
+import com.opendroid.ai.core.connector.FmhyResource
+import com.opendroid.ai.core.browser.OpenSwarmConnectionState
+import com.opendroid.ai.core.browser.mapOpenSwarmHealth
+import com.opendroid.ai.core.service.CloudServerKeepAliveService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -42,6 +50,7 @@ import com.opendroid.ai.data.models.ChatMessage
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
 
@@ -52,8 +61,113 @@ class SettingsViewModel @Inject constructor(
     private val llmProviderFactory: Lazy<com.opendroid.ai.core.llm.LLMProviderFactory>,
     private val modelFetcher: Lazy<com.opendroid.ai.core.llm.ModelFetcher>,
     private val okHttpClient: OkHttpClient,
-    private val providerCredentialStore: ProviderCredentialStore
+    private val providerCredentialStore: ProviderCredentialStore,
+    private val cloudServerClient: CloudServerClient,
+    private val openSwarmConnector: OpenSwarmConnector,
+    @ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
+
+    val cloudServers: StateFlow<List<CloudServerConfig>> = settingsRepository.cloudServers
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private val mutableCloudServerHealth = MutableStateFlow<Map<String, CloudServerHealth>>(emptyMap())
+    val cloudServerHealth: StateFlow<Map<String, CloudServerHealth>> = mutableCloudServerHealth.asStateFlow()
+    private val mutablePingingCloudServers = MutableStateFlow(false)
+    val pingingCloudServers: StateFlow<Boolean> = mutablePingingCloudServers.asStateFlow()
+    val cloudKeepAliveEnabled: StateFlow<Boolean> = settingsRepository.cloudKeepAliveEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val fmhyCandidates: StateFlow<List<FmhyResource>> = openSwarmConnector.fmhyCandidates
+    val approvedFmhyHosts: StateFlow<Set<String>> = settingsRepository.approvedFmhyHosts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    fun setFmhyHostApproved(host: String, approved: Boolean) = viewModelScope.launch {
+        runCatching { openSwarmConnector.setFmhyHostApproved(host, approved) }
+    }
+    private var cloudHealthJob: Job? = null
+    data class OpenSwarmConnectionCheck(
+        val state: OpenSwarmConnectionState,
+        val message: String,
+    )
+    private val mutableOpenSwarmConnectionCheck = MutableStateFlow<OpenSwarmConnectionCheck?>(null)
+    val openSwarmConnectionCheck: StateFlow<OpenSwarmConnectionCheck?> = mutableOpenSwarmConnectionCheck.asStateFlow()
+
+    fun addOpenSwarmServer(name: String, url: String, token: String) = viewModelScope.launch {
+        runCatching { settingsRepository.addCloudServer(name, url, token) }
+            .onFailure { mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(OpenSwarmConnectionState.OFFLINE, it.message ?: "Could not save OpenSwarm server.") }
+    }
+
+    fun testOpenSwarmConnection(url: String, token: String) = viewModelScope.launch(Dispatchers.IO) {
+        mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(OpenSwarmConnectionState.WAKING, "Checking OpenSwarm /health…")
+        runCatching {
+            val health = cloudServerClient.testOpenSwarmConnection(url, token) {
+                mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(
+                    OpenSwarmConnectionState.WAKING,
+                    "Waking — timeout on first check; retrying once in 30 seconds…",
+                )
+            }
+            val toolsFailure = if (health.online) runCatching { cloudServerClient.fetchOpenSwarmTools(url, token) }
+                .exceptionOrNull()?.message else null
+            health to toolsFailure
+        }.onSuccess { (health, toolsFailure) ->
+            val state = mapOpenSwarmHealth(
+                health.httpCode, health.ready, health.authReady, health.redisReady,
+                health.checkpointsReady, health.checkpointStorageReady, health.leaseReady,
+                health.leaseCoordinatorReady, health.acceptingNewTasks, health.draining,
+                attempt = 2,
+            )
+            mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(
+                state,
+                if (state == OpenSwarmConnectionState.ONLINE && toolsFailure != null) "OpenSwarm health is Online, but GET /tools failed: $toolsFailure"
+                else if (state == OpenSwarmConnectionState.ONLINE) "OpenSwarm server Online · HTTP 200"
+                else health.readinessMessage ?: health.error ?: "OpenSwarm server is not ready (${health.httpCode ?: "no response"}).",
+            )
+        }.onFailure { failure ->
+            mutableOpenSwarmConnectionCheck.value = OpenSwarmConnectionCheck(
+                OpenSwarmConnectionState.OFFLINE,
+                failure.message ?: "OpenSwarm connection test failed.",
+            )
+        }
+    }
+
+    fun addCloudServer(name: String, url: String, token: String) = viewModelScope.launch {
+        runCatching { settingsRepository.addCloudServer(name, url, token) }
+    }
+    fun saveCloudServer(server: CloudServerConfig, token: String) = viewModelScope.launch {
+        runCatching { settingsRepository.saveCloudServer(server, token) }
+    }
+    fun removeCloudServer(id: String) = viewModelScope.launch { settingsRepository.removeCloudServer(id) }
+    fun setCloudServerEnabled(id: String, enabled: Boolean) = viewModelScope.launch { settingsRepository.setCloudServerEnabled(id, enabled) }
+
+    fun pingAllCloudServers() {
+        if (cloudHealthJob?.isActive == true) return
+        cloudHealthJob = viewModelScope.launch(Dispatchers.IO) {
+            mutablePingingCloudServers.value = true
+            try {
+                mutableCloudServerHealth.value = cloudServerClient.pingAll(includeDisabled = true)
+                    .associateBy { it.serverId }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                val error = failure.message ?: "Health check failed"
+                mutableCloudServerHealth.value = cloudServers.value.associate { server ->
+                    server.id to CloudServerHealth(
+                        serverId = server.id,
+                        serverName = server.name,
+                        online = false,
+                        error = error,
+                    )
+                }
+            } finally {
+                mutablePingingCloudServers.value = false
+            }
+        }
+    }
+
+    fun setCloudKeepAliveEnabled(enabled: Boolean) = viewModelScope.launch {
+        settingsRepository.setCloudKeepAliveEnabled(enabled)
+        if (enabled) CloudServerKeepAliveService.start(appContext)
+        else CloudServerKeepAliveService.stop(appContext)
+    }
 
     private val _llmConfig = MutableStateFlow(LLMConfig())
     val llmConfig: StateFlow<LLMConfig> = _llmConfig

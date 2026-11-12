@@ -17,8 +17,8 @@ android {
         applicationId "com.usmanandumar.app"
         minSdk 28
         targetSdk 34
-        versionCode 23
-        versionName "3.0.0-cloud-ai"
+        versionCode 29
+        versionName "3.9.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -34,6 +34,7 @@ android {
             project.hasProperty('RELEASE_KEY_ALIAS') &&
             project.hasProperty('RELEASE_KEY_PASSWORD') &&
             file("${rootProject.projectDir}/opendroid-release.keystore").exists()
+    def hasStableDebugKeystore = file("${rootProject.projectDir}/debug.keystore").exists()
 
     // Explicit opt-in for building release WITHOUT signing, so CI can exercise
     // R8/ProGuard (where reflection-dependent code breaks) without holding any
@@ -46,6 +47,16 @@ android {
     }
 
     signingConfigs {
+        if (hasStableDebugKeystore) {
+            debug {
+                storeFile file("${rootProject.projectDir}/debug.keystore")
+                storePassword project.findProperty('DEBUG_STORE_PASSWORD') ?: 'android'
+                keyAlias project.findProperty('DEBUG_KEY_ALIAS') ?: 'androiddebugkey'
+                keyPassword project.findProperty('DEBUG_KEY_PASSWORD') ?: 'android'
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
         if (hasSigningConfig) {
             release {
                 storeFile file("${rootProject.projectDir}/opendroid-release.keystore")
@@ -59,6 +70,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            if (hasStableDebugKeystore) {
+                signingConfig signingConfigs.debug
+            }
+        }
         release {
             minifyEnabled true
             shrinkResources = false
@@ -173,6 +189,7 @@ android {
     }
 }
 
+
 // AGP 9 removed `android { kotlinOptions { ... } }`. Under built-in Kotlin the
 // `kotlin { ... }` extension is registered by AGP itself (there is no
 // `org.jetbrains.kotlin.android` plugin any more) and carries the same compiler
@@ -202,6 +219,14 @@ dependencies {
     // bump this build has not taken; 1.18.0 stays until compileSdk moves to 37.
     implementation 'androidx.core:core-ktx:1.18.0'
     implementation 'androidx.documentfile:documentfile:1.0.1'
+    implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
+    // Keep PDFBox's Bouncy Castle APIs aligned and current; the inherited 1.72
+    // artifact triggers the dependency TrustAllX509TrustManager lint check.
+    implementation 'org.bouncycastle:bcprov-jdk15to18:1.86'
+    implementation 'org.bouncycastle:bcpkix-jdk15to18:1.86'
+    // PDFBox's JPX filter calls this optional decoder. Package it at runtime so
+    // release/R8 builds retain JPEG-2000 PDF image support on supported ABIs.
+    runtimeOnly 'com.gemalto.jp2:jp2-android:1.0.3'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
     implementation 'androidx.activity:activity-compose:1.13.0'
@@ -233,6 +258,8 @@ dependencies {
     implementation 'com.google.dagger:hilt-android:2.60.1'
     ksp 'com.google.dagger:hilt-compiler:2.60.1'
     implementation 'androidx.hilt:hilt-navigation-compose:1.1.0'
+    // Google Identity sign-in and the narrow Drive file-scope upload flow.
+    implementation 'com.google.android.gms:play-services-auth:21.3.0'
 
     // Networking
     // The OkHttp BOM is the single source of truth for every com.squareup.okhttp3

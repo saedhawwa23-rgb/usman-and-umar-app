@@ -46,10 +46,22 @@ class A11yProbeActivity : Activity() {
 
         root.addView(TextView(this).apply {
             text = HEADLINE_TEXT
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (20 * resources.displayMetrics.density).toInt()
+            )
         })
 
         root.addView(Button(this).apply {
             text = BUTTON_TEXT
+            textSize = 10f
+            minHeight = 0
+            minimumHeight = 0
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (24 * resources.displayMetrics.density).toInt()
+            )
             // Resource ids in a test APK don't resolve through R.id lookups the
             // way product code expects, so the scrape path matches on text and
             // the click path counts presses directly. (The id-targeting views
@@ -59,6 +71,13 @@ class A11yProbeActivity : Activity() {
 
         root.addView(EditText(this).apply {
             hint = FIELD_HINT
+            textSize = 10f
+            minHeight = 0
+            minimumHeight = 0
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (24 * resources.displayMetrics.density).toInt()
+            )
         })
 
         // (1) Text targeting with a decoy on each side of the match boundary:
@@ -118,6 +137,13 @@ class A11yProbeActivity : Activity() {
             minWidth = 0
             minimumWidth = 0
             setPadding(8, 0, 8, 0)
+            // Keep every fixture control inside the viewport on the smallest
+            // API-28 emulator; off-screen ACTION_CLICK can be reported as
+            // dispatched without reaching the target View.
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                (22 * resources.displayMetrics.density).toInt()
+            )
             setOnClickListener { counter.incrementAndGet() }
         }
 

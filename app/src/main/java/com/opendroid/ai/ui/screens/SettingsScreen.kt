@@ -7,6 +7,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -38,9 +40,13 @@ import com.opendroid.ai.data.models.LLMConfig
 import com.opendroid.ai.data.models.effectiveGrantedActions
 import com.opendroid.ai.data.models.resolvedAutoMode
 import com.opendroid.ai.core.llm.ConnectionTestState
+import com.opendroid.ai.core.llm.AIModel
+import com.opendroid.ai.core.llm.ProviderCatalog
 import com.opendroid.ai.core.llm.error.LLMError
 import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
+import com.opendroid.ai.core.connector.KillSwitch
 import com.opendroid.ai.data.repository.ProviderCredentialPersistenceState
+import com.opendroid.ai.data.repository.SettingsRepository
 import com.opendroid.ai.ui.theme.*
 import com.opendroid.ai.ui.viewmodel.SettingsViewModel
 import androidx.compose.runtime.collectAsState
@@ -51,9 +57,14 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import android.content.Context
+import android.content.ClipboardManager
+import android.content.Intent
+import androidx.core.net.toUri
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -75,12 +86,54 @@ fun SettingsScreen(
     onNavigateToDiscovery: () -> Unit = {},
     onNavigateToGitHubDiscovery: () -> Unit = {},
     onNavigateToTermux: () -> Unit = {},
+    onNavigateToGoogleDrive: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val config by viewModel.llmConfig.collectAsState()
     val connectionResults by viewModel.connectionResults.collectAsState()
     val providerCredentialRecoveryState by viewModel.providerCredentialRecoveryState.collectAsState()
     val providerCredentialPersistenceState by viewModel.providerCredentialPersistenceState.collectAsState()
+    val cloudServerUrls by viewModel.settingsRepository.cloudServerUrls.collectAsState(initial = listOf("", "", ""))
+    val cloudServerEnabled by viewModel.settingsRepository.cloudServerEnabled.collectAsState(initial = listOf(true, false, false))
+    val cloudServerTokens by viewModel.settingsRepository.cloudServerTokens.collectAsState()
+    val cloudServers by viewModel.cloudServers.collectAsState()
+    val cloudServerHealth by viewModel.cloudServerHealth.collectAsState()
+    val pingingCloudServers by viewModel.pingingCloudServers.collectAsState()
+    val cloudKeepAliveEnabled by viewModel.cloudKeepAliveEnabled.collectAsState()
+    val fmhyCandidates by viewModel.fmhyCandidates.collectAsState()
+    val approvedFmhyHosts by viewModel.approvedFmhyHosts.collectAsState()
+    val openSwarmConnectionCheck by viewModel.openSwarmConnectionCheck.collectAsState()
+    val automationEnabled by KillSwitch.state.collectAsState()
+    var expandedCloudServerIds by remember { mutableStateOf(emptySet<String>()) }
+    var newServerName by remember { mutableStateOf("") }
+    var newServerUrl by remember { mutableStateOf("") }
+    var newServerToken by remember { mutableStateOf("") }
+    var showColabWizard by remember { mutableStateOf(false) }
+    var colabWizardStep by remember { mutableIntStateOf(0) }
+    var detectedColabUrl by remember { mutableStateOf<String?>(null) }
+    var tokenPromptUrl by remember { mutableStateOf<String?>(null) }
+    var detectedServerToken by remember { mutableStateOf("") }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
+
+    DisposableEffect(lifecycleOwner, clipboard) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val copiedText = runCatching {
+                    clipboard?.primaryClip?.takeIf { it.itemCount > 0 }
+                        ?.getItemAt(0)?.coerceToText(context)?.toString()
+                }.getOrNull()
+                val candidate = findColabTunnelUrl(copiedText)
+                if (candidate != null && candidate != newServerUrl) {
+                    showColabWizard = false
+                    detectedColabUrl = candidate
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val providers = listOf(
         "Google Gemini",
@@ -89,6 +142,7 @@ fun SettingsScreen(
         "Groq",
         "Mistral AI",
         "OpenRouter",
+        "NVIDIA NIM",
         "Together AI",
         "Cohere",
         "DeepSeek",
@@ -133,6 +187,36 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(bottom = 32.dp)
         ) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().border(
+                        1.dp,
+                        if (automationEnabled) AccentCyan else Color(0xFFFF5252),
+                        RoundedCornerShape(12.dp),
+                    ),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("GLOBAL AUTOMATION KILL SWITCH", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                            Text(
+                                if (automationEnabled) "ENABLED · local and cloud tools may run" else "OFF · all automation is blocked",
+                                fontSize = 12.sp,
+                                color = if (automationEnabled) AccentCyan else Color(0xFFFF5252),
+                            )
+                        }
+                        Switch(
+                            checked = automationEnabled,
+                            onCheckedChange = { enabled -> if (enabled) KillSwitch.enable() else KillSwitch.disable() },
+                        )
+                    }
+                }
+            }
+
             if (providerCredentialRecoveryState == ProviderCredentialRecoveryState.CredentialsMustBeReentered) {
                 item {
                     Card(
@@ -200,40 +284,269 @@ fun SettingsScreen(
 
             item {
                 Card(
-                    modifier = Modifier.fillMaxWidth().clickable { onNavigateToDiscovery() },
+                    modifier = Modifier.fillMaxWidth().clickable { onNavigateToGoogleDrive() },
                     colors = CardDefaults.cardColors(containerColor = CardBackground)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("DISCOVER EXTENSIONS", fontWeight = FontWeight.Bold, color = AccentCyan)
-                            Spacer(Modifier.height(4.dp))
-                            Text("Search AI providers and GitHub projects without a fixed list.", color = TextSecondary, fontSize = 12.sp)
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        Text("GOOGLE DRIVE", fontWeight = FontWeight.Bold, color = AccentCyan)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Connect or switch the Google account used to save completed task outputs.",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = onNavigateToGoogleDrive) { Text("Open Drive settings") }
+                    }
+                }
+            }
+
+            item {
+                Card(modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = CardBackground)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        Text("OPENSWARM CLOUD SERVERS", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
+                        Text("Room-backed cluster profiles. Auto mode probes /health concurrently and routes only to the fastest server reporting full readiness, then fails over in ranked order.", color = TextSecondary, fontSize = 12.sp)
+                        Spacer(Modifier.height(8.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Button(onClick = viewModel::pingAllCloudServers, enabled = !pingingCloudServers && cloudServers.isNotEmpty()) {
+                                if (pingingCloudServers) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = TextPrimary,
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Refresh, contentDescription = null)
+                                }
+                                Text(if (pingingCloudServers) " Checking…" else " Ping All")
+                            }
+                            Text("${cloudServers.size}/${SettingsRepository.MAX_CLOUD_SERVERS} OpenSwarm node configured", color = TextSecondary, fontSize = 12.sp)
                         }
-                        Icon(Icons.Default.ArrowForward, contentDescription = "Open discovery", tint = AccentCyan)
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Switch(checked = cloudKeepAliveEnabled, onCheckedChange = viewModel::setCloudKeepAliveEnabled)
+                            Column {
+                                Text("Five-minute keep-alive", color = TextPrimary, fontSize = 13.sp)
+                                Text("Foreground checks for enabled servers", color = TextSecondary, fontSize = 11.sp)
+                            }
+                        }
+                        if (cloudKeepAliveEnabled) {
+                            Text("The foreground service continues five-minute /health checks while the app is minimized, with an ongoing notification. This cannot override Android restrictions or guarantee that Google Colab keeps a runtime alive; Colab may still disconnect it.", color = TextSecondary, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+
+            items(
+                items = cloudServers.sortedWith(
+                    compareBy<com.opendroid.ai.data.repository.CloudServerConfig> {
+                        if (cloudServerHealth[it.id]?.online == true) 0 else 1
+                    }.thenBy { it.name.lowercase(Locale.ROOT) },
+                ),
+                key = { it.id },
+            ) { server ->
+                var name by remember(server.id, server.name) { mutableStateOf(server.name) }
+                var url by remember(server.id, server.url) { mutableStateOf(server.url) }
+                var token by remember(server.id, server.token) { mutableStateOf(server.token) }
+                val health = cloudServerHealth[server.id]
+                val expanded = server.id in expandedCloudServerIds
+                Card(
+                    modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(10.dp)),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground),
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(9.dp).clip(CircleShape).background(
+                                when {
+                                    health?.online == true -> Color(0xFF35C759)
+                                    health?.online == false -> Color(0xFFE5484D)
+                                    else -> Color(0xFF8A8A8A)
+                                },
+                            ))
+                            Spacer(Modifier.width(9.dp))
+                            Column(
+                                Modifier.weight(1f).clickable {
+                                    expandedCloudServerIds = if (expanded) expandedCloudServerIds - server.id else expandedCloudServerIds + server.id
+                                },
+                            ) {
+                                Text(server.name.ifBlank { "Cloud Server" }, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(
+                                    when {
+                                        health == null -> "Not checked"
+                                        health.online -> "Ready · ${health.latencyMs} ms"
+                                        health.httpCode == 200 -> "Not schedulable${health.backendStatus?.let { " · $it" }.orEmpty()}"
+                                        else -> "Offline${health.httpCode?.let { " · HTTP $it" }.orEmpty()}"
+                                    },
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                )
+                            }
+                            Switch(checked = server.enabled, onCheckedChange = { viewModel.setCloudServerEnabled(server.id, it) })
+                            IconButton(onClick = { viewModel.removeCloudServer(server.id) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete ${server.name}", tint = AccentRed)
+                            }
+                            IconButton(onClick = {
+                                expandedCloudServerIds = if (expanded) expandedCloudServerIds - server.id else expandedCloudServerIds + server.id
+                            }) {
+                                Icon(
+                                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                    contentDescription = if (expanded) "Collapse server" else "Expand server",
+                                    tint = TextSecondary,
+                                )
+                            }
+                        }
+                        AnimatedVisibility(visible = expanded) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                if (health != null) {
+                                    Text(
+                                        "Backend: ${health.backendStatus ?: "unknown"} · ${if (health.online) "eligible" else "not eligible"}",
+                                        color = if (health.online) Color(0xFF35C759) else Color(0xFFE5A23B),
+                                        fontSize = 11.sp,
+                                    )
+                                    Text(
+                                        "Server ID: ${health.reportedServerId ?: "not reported"} · Instance: ${health.instanceId ?: "not reported"}",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                    )
+                                    Text(
+                                        "Tasks: ${health.activeTasks?.toString() ?: "unknown"} active · Uptime: ${health.uptimeSeconds?.let { "${it}s" } ?: "unknown"}",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                    )
+                                    Text(
+                                        "Readiness: accepting=${health.acceptingNewTasks?.toString() ?: "missing"}, draining=${health.draining?.toString() ?: "missing"}, checkpoint=${health.checkpointReady?.toString() ?: "missing"}, lease=${health.leaseReady?.toString() ?: "missing"}",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp,
+                                    )
+                                    Text(
+                                        "Recovery: ${health.recoveryState ?: "not reported"}${health.recoveryReason?.let { " · $it" }.orEmpty()}",
+                                        color = if (health.recoveryReason.isNullOrBlank()) TextSecondary else Color(0xFFE5A23B),
+                                        fontSize = 11.sp,
+                                    )
+                                }
+                                OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Server name") })
+                                OutlinedTextField(value = url, onValueChange = { url = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("HTTPS backend URL") })
+                                OutlinedTextField(value = token, onValueChange = { token = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("Bearer token") })
+                                Button(onClick = { viewModel.saveCloudServer(server.copy(name = name, url = url), token) }) { Text("Save server") }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)), colors = CardDefaults.cardColors(containerColor = CardBackground)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("ADD OPENSWARM COLAB NODE · ${cloudServers.size}/${SettingsRepository.MAX_CLOUD_SERVERS}", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
+                        Text("Connect one Colab runtime in four short steps. Server tokens stay in encrypted app storage.", color = TextSecondary, fontSize = 11.sp)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = {
+                                    showColabWizard = true
+                                    colabWizardStep = 0
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, COLAB_NOTEBOOK_URL.toUri()))
+                                    }
+                                },
+                                enabled = cloudServers.size < SettingsRepository.MAX_CLOUD_SERVERS,
+                            ) { Text("Launch Colab Notebook") }
+                            OutlinedButton(onClick = { showColabWizard = true; colabWizardStep = 0 }) {
+                                Text("Setup guide")
+                            }
+                        }
+                        if (newServerUrl.isNotBlank()) {
+                            Text("Detected tunnel URL is ready. Enter its APP_CLIENT_TOKEN, then add the server.", color = AccentCyan, fontSize = 11.sp)
+                        }
+                        OutlinedTextField(value = newServerName, onValueChange = { newServerName = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("New server name") })
+                        OutlinedTextField(value = newServerUrl, onValueChange = { newServerUrl = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("OpenSwarm tunnel URL (HTTPS)") }, placeholder = { Text("https://name.loca.lt") })
+                        OutlinedTextField(value = newServerToken, onValueChange = { newServerToken = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, visualTransformation = PasswordVisualTransformation(), label = { Text("New server APP_CLIENT_TOKEN") })
+                        Button(
+                            onClick = {
+                                viewModel.addOpenSwarmServer(newServerName, newServerUrl, newServerToken)
+                                newServerName = ""
+                                newServerUrl = ""
+                                newServerToken = ""
+                            },
+                            enabled = newServerUrl.isNotBlank() && newServerToken.isNotBlank() && cloudServers.size < SettingsRepository.MAX_CLOUD_SERVERS,
+                        ) { Text(if (cloudServers.size < SettingsRepository.MAX_CLOUD_SERVERS) "+ Add OpenSwarm Node" else "One node already configured") }
+                        OutlinedButton(
+                            onClick = { viewModel.testOpenSwarmConnection(newServerUrl, newServerToken) },
+                            enabled = newServerUrl.isNotBlank() && newServerToken.isNotBlank(),
+                        ) { Text("Test connection") }
+                        openSwarmConnectionCheck?.let { check ->
+                            val color = when (check.state) {
+                                com.opendroid.ai.core.browser.OpenSwarmConnectionState.ONLINE -> Color(0xFF35C759)
+                                com.opendroid.ai.core.browser.OpenSwarmConnectionState.WAKING -> Color(0xFFE5A23B)
+                                com.opendroid.ai.core.browser.OpenSwarmConnectionState.OFFLINE -> Color(0xFFE5484D)
+                            }
+                            Text(check.message, color = color, fontSize = 12.sp)
+                        }
+
+                        if (showColabWizard) {
+                            ColabSetupWizardDialog(
+                                step = colabWizardStep,
+                                onStepChange = { colabWizardStep = it },
+                                onDismiss = { showColabWizard = false },
+                                onLaunchNotebook = {
+                                    runCatching {
+                                        context.startActivity(Intent(Intent.ACTION_VIEW, COLAB_NOTEBOOK_URL.toUri()))
+                                    }
+                                },
+                            )
+                        }
+                        detectedColabUrl?.let { candidate ->
+                            DetectedColabUrlDialog(
+                                url = candidate,
+                                onDismiss = { detectedColabUrl = null },
+                                onAccept = {
+                                    detectedColabUrl = null
+                                    detectedServerToken = ""
+                                    tokenPromptUrl = candidate
+                                },
+                            )
+                        }
+                        tokenPromptUrl?.let { candidate ->
+                            ColabTokenPromptDialog(
+                                url = candidate,
+                                token = detectedServerToken,
+                                onTokenChange = { detectedServerToken = it },
+                                onDismiss = { tokenPromptUrl = null; detectedServerToken = "" },
+                                onContinue = {
+                                    newServerName = newServerName.ifBlank { "Colab OpenSwarm" }
+                                    newServerUrl = candidate
+                                    newServerToken = detectedServerToken
+                                    tokenPromptUrl = null
+                                    detectedServerToken = ""
+                                },
+                            )
+                        }
                     }
                 }
             }
 
             item {
                 Card(
-                    modifier = Modifier.fillMaxWidth().clickable { onNavigateToTermux() },
-                    colors = CardDefaults.cardColors(containerColor = CardBackground)
+                    modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground),
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("LOCAL TERMUX", fontWeight = FontWeight.Bold, color = AccentCyan)
-                            Spacer(Modifier.height(4.dp))
-                            Text("Optional local terminal tasks with visible results; cloud execution is separate.", color = TextSecondary, fontSize = 12.sp)
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("FMHY DISCOVERED HOSTS", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
+                        Text("Discovered URLs are untrusted candidates. Approve an exact host before its site tool can send a request. Links are never opened automatically.", color = TextSecondary, fontSize = 12.sp)
+                        val candidates = fmhyCandidates.distinctBy { it.host }
+                        if (candidates.isEmpty()) {
+                            Text("No candidates yet. Ask the chat agent to discover HTTPS links written in the FMHY page text.", color = TextSecondary, fontSize = 11.sp)
                         }
-                        Icon(Icons.Default.ArrowForward, contentDescription = "Open local Termux", tint = AccentCyan)
+                        candidates.forEach { candidate ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(candidate.url, color = TextPrimary, fontSize = 12.sp)
+                                    Text(candidate.host, color = TextSecondary, fontSize = 11.sp)
+                                }
+                                val approved = candidate.host in approvedFmhyHosts
+                                OutlinedButton(onClick = { viewModel.setFmhyHostApproved(candidate.host, !approved) }) {
+                                    Text(if (approved) "Revoke" else "Approve")
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -328,6 +641,19 @@ fun SettingsScreen(
                         val modelsLoading by viewModel.modelsLoading.collectAsState()
                         val modelFetchNotice by viewModel.modelFetchNotice.collectAsState()
                         val fetchedModels = config.modelCache[config.activeProvider] ?: emptyList()
+                        val modelChoices = if (config.activeProvider == "NVIDIA NIM") {
+                            val pinnedModel = ProviderCatalog.defaultModel("NVIDIA NIM")
+                            listOf(
+                                AIModel(
+                                    id = pinnedModel,
+                                    displayName = "Nemotron 3.5 Bolt E4B",
+                                    provider = "NVIDIA NIM",
+                                    isRecommended = true,
+                                )
+                            )
+                        } else {
+                            fetchedModels
+                        }
                         var modelDropdownExpanded by remember { mutableStateOf(false) }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -371,6 +697,7 @@ fun SettingsScreen(
                             OutlinedTextField(
                                 value = config.activeModel,
                                 onValueChange = { viewModel.updateActiveModel(it) },
+                                readOnly = config.activeProvider == "NVIDIA NIM",
                                 label = { Text("Active LLM Model", fontSize = 12.sp) },
                                 singleLine = true,
                                 trailingIcon = {
@@ -391,7 +718,7 @@ fun SettingsScreen(
                                 modifier = Modifier.fillMaxWidth()
                             )
 
-                        if (fetchedModels.isNotEmpty()) {
+                        if (modelChoices.isNotEmpty()) {
                                 DropdownMenu(
                                     expanded = modelDropdownExpanded,
                                     onDismissRequest = { modelDropdownExpanded = false },
@@ -400,7 +727,7 @@ fun SettingsScreen(
                                         .background(CardBackground)
                                         .border(1.dp, BorderColor)
                                 ) {
-                                    fetchedModels.forEach { model ->
+                                    modelChoices.forEach { model ->
                                         DropdownMenuItem(
                                             text = {
                                                 Row(
@@ -1479,6 +1806,99 @@ fun SettingsScreen(
     }
 
 
+}
+
+@Composable
+private fun ColabSetupWizardDialog(
+    step: Int,
+    onStepChange: (Int) -> Unit,
+    onDismiss: () -> Unit,
+    onLaunchNotebook: () -> Unit,
+) {
+    val titles = listOf(
+        "Open the Colab notebook",
+        "Run the notebook",
+        "Copy the server URL",
+        "Return to this app",
+    )
+    val details = listOf(
+        "The USMAN AND UMAR backend notebook opens in Colab. Sign in to Google if prompted.",
+        "In Colab, choose Runtime → Run all and approve Google’s prompts. Wait for the tunnel URL in Cell 4.",
+        "Copy the complete HTTPS URL printed by Cell 4. The app accepts loca.lt and trycloudflare.com tunnel links.",
+        "Return here. The app checks the clipboard on resume and asks before using a detected tunnel URL. You will enter the APP_CLIENT_TOKEN separately.",
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Connect a Colab server · ${step + 1}/4", color = TextPrimary, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                LinearProgressIndicator(
+                    progress = { (step + 1) / 4f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = AccentCyan,
+                )
+                Text(titles[step], color = AccentCyan, fontWeight = FontWeight.SemiBold)
+                Text(details[step], color = TextSecondary)
+                if (step == 0) {
+                    Button(onClick = onLaunchNotebook, modifier = Modifier.fillMaxWidth()) {
+                        Text("Open Colab Notebook")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { if (step == 3) onDismiss() else onStepChange(step + 1) }) {
+                Text(if (step == 3) "Done" else "Next")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { if (step == 0) onDismiss() else onStepChange(step - 1) }) {
+                Text(if (step == 0) "Close" else "Back")
+            }
+        },
+    )
+}
+
+@Composable
+private fun DetectedColabUrlDialog(url: String, onDismiss: () -> Unit, onAccept: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Colab server detected", color = TextPrimary) },
+        text = { Text("Detected Colab Server URL:\n$url\n\nAdd this server?", color = TextSecondary) },
+        confirmButton = { TextButton(onClick = onAccept) { Text("Yes, continue") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Not now") } },
+    )
+}
+
+@Composable
+private fun ColabTokenPromptDialog(
+    url: String,
+    token: String,
+    onTokenChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onContinue: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add Colab server token", color = TextPrimary) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("URL: $url", color = AccentCyan)
+                Text("Enter the APP_CLIENT_TOKEN configured in Colab Secrets. It is stored securely and is not read from the clipboard.", color = TextSecondary)
+                OutlinedTextField(
+                    value = token,
+                    onValueChange = onTokenChange,
+                    label = { Text("APP_CLIENT_TOKEN") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onContinue, enabled = token.isNotBlank()) { Text("Use token") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 private fun connectionStatusLabel(state: ConnectionTestState?): String = when (state) {

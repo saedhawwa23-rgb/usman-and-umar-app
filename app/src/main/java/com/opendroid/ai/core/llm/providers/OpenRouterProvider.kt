@@ -19,6 +19,44 @@ import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 
+internal const val OPENROUTER_MODEL_ID_REGEX = "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}/[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}(?::[a-zA-Z0-9._-]{1,32})?$"
+private val openRouterModelIdPattern = Regex(OPENROUTER_MODEL_ID_REGEX)
+private val openRouterToolNamePattern = Regex("^[a-zA-Z0-9_-]{1,64}$")
+
+internal fun validateOpenRouterModelId(value: String): String {
+    val modelId = value.trim()
+    require(openRouterModelIdPattern.matches(modelId)) { "Invalid OpenRouter model ID." }
+    return modelId
+}
+
+internal fun buildOpenRouterRequestBody(request: LLMRequest, selectedModel: String, gson: Gson = Gson()): Map<String, Any?> {
+    val modelId = validateOpenRouterModelId(selectedModel)
+    val body = linkedMapOf<String, Any?>(
+        "model" to modelId,
+        "messages" to request.messages.toOpenAIMessages(request.systemPrompt),
+        "temperature" to request.temperature,
+        "max_tokens" to request.maxTokens,
+    )
+    if (request.responseFormat == ResponseFormat.JSON) {
+        body["response_format"] = mapOf("type" to "json_object")
+        body["plugins"] = listOf(mapOf("id" to "response-healing"))
+    }
+    val tools = request.tools.orEmpty()
+    if (tools.isNotEmpty()) {
+        require(tools.all { openRouterToolNamePattern.matches(it.name) }) { "Invalid OpenRouter function name." }
+        body["tools"] = tools.map { tool ->
+            val parameters = runCatching { gson.fromJson(tool.parameters, JsonObject::class.java) }.getOrNull() ?: JsonObject()
+            mapOf("type" to "function", "function" to mapOf(
+                "name" to tool.name,
+                "description" to tool.description,
+                "parameters" to parameters,
+            ))
+        }
+        body["tool_choice"] = "auto"
+    }
+    return body
+}
+
 @Singleton
 class OpenRouterProvider @Inject constructor(
     private val client: OkHttpClient,
@@ -39,34 +77,10 @@ class OpenRouterProvider @Inject constructor(
 
         val startTime = System.currentTimeMillis()
 
-        val messagesList = request.messages.toOpenAIMessages(request.systemPrompt)
-
-        val selectedModel = request.model?.takeIf { it.isNotBlank() } ?: "google/gemini-2.0-flash-exp:free"
-
-        val requestBodyMap = mutableMapOf<String, Any?>(
-            "model" to selectedModel,
-            "messages" to messagesList,
-            "temperature" to request.temperature,
-            "max_tokens" to request.maxTokens
+        val selectedModel = validateOpenRouterModelId(
+            request.model?.takeIf { it.isNotBlank() } ?: "google/gemini-2.0-flash-exp:free"
         )
-        if (request.responseFormat == ResponseFormat.JSON) {
-            requestBodyMap["response_format"] = mapOf("type" to "json_object")
-        }
-        if (!request.tools.isNullOrEmpty()) {
-            requestBodyMap["tools"] = request.tools.map { tool ->
-                val parameters = runCatching {
-                    gson.fromJson(tool.parameters, JsonObject::class.java)
-                }.getOrNull() ?: JsonObject()
-                mapOf("type" to "function", "function" to mapOf(
-                    "name" to tool.name,
-                    "description" to tool.description,
-                    "parameters" to parameters
-                ))
-            }
-            requestBodyMap["tool_choice"] = "auto"
-        }
-
-        val bodyJson = gson.toJson(requestBodyMap)
+        val bodyJson = gson.toJson(buildOpenRouterRequestBody(request, selectedModel, gson))
         val httpRequest = Request.Builder()
             .url("https://openrouter.ai/api/v1/chat/completions")
             .header("Authorization", "Bearer $apiKey")
@@ -91,7 +105,7 @@ class OpenRouterProvider @Inject constructor(
                 ?: throw IOException("OpenRouter response did not contain choices")
             val messageObj = choices.firstOrNull()?.asJsonObject?.getAsJsonObject("message")
                 ?: throw IOException("OpenRouter response contained no assistant message")
-            val content = messageObj.get("content")?.takeUnless { it.isJsonNull }?.asString.orEmpty()
+            val content = assistantContent(messageObj)
             val toolCalls = messageObj.getAsJsonArray("tool_calls")?.mapNotNull { item ->
                 runCatching {
                     val call = item.asJsonObject
@@ -117,6 +131,23 @@ class OpenRouterProvider @Inject constructor(
             )
         }
         } // withContext
+    }
+
+    /** OpenAI-compatible gateways may return content as a string or typed parts. */
+    private fun assistantContent(message: JsonObject): String {
+        val element = message.get("content")?.takeUnless { it.isJsonNull } ?: return ""
+        if (element.isJsonPrimitive) return runCatching { element.asString }.getOrDefault("")
+        if (element.isJsonArray) return element.asJsonArray.joinToString("") { part ->
+            when {
+                part.isJsonPrimitive -> runCatching { part.asString }.getOrDefault("")
+                part.isJsonObject -> {
+                    val obj = part.asJsonObject
+                    obj.get("text")?.asString ?: obj.get("content")?.asString ?: ""
+                }
+                else -> ""
+            }
+        }
+        return ""
     }
 
     override fun streamComplete(request: LLMRequest): Flow<String> = flow {

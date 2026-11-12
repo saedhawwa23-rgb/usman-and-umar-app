@@ -13,8 +13,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /** Connector families are intentionally generic so new services do not require agent changes. */
-enum class ConnectorKind { MCP, REST, OAUTH, CLI, WEBHOOK, DEVELOPER_PLATFORM, CLOUD, HOSTING }
-enum class ConnectorRisk(val severity: Int) { READ_ONLY(1), REVERSIBLE(2), SENSITIVE(3), DESTRUCTIVE(4) }
+enum class ConnectorKind { MCP, REST, OAUTH, CLI, WEBHOOK, DEVELOPER_PLATFORM, CLOUD, HOSTING, DEVICE }
+enum class ConnectorRisk(val severity: Int) { READ_ONLY(1), REVERSIBLE(2), SENSITIVE(3), HIGH(4), CRITICAL(5), DESTRUCTIVE(5) }
 
 data class ConnectorCredentialRef(val id: String, val kind: String = "api_key")
 
@@ -24,16 +24,22 @@ data class ConnectorTool(
     val description: String,
     val parametersJsonSchema: String,
     val risk: ConnectorRisk = ConnectorRisk.READ_ONLY,
-    val credential: ConnectorCredentialRef? = null
+    val credential: ConnectorCredentialRef? = null,
+    /** Stable model-facing function name, set only by the trusted registry. */
+    val toolNameOverride: String? = null,
+    /** Trusted resource host bound by registration, never sourced from model arguments. */
+    val host: String? = null,
 ) {
-    val qualifiedName: String get() = "connector_${connectorId}__${name}"
+    /** Canonical registry name; provider-safe aliases are built and collision-checked per request. */
+    val qualifiedName: String get() = toolNameOverride ?: if (connectorId == "colab") "colab.$name" else "connector_${connectorId}__${name}"
 }
 
 data class ConnectorInvocation(
     val invocationId: String = UUID.randomUUID().toString(),
     val tool: ConnectorTool,
     val argumentsJson: String,
-    val credential: ConnectorCredentialRef? = tool.credential
+    val credential: ConnectorCredentialRef? = tool.credential,
+    val approvedByUser: Boolean = false,
 )
 
 data class ConnectorResult(
@@ -82,7 +88,8 @@ data class ConnectorExecutionRecord(
     val risk: ConnectorRisk,
     val status: String,
     val error: String? = null,
-    val timestampMs: Long = System.currentTimeMillis()
+    val timestampMs: Long = System.currentTimeMillis(),
+    val argumentSummary: String? = null,
 )
 
 /** In-memory log for the process; callers can persist redacted records through Room later. */
@@ -97,15 +104,31 @@ class InMemoryConnectorExecutionLog @Inject constructor() : ConnectorExecutionLo
         records.toList().takeLast(limit.coerceIn(1, 200))
 }
 
+internal fun summarizeToolArguments(raw: String): String = runCatching {
+    val obj = JsonParser.parseString(raw).asJsonObject
+    obj.entrySet().sortedBy { it.key }.joinToString(prefix = "{", postfix = "}") { (key, value) ->
+        val rendered = when {
+            Regex("(?i)(token|secret|password|api.?key|authorization|credential)").containsMatchIn(key) -> "\"[REDACTED]\""
+            Regex("(?i)(text|content|prompt|message|markdown)").containsMatchIn(key) -> "\"[text length=${value.toString().length}]\""
+            else -> value.toString().take(160)
+        }
+        "\"${key.take(80)}\":$rendered"
+    }.take(2_000)
+}.getOrDefault("[unavailable argument summary]")
+
 @Singleton
 class UniversalToolRegistry @Inject constructor() {
     private val connectors = LinkedHashMap<String, UniversalConnector>()
 
     @Synchronized fun register(connector: UniversalConnector) {
         require(connector.id.matches(Regex("[a-z0-9][a-z0-9._-]{0,63}"))) { "Invalid connector id" }
-        require(connector.tools().map { it.name }.distinct().size == connector.tools().size) {
+        val proposedTools = connectors.filterKeys { it != connector.id }.values.flatMap { it.tools() } + connector.tools()
+        require(proposedTools.map { it.qualifiedName }.distinct().size == proposedTools.size) {
             "Connector tool names must be unique"
         }
+        // This validates provider-safe spelling and the reverse map before the connector
+        // becomes visible. Dynamic FMHY tools are checked again when each request is built.
+        ProviderToolNameMapping.fromCanonicalNames(proposedTools.map { it.qualifiedName })
         connectors[connector.id] = connector
     }
 
@@ -140,32 +163,43 @@ class UniversalToolRegistry @Inject constructor() {
         approval: ConnectorApprovalGate = DefaultConnectorApprovalGate,
         log: ConnectorExecutionLog = InMemoryConnectorExecutionLog()
     ): ConnectorResult {
-        if (invocation.argumentsJson.length > 64_000) {
-            return ConnectorResult(false, error = "Tool arguments exceed the 64 KB safety limit")
+        val argumentLimit = if (invocation.tool.connectorId == "colab" && invocation.tool.name == "files_write") 6_200_000 else 64_000
+        if (invocation.argumentsJson.length > argumentLimit) {
+            return ConnectorResult(false, error = "Tool arguments exceed the safety limit")
         }
         val registeredTool = findTool(invocation.tool.qualifiedName)
         if (registeredTool == null || registeredTool.connectorId != invocation.tool.connectorId) {
-            log.append(ConnectorExecutionRecord(invocation.invocationId, invocation.tool.connectorId, invocation.tool.name, invocation.tool.risk, "rejected", "Tool is not registered"))
+            log.append(ConnectorExecutionRecord(invocation.invocationId, invocation.tool.connectorId, invocation.tool.name, invocation.tool.risk, "rejected", "Tool is not registered", argumentSummary = summarizeToolArguments(invocation.argumentsJson)))
             return ConnectorResult(false, error = "Tool is not registered")
         }
         val arguments = runCatching { JsonParser.parseString(invocation.argumentsJson) }.getOrNull()
         if (arguments == null || !arguments.isJsonObject) {
             return ConnectorResult(false, error = "Tool arguments must be a JSON object")
         }
-        val decision = approval.decide(invocation)
+        val canonicalInvocation = invocation.copy(tool = registeredTool, credential = registeredTool.credential)
+        if (!KillSwitch.isEnabled) {
+            val blocked = "Action blocked by Kill Switch"
+            log.append(ConnectorExecutionRecord(invocation.invocationId, invocation.tool.connectorId, invocation.tool.name, invocation.tool.risk, "blocked", blocked, argumentSummary = summarizeToolArguments(invocation.argumentsJson)))
+            return ConnectorResult(false, error = blocked)
+        }
+        val decision = approval.decide(canonicalInvocation)
         if (decision != ApprovalDecision.ALLOW) {
             val status = if (decision == ApprovalDecision.DENY) "denied" else "approval_required"
-            log.append(ConnectorExecutionRecord(invocation.invocationId, invocation.tool.connectorId, invocation.tool.name, invocation.tool.risk, status))
-            return ConnectorResult(false, error = if (decision == ApprovalDecision.DENY) "Connector action denied" else "User approval required")
+            log.append(ConnectorExecutionRecord(invocation.invocationId, invocation.tool.connectorId, invocation.tool.name, invocation.tool.risk, status, argumentSummary = summarizeToolArguments(invocation.argumentsJson)))
+            return ConnectorResult(false, error = if (decision == ApprovalDecision.DENY) "user denied" else "User approval required")
         }
-        val connector = connectorFor(invocation.tool.connectorId)
+        val connector = connectorFor(registeredTool.connectorId)
             ?: return ConnectorResult(false, error = "Connector is not registered")
         return try {
-            connector.execute(invocation, credentials).also {
-                log.append(ConnectorExecutionRecord(invocation.invocationId, connector.id, invocation.tool.name, invocation.tool.risk, if (it.success) "success" else "failed", it.error))
+            val authorizedInvocation = canonicalInvocation.copy(approvedByUser = canonicalInvocation.approvedByUser || requiresExplicitApproval(registeredTool))
+            connector.execute(authorizedInvocation, credentials).also {
+                log.append(ConnectorExecutionRecord(invocation.invocationId, connector.id, invocation.tool.name, invocation.tool.risk, if (it.success) "success" else "failed", it.error, argumentSummary = summarizeToolArguments(invocation.argumentsJson)))
             }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            log.append(ConnectorExecutionRecord(invocation.invocationId, connector.id, invocation.tool.name, invocation.tool.risk, "cancelled", argumentSummary = summarizeToolArguments(invocation.argumentsJson)))
+            throw cancelled
         } catch (t: Throwable) {
-            log.append(ConnectorExecutionRecord(invocation.invocationId, connector.id, invocation.tool.name, invocation.tool.risk, "failed", t.message ?: "connector error"))
+            log.append(ConnectorExecutionRecord(invocation.invocationId, connector.id, invocation.tool.name, invocation.tool.risk, "failed", t.message ?: "connector error", argumentSummary = summarizeToolArguments(invocation.argumentsJson)))
             ConnectorResult(false, error = t.message ?: "Connector execution failed")
         }
     }

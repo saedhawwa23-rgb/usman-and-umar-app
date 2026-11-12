@@ -6,6 +6,9 @@ USMAN AND UMAR is an Android automation assistant built on the OpenDroid codebas
 
 - **Cloud reasoning:** OpenRouter is selected for new installations. Other configured providers are available from Settings. Provider credentials are stored through the app's protected credential store; requests require a configured provider and, where applicable, an API key.
 - **Tool execution:** The cloud model can request registered tools through the OpenAI-compatible tool-calling protocol. The app validates and dispatches each tool locally; Android actions remain subject to their existing grants and approval rules.
+- **OpenSwarm Colab tools (v3.8.2):** The universal tool registry loads the authenticated `/tools` manifest and exposes configured capabilities under `colab_` names. Read operations use validated app-owned schemas; high-risk writes, command execution, and browser interactions pause for explicit per-call approval.
+- **Unified Agent:** A chat mode that pairs the selected API provider's reasoning with registered Android and authenticated Colab tools. The agent has bounded steps/runtime, visible activity, and can discover external public FMHY links, read dynamically selected destinations, and submit a single ordinary text prompt through an explicitly approved, narrowly scoped interaction. External page content remains untrusted; sensitive fields and account/payment flows are blocked.
+- **Durable chat outbox:** Messages are persisted locally before execution, appear immediately, and retain delivery state across navigation and process restart. Redis remains the Colab backend's task persistence; its REST GET/SET coordination is best-effort, not an atomic distributed lease.
 - **GitHub discovery:** Public repository search and inspection use GitHub's REST API. The app can save a repository as supported project context, make it active, inspect metadata/README/root entries, and start a real `git clone` through the Termux `RUN_COMMAND` API.
 - **Termux commands:** Commands execute in the installed Termux environment, not in a simulated shell. Termux must allow external app commands, and the app must have Termux's `RUN_COMMAND` permission. Command output and exit status are returned through the callback contract.
 - **No bundled local inference:** The app no longer packages a GGUF model, llama.cpp module, or LiteRT local inference engine. Termux remains an optional user-authorized execution backend; it is not an AI reasoning engine.
@@ -18,7 +21,7 @@ GitHub and Termux capabilities require connectivity or an installed/configured T
 |---|---|
 | Minimum Android SDK | 28 (Android 9) |
 | Target Android SDK | 34 (Android 14) |
-| Current app version | `3.0.0-cloud-ai` (versionCode 23) |
+| Current app version | `3.8.2` (versionCode 28) |
 | Packaging | Android application; no model asset or inference JNI module |
 
 Build with JDK 21 and the Android SDK installed:

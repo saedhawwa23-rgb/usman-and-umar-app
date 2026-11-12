@@ -11,6 +11,8 @@ import com.opendroid.ai.data.db.dao.MemoryDao
 import com.opendroid.ai.data.db.dao.PlanDao
 import com.opendroid.ai.data.db.dao.TaskHistoryDao
 import com.opendroid.ai.data.db.dao.WorkspaceTaskDao
+import com.opendroid.ai.data.db.dao.CloudServerDao
+import com.opendroid.ai.data.db.dao.GoogleDriveAccountDao
 import com.opendroid.ai.data.db.entities.ChatSessionEntity
 import com.opendroid.ai.data.db.entities.ConversationEntity
 import com.opendroid.ai.data.db.entities.MacroEntity
@@ -20,6 +22,8 @@ import com.opendroid.ai.data.db.entities.TaskHistoryEntity
 import com.opendroid.ai.data.db.entities.WorkspaceTaskDependencyEntity
 import com.opendroid.ai.data.db.entities.WorkspaceTaskEntity
 import com.opendroid.ai.data.db.entities.WorkspaceTaskExecutionEntity
+import com.opendroid.ai.data.db.entities.CloudServerEntity
+import com.opendroid.ai.data.db.entities.GoogleDriveAccountEntity
 
 import com.opendroid.ai.data.db.dao.NotificationDao
 import com.opendroid.ai.data.db.dao.UnknownActionDao
@@ -70,9 +74,11 @@ import com.opendroid.ai.data.db.dao.SocialAuditLogDao
         SocialAuditLogEntity::class,
         WorkspaceTaskEntity::class,
         WorkspaceTaskDependencyEntity::class,
-        WorkspaceTaskExecutionEntity::class
+        WorkspaceTaskExecutionEntity::class,
+        CloudServerEntity::class,
+        GoogleDriveAccountEntity::class
     ],
-    version = 11,
+    version = 15,
     exportSchema = true
 )
 abstract class OpenDroidDatabase : RoomDatabase() {
@@ -82,6 +88,8 @@ abstract class OpenDroidDatabase : RoomDatabase() {
     abstract fun memoryDao(): MemoryDao
     abstract fun taskHistoryDao(): TaskHistoryDao
     abstract fun workspaceTaskDao(): WorkspaceTaskDao
+    abstract fun cloudServerDao(): CloudServerDao
+    abstract fun googleDriveAccountDao(): GoogleDriveAccountDao
     abstract fun macroDao(): MacroDao
     abstract fun unknownActionDao(): UnknownActionDao
     abstract fun notificationDao(): NotificationDao
@@ -517,6 +525,59 @@ abstract class OpenDroidDatabase : RoomDatabase() {
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_executions_taskId ON workspace_task_executions(taskId)")
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_executions_startedAt ON workspace_task_executions(startedAt)")
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_task_executions_toState ON workspace_task_executions(toState)")
+            }
+        }
+
+        /** Adds persisted OpenSwarm cluster metadata; credentials remain in encrypted storage. */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS cloud_servers (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        url TEXT NOT NULL,
+                        enabled INTEGER NOT NULL,
+                        position INTEGER NOT NULL
+                    )
+                """)
+            }
+        }
+
+        /** Adds per-account Google Drive quota metadata without touching existing app data. */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS google_drive_accounts (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        email TEXT NOT NULL,
+                        displayName TEXT NOT NULL,
+                        connectedAtMillis INTEGER NOT NULL,
+                        quotaLimitBytes INTEGER,
+                        quotaUsageBytes INTEGER,
+                        quotaUpdatedAtMillis INTEGER,
+                        quotaError TEXT
+                    )
+                """)
+            }
+        }
+
+        /** Adds a durable outbound-message state and retry metadata without changing chat history. */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryState TEXT")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryTarget TEXT")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryTaskId TEXT")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryMetadata TEXT")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryError TEXT")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN deliveryRetryable INTEGER")
+                database.execSQL("ALTER TABLE conversations ADD COLUMN imageBase64 TEXT")
+            }
+        }
+
+        /** Adds a non-secret role label to the existing cloud server profiles. */
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE cloud_servers ADD COLUMN role TEXT NOT NULL DEFAULT 'OPENSWARM'")
             }
         }
     }

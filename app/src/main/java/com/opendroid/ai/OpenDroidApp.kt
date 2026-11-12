@@ -8,6 +8,7 @@ import com.opendroid.ai.core.crash.OpenDroidCrashHandler
 import com.opendroid.ai.core.memory.MemoryManager
 import com.opendroid.ai.core.security.LegacyPreferenceMigration
 import com.opendroid.ai.data.crash.CrashLogRepository
+import com.opendroid.ai.data.repository.WorkspaceTaskRepository
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +27,9 @@ class OpenDroidApp : Application() {
 
     @Inject
     lateinit var legacyPreferenceMigration: LegacyPreferenceMigration
+
+    @Inject
+    lateinit var workspaceTaskRepository: WorkspaceTaskRepository
 
     private val appScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -48,6 +52,10 @@ class OpenDroidApp : Application() {
             } catch (e: Exception) {
                 // Silently ignore cleanup errors to not block app startup
             }
+        }
+
+        appScope.launch {
+            runCatching { workspaceTaskRepository.recoverAfterRestart() }
         }
     }
 

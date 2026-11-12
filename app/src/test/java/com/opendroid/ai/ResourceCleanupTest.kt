@@ -53,7 +53,7 @@ class ResourceCleanupTest {
     fun `contact verification closes its cursor when reading fails`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val cursors = installThrowingCursorProvider()
-        val action = SystemActions(unusedLazy(), unusedLazy())
+        val action = SystemActions(unusedLazy(), unusedLazy(), unusedLazy())
             .getActions()
             .single { it.name == "VERIFY_CONTACT" }
 
