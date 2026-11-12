@@ -94,6 +94,7 @@ class SettingsRepository internal constructor(
     private val cloudServersKey = stringPreferencesKey("openswarm_cloud_servers_v2")
     private val cloudKeepAliveKey = booleanPreferencesKey("openswarm_cloud_keep_alive_enabled")
     private val autoRunGeneratedCodeKey = booleanPreferencesKey("auto_run_generated_code")
+    private val approvedFmhyHostsKey = stringSetPreferencesKey("fmhy_approved_hosts")
     private val mutableOpenSwarmClientToken = MutableStateFlow("")
     val openSwarmClientToken: StateFlow<String> = mutableOpenSwarmClientToken.asStateFlow()
     private val mutableCloudServerTokens = MutableStateFlow(listOf("", "", ""))
@@ -122,6 +123,27 @@ class SettingsRepository internal constructor(
 
     suspend fun setCloudKeepAliveEnabled(enabled: Boolean) {
         dataStore.edit { it[cloudKeepAliveKey] = enabled }
+    }
+
+    /** Persistent owner consent is scoped to one exact canonical host, never a suffix wildcard. */
+    val approvedFmhyHosts: Flow<Set<String>> = dataStore.data
+        .map { preferences -> preferences[approvedFmhyHostsKey].orEmpty().toSet() }
+        .flowOn(Dispatchers.IO)
+
+    suspend fun setFmhyHostApproved(host: String, approved: Boolean) {
+        val canonical = host.trim().trimEnd('.').lowercase(java.util.Locale.ROOT)
+        val labels = canonical.split('.')
+        require(canonical.length <= 253 && labels.size >= 2 && labels.all {
+            it.length in 1..63 && it.matches(Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"))
+        }) {
+            "A canonical public host name is required."
+        }
+        dataStore.edit { preferences ->
+            val current = preferences[approvedFmhyHostsKey].orEmpty().toMutableSet()
+            if (approved) current += canonical else current -= canonical
+            if (current.isEmpty()) preferences.remove(approvedFmhyHostsKey)
+            else preferences[approvedFmhyHostsKey] = current
+        }
     }
 
     private fun legacyCloudServers(preferences: Preferences): List<CloudServerConfig> =

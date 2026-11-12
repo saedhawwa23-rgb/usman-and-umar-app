@@ -17,7 +17,7 @@ object OpenSwarmToolCatalog {
         val optional: Set<String>,
         val types: Map<String, String>,
     ) {
-        fun definition() = ToolDefinition("colab_$functionName", description, schema)
+        fun definition() = ToolDefinition("colab__${functionName}", description, schema)
     }
 
     val specs = listOf(
@@ -33,7 +33,10 @@ object OpenSwarmToolCatalog {
         Spec("terminal.execute", "terminal_execute", "Execute an argv command in the configured isolated Colab workspace. This executes code and requires user approval.", objectSchema(mapOf("argv" to "array", "cwd" to "string", "timeout_seconds" to "integer"), setOf("argv")), setOf("argv"), setOf("cwd", "timeout_seconds"), mapOf("argv" to "array", "cwd" to "string", "timeout_seconds" to "integer")),
     )
     private val byCapability = specs.associateBy { it.capabilityId }
-    private val byFunction = specs.associateBy { "colab_${it.functionName}" }
+    private val byFunction = specs.flatMap { spec ->
+        listOf("colab_${spec.functionName}", "colab__${spec.functionName}", "colab.${spec.functionName}")
+            .map { it to spec }
+    }.toMap()
 
     fun modelTools(remote: List<OpenSwarmRemoteTool>): List<ToolDefinition> = remote.mapNotNull { capability ->
         val spec = byCapability[capability.id] ?: return@mapNotNull null
@@ -64,7 +67,15 @@ object OpenSwarmToolCatalog {
             if (!obj.has(key)) return@forEach
             val value = obj.get(key)
             require(matchesType(value, expected)) { "Argument '$key' must be $expected." }
-            if (expected == "string") require(value.asString.isNotBlank() && value.asString.length <= 4096) { "Argument '$key' must be non-empty and at most 4096 characters." }
+            if (expected == "string") {
+                val maximum = if (spec.capabilityId == "files.write" && key == "content") 1_000_000 else 4_096
+                require(value.asString.length <= maximum && (key == "content" || value.asString.isNotBlank())) {
+                    "Argument '$key' must be ${if (key == "content") "at most 1 MB of text" else "non-empty and at most 4096 characters"}."
+                }
+                if (spec.capabilityId == "files.write" && key == "content") {
+                    require(value.asString.toByteArray(Charsets.UTF_8).size <= 1_000_000) { "File content exceeds the 1 MB UTF-8 limit." }
+                }
+            }
             if (key == "allowed_domains") require(value.asJsonArray.size() <= 32 && value.asJsonArray.all { it.isJsonPrimitive && it.asJsonPrimitive.isString }) { "allowed_domains must be an array of at most 32 hostnames." }
             if (key == "argv") require(value.asJsonArray.size() in 1..32 && value.asJsonArray.all { it.isJsonPrimitive && it.asJsonPrimitive.isString && it.asString.isNotBlank() && it.asString.length <= 4096 }) { "argv must contain 1–32 non-empty strings of at most 4096 characters." }
             if (key == "limit") require(value.asInt in 1..10) { "limit must be between 1 and 10." }

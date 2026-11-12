@@ -22,6 +22,12 @@ import com.opendroid.ai.core.agent.primaryAction
 import com.opendroid.ai.core.browser.sanitizeCloudDiagnostic
 import com.opendroid.ai.core.connector.UnifiedAgentLoop
 import com.opendroid.ai.core.connector.ConnectorApprovalCoordinator
+import com.opendroid.ai.core.connector.ConnectorInvocation
+import com.opendroid.ai.core.connector.ConnectorRisk
+import com.opendroid.ai.core.connector.ConnectorTool
+import com.opendroid.ai.core.connector.KillSwitch
+import com.opendroid.ai.core.connector.OpenSwarmToolCatalog
+import com.opendroid.ai.core.browser.CloudServerClient
 import com.opendroid.ai.data.models.AutoMode
 import com.opendroid.ai.data.models.ChatDeliveryState
 import com.opendroid.ai.data.models.ChatMessage
@@ -76,6 +82,7 @@ class ChatViewModel @Inject constructor(
     private val localAiAppExecutor: LocalAiAppExecutor,
     private val unifiedAgentLoop: UnifiedAgentLoop,
     private val connectorApprovals: ConnectorApprovalCoordinator,
+    private val cloudServerClient: CloudServerClient,
 ) : ViewModel() {
 
     private data class PendingOutgoing(val sessionId: String?, val message: ChatMessage)
@@ -94,6 +101,53 @@ class ChatViewModel @Inject constructor(
 
     fun approveConnectorToolCall() = connectorApprovals.decide(true)
     fun denyConnectorToolCall() = connectorApprovals.decide(false)
+
+    /** Writes only bounded UTF-8 text to the Colab workspace after exact per-call approval. */
+    suspend fun sendTextAttachmentToColab(context: Context, displayName: String, content: String): String {
+        if (!KillSwitch.isEnabled) return "Action blocked by Kill Switch"
+        if (content.toByteArray(Charsets.UTF_8).size > 1_000_000) return "Text file exceeds the 1 MB Colab transfer limit."
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return "Network status is unavailable; no Colab request was sent."
+        val active = connectivity.activeNetwork
+            ?: return "No active network connection; no Colab request was sent."
+        val capabilities = connectivity.getNetworkCapabilities(active)
+        if (capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true) {
+            return "Internet is not validated; no Colab request was sent."
+        }
+        val safeName = displayName.substringAfterLast('/').substringAfterLast('\\')
+            .replace(Regex("[^A-Za-z0-9_.-]"), "_").take(120).ifBlank { "attachment.txt" }
+        val payload = JSONObject().put("path", "uploads/$safeName").put("content", content)
+        val tool = ConnectorTool(
+            connectorId = "colab",
+            name = "files_write",
+            description = "Write the selected UTF-8 text attachment into the Colab workspace.",
+            parametersJsonSchema = OpenSwarmToolCatalog.specs.first { it.capabilityId == "files.write" }.schema,
+            risk = ConnectorRisk.HIGH,
+        )
+        val invocation = ConnectorInvocation(tool = tool, argumentsJson = payload.toString())
+        val approved = try {
+            connectorApprovals.request(invocation)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return "Another approval is pending; attachment was not sent."
+        }
+        if (!approved) return "user denied"
+        if (!KillSwitch.isEnabled) return "Action blocked by Kill Switch"
+        return try {
+            val response = cloudServerClient.executeOpenSwarmTool("files.write", payload, approved = true)
+            val result = response.optJSONObject("result")
+            if (result?.optBoolean("verified") == true) {
+                "Saved verified text file to Colab: ${result.optString("path", "uploads/$safeName")} (${result.optLong("size_bytes")} bytes). The file was not executed."
+            } else {
+                "Colab did not verify the file write: ${response.toString().take(500)}"
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            "Colab transfer failed: ${failure.message ?: failure.javaClass.simpleName}"
+        }
+    }
 
     init {
         viewModelScope.launch {

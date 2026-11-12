@@ -12,6 +12,10 @@ data class DeviceResult(
     val message: String,
     val error: String? = null
 ) {
+    companion object {
+        fun blocked(message: String = "Action blocked by Kill Switch") = DeviceResult(false, message, message)
+    }
+
     internal fun asConnectorResult(): ConnectorResult =
         if (success) ConnectorResult(true, output = message)
         else ConnectorResult(false, error = error ?: message)
@@ -33,7 +37,7 @@ class DeviceControlConnector(
         tool("type_text", "Type text into the visible accessibility element matching its displayed text.",
             """{"type":"object","properties":{"target":{"type":"string","minLength":1,"maxLength":300},"text":{"type":"string","maxLength":10000}},"required":["target","text"],"additionalProperties":false}""", ConnectorRisk.SENSITIVE),
         tool("read_screen", "Read text exposed by the active screen's accessibility tree.",
-            """{"type":"object","properties":{},"additionalProperties":false}""", ConnectorRisk.READ_ONLY)
+            """{"type":"object","properties":{},"additionalProperties":false}""", ConnectorRisk.SENSITIVE)
     )
 
     private fun tool(name: String, description: String, schema: String, risk: ConnectorRisk) =
@@ -43,7 +47,8 @@ class DeviceControlConnector(
         invocation: ConnectorInvocation,
         credentials: ConnectorCredentialResolver
     ): ConnectorResult {
-        if (KillSwitch.isEngaged) return blockedResult().asConnectorResult()
+        if (!KillSwitch.isEnabled) return DeviceResult.blocked().asConnectorResult()
+        if (OpenDroidAccessibilityService.getInstance() == null) return accessibilityOff().asConnectorResult()
         if (invocation.tool.connectorId != id) return failure("Tool does not belong to this connector.").asConnectorResult()
 
         val args = try {
@@ -130,11 +135,9 @@ class DeviceControlConnector(
 
     private fun accessibilityOff() = failure(ACCESSIBILITY_ERROR)
     private fun failure(message: String) = DeviceResult(false, message, message)
-    private fun blockedResult() = failure(KILL_SWITCH_ERROR)
-
     companion object {
         const val ACCESSIBILITY_ERROR = "Accessibility service is not enabled. Enable it in Settings > Accessibility."
-        const val KILL_SWITCH_ERROR = "Kill switch engaged: all device actions are blocked."
+        const val KILL_SWITCH_ERROR = "Action blocked by Kill Switch"
         private val PACKAGE_NAME = Regex("[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+")
     }
 }

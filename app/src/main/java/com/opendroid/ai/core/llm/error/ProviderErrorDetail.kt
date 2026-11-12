@@ -20,7 +20,8 @@ class ProviderErrorDetail private constructor(
     val provider: Provider,
     val httpStatus: Int,
     val vendorType: String?,
-    val vendorCode: String?
+    val vendorCode: String?,
+    val vendorMessage: String?
 ) {
 
     val message: String = buildString {
@@ -40,7 +41,10 @@ class ProviderErrorDetail private constructor(
         append('.')
     }
 
-    override fun toString(): String = message
+    override fun toString(): String = buildString {
+        append(message)
+        vendorMessage?.let { append(" provider_message=\"").append(it).append('"') }
+    }
 
     enum class Provider(val displayName: String) {
         OPENAI("OpenAI"),
@@ -60,6 +64,8 @@ class ProviderErrorDetail private constructor(
 
     companion object {
         private val SAFE_VENDOR_TOKEN = Regex("""[A-Za-z][A-Za-z0-9._-]{0,63}""")
+        private val SAFE_VENDOR_MESSAGE = Regex("""[A-Za-z0-9][A-Za-z0-9 .,;:_'()/\-]{0,199}""")
+        private val LONG_SECRET_LIKE_VALUE = Regex("""(?i)(?:sk-|gsk_|AIza|hf_|xai-|csk-|r8_)[A-Za-z0-9_-]{4,}|[A-Za-z0-9_+/=-]{32,}""")
         private val CREDENTIAL_PREFIXES = listOf(
             "sk-",
             "gsk_",
@@ -99,13 +105,35 @@ class ProviderErrorDetail private constructor(
                 forbiddenFragments = forbiddenFragments,
                 forbiddenValues = forbiddenValues
             )
+            val vendorMessage = firstSafeMessage(
+                candidates = listOf(error?.get("message"), root?.get("message")),
+                forbiddenFragments = forbiddenFragments,
+                forbiddenValues = forbiddenValues
+            )
 
             return ProviderErrorDetail(
                 provider = provider,
                 httpStatus = httpStatus,
                 vendorType = vendorType,
-                vendorCode = vendorCode
+                vendorCode = vendorCode,
+                vendorMessage = vendorMessage,
             )
+        }
+
+        private fun firstSafeMessage(
+            candidates: List<com.google.gson.JsonElement?>,
+            forbiddenFragments: Set<String>,
+            forbiddenValues: Set<String>
+        ): String? = candidates.firstNotNullOfOrNull { candidate ->
+            if (candidate == null || !candidate.isJsonPrimitive || !candidate.asJsonPrimitive.isString) return@firstNotNullOfOrNull null
+            val text = candidate.asString.trim().replace(Regex("\\s+"), " ")
+            text.takeIf { value ->
+                SAFE_VENDOR_MESSAGE.matches(value) &&
+                    !value.contains("://") &&
+                    !LONG_SECRET_LIKE_VALUE.containsMatchIn(value) &&
+                    forbiddenFragments.none { fragment -> value.contains(fragment, ignoreCase = true) } &&
+                    forbiddenValues.none { forbidden -> value.contains(forbidden, ignoreCase = true) || forbidden.contains(value, ignoreCase = true) }
+            }
         }
 
         private fun parseBody(rawBody: String?): JsonObject? {

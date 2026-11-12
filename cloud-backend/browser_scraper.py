@@ -41,7 +41,8 @@ def _public_http_url(url: str) -> tuple[str, str]:
 
 
 def _host_allowed(host: str, allowed_domains: list[str]) -> bool:
-    return any(host == domain or host.endswith("." + domain) for domain in allowed_domains)
+    canonical_host = host.rstrip(".").lower()
+    return canonical_host in {domain.rstrip(".").lower() for domain in allowed_domains}
 
 
 async def _assert_public_dns(url: str) -> None:
@@ -71,7 +72,7 @@ async def _assert_public_dns(url: str) -> None:
         raise ValueError("The requested hostname does not resolve exclusively to public IP addresses.")
 
 
-async def _guard_public_requests(page: Any) -> None:
+async def _guard_public_requests(page: Any, allowed_domains: list[str]) -> None:
     if not hasattr(page, "route"):
         return  # Lightweight test doubles do not implement Playwright routing.
 
@@ -83,6 +84,9 @@ async def _guard_public_requests(page: Any) -> None:
         try:
             if scheme not in {"http", "https"}:
                 raise ValueError("Only public HTTP(S) browser requests are allowed.")
+            request_host, _ = _public_http_url(route.request.url)
+            if not _host_allowed(request_host, allowed_domains):
+                raise ValueError("The browser request is outside the exact approved host allowlist.")
             await _assert_public_dns(route.request.url)
         except (ValueError, OSError, asyncio.TimeoutError):
             await route.abort()
@@ -112,7 +116,7 @@ async def run_playwright_task(
         raise ValueError("Action must be 'scrape' or 'click'.")
     if action == "click" and not (link_text and link_text.strip()):
         raise ValueError("A link_text is required for the click action.")
-    permitted = [domain.strip().lower() for domain in (allowed_domains or [initial_host]) if domain.strip()]
+    permitted = [domain.strip().rstrip(".").lower() for domain in (allowed_domains or [initial_host]) if domain.strip()]
     if not _host_allowed(initial_host, permitted):
         raise ValueError("The requested URL is outside the allowed browser domains.")
 
@@ -123,8 +127,11 @@ async def run_playwright_task(
         )
         try:
             page = await browser.new_page()
-            await _guard_public_requests(page)
+            await _guard_public_requests(page, permitted)
             await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            landed_host, _ = _public_http_url(page.url)
+            if landed_host not in permitted:
+                raise ValueError("The page redirected outside the exact approved host allowlist.")
             if action == "click":
                 locator = page.get_by_role(
                     "link", name=re.compile(re.escape(link_text.strip()), re.IGNORECASE)
@@ -136,6 +143,8 @@ async def run_playwright_task(
                     raise RuntimeError("The matching link does not have a destination URL.")
                 target_url = urljoin(page.url, href)
                 target_host, _ = _public_http_url(target_url)
+                if target_host not in permitted:
+                    raise ValueError("The discovered link is outside the exact approved host allowlist.")
                 target = await locator.get_attribute("target")
                 if target == "_blank":
                     async with page.expect_popup(timeout=15_000) as popup_info:
@@ -146,7 +155,7 @@ async def run_playwright_task(
                     async with page.expect_navigation(wait_until="domcontentloaded", timeout=15_000):
                         await locator.click(timeout=10_000)
                 final_host, _ = _public_http_url(page.url)
-                if final_host != target_host and not final_host.endswith("." + target_host):
+                if final_host != target_host:
                     raise RuntimeError("The clicked link redirected to an unexpected hostname.")
             body_text = await page.inner_text("body", timeout=15_000)
             if include_links:
@@ -191,7 +200,7 @@ async def run_playwright_interaction(
     The caller must obtain explicit, one-call user approval before invoking this
     operation. Browser sessions are fresh and do not carry user cookies.
     """
-    _public_http_url(url)
+    initial_host, _ = _public_http_url(url)
     field_label = field_label.strip()
     submit_button = submit_button.strip()
     if not field_label or len(field_label) > 160:
@@ -210,9 +219,11 @@ async def run_playwright_interaction(
         )
         try:
             page = await browser.new_page()
-            await _guard_public_requests(page)
+            await _guard_public_requests(page, [initial_host])
             await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-            _public_http_url(page.url)
+            landed_host, _ = _public_http_url(page.url)
+            if landed_host != initial_host:
+                raise ValueError("The interaction page redirected to an unexpected host.")
 
             fields = await page.locator("input, textarea").evaluate_all(
                 "els => els.map(el => ({tag: el.tagName.toLowerCase(), type: (el.getAttribute('type') || 'text').toLowerCase(), name: el.getAttribute('name') || '', id: el.id || '', label: (el.labels && Array.from(el.labels).map(x => x.innerText).join(' ')) || '', disabled: !!el.disabled, readOnly: !!el.readOnly}))"
@@ -243,14 +254,16 @@ async def run_playwright_interaction(
             submission_url = str(await button.evaluate(
                 "el => el.formAction || (el.form && el.form.action) || location.href"
             ))
-            _, page_origin = _public_http_url(page.url)
-            _, submission_origin = _public_http_url(submission_url)
-            if submission_origin != page_origin:
+            page_host, page_origin = _public_http_url(page.url)
+            submission_host, submission_origin = _public_http_url(submission_url)
+            if submission_host != page_host or submission_origin != page_origin:
                 raise ValueError("Interaction is blocked because the form submits to a different public origin.")
             await field.fill(text, timeout=10_000)
             await button.click(timeout=10_000)
             await page.wait_for_timeout(1_000)
-            _public_http_url(page.url)
+            final_host, _ = _public_http_url(page.url)
+            if final_host != initial_host:
+                raise ValueError("The interaction redirected to an unexpected host.")
             return {
                 "initial_url": url,
                 "final_url": page.url,

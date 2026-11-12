@@ -209,6 +209,19 @@ class SettingsRepositoryProviderCredentialsTest {
         assertTrue(repository.llmConfig.first().apiKeys["OpenAI"] == "old-openai-secret")
     }
 
+    @Test
+    fun `FMHY host approvals persist canonically and reject malformed labels`() = runBlocking {
+        val dataStore = newDataStore()
+        val repository = SettingsRepository(dataStore, InMemoryProviderCredentialStore(), runStartupMigration = false)
+
+        repository.setFmhyHostApproved("Example.ORG.", approved = true)
+        assertEquals(setOf("example.org"), repository.approvedFmhyHosts.first())
+        assertTrue(runCatching { repository.setFmhyHostApproved("example..org", approved = true) }.isFailure)
+        assertTrue(runCatching { repository.setFmhyHostApproved("-bad.example", approved = true) }.isFailure)
+        repository.setFmhyHostApproved("example.org", approved = false)
+        assertTrue(repository.approvedFmhyHosts.first().isEmpty())
+    }
+
     private fun newDataStore() = PreferenceDataStoreFactory.create(
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
         produceFile = {

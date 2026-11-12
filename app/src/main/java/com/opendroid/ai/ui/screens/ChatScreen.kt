@@ -16,6 +16,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -47,6 +48,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
@@ -59,6 +61,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -75,6 +79,7 @@ import com.opendroid.ai.core.agent.ChatErrorUiState
 import com.opendroid.ai.core.agent.guidance
 import com.opendroid.ai.core.agent.primaryAction
 import com.opendroid.ai.core.agent.title
+import com.opendroid.ai.core.connector.KillSwitch
 import com.opendroid.ai.core.voice.SpeechRecognitionEngine
 import com.opendroid.ai.data.models.AutoMode
 import com.opendroid.ai.data.models.ChatDeliveryState
@@ -118,6 +123,7 @@ fun ChatScreen(
     // happening here. See ChatViewModel.visibleAgentState.
     val visibleAgentState by viewModel.visibleAgentState.collectAsState()
     val cloudTaskState by viewModel.cloudTaskState.collectAsState()
+    val automationEnabled by KillSwitch.state.collectAsState()
     val chatError by viewModel.chatError.collectAsState()
     val pendingConnectorApproval by viewModel.pendingConnectorApproval.collectAsState()
     // Id of whichever chat (if any) has a task actively running, regardless of which
@@ -129,6 +135,9 @@ fun ChatScreen(
     val runningElsewhere = runningSessionId != null && runningSessionId != currentSessionId
 
     val listState = rememberLazyListState()
+    var composerHeightPx by remember { mutableStateOf(0) }
+    val density = LocalDensity.current
+    val imeVisible = WindowInsets.ime.getBottom(density) > 0
     var inputQuery by remember { mutableStateOf("") }
     var isListening by remember { mutableStateOf(false) }
     var transcriptionText by remember { mutableStateOf("") }
@@ -149,35 +158,44 @@ fun ChatScreen(
     val attachmentSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedPluginIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedLocalAppPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var selectedAttachment by remember { mutableStateOf<PendingChatAttachment?>(null) }
-    var attachmentToRead by remember { mutableStateOf<Pair<Uri, Boolean>?>(null) }
+    var selectedAttachments by remember { mutableStateOf<List<PendingChatAttachment>>(emptyList()) }
+    var attachmentsToRead by remember { mutableStateOf<List<Pair<Uri, Boolean>>>(emptyList()) }
     var messageForActions by remember { mutableStateOf<ChatMessage?>(null) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
 
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
-    ) { uri -> uri?.let { attachmentToRead = it to false } }
+    ) { uri -> uri?.let { attachmentsToRead = listOf(it to false) } }
     val documentLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri -> uri?.let { attachmentToRead = it to true } }
+        UniversalFilePickerContract()
+    ) { uris ->
+        uris.forEach { uri ->
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
+        attachmentsToRead = uris.map { it to true }
+    }
     val cameraLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.TakePicturePreview()
     ) { bitmap ->
         if (bitmap != null) {
             runCatching { bitmapToBase64(bitmap) }
-                .onSuccess { selectedAttachment = PendingChatAttachment("camera-photo.jpg", imageBase64 = it) }
+                .onSuccess { encoded -> selectedAttachments = selectedAttachments + PendingChatAttachment("camera-photo.jpg", mimeType = "image/jpeg", imageBase64 = encoded) }
                 .onFailure { Toast.makeText(context, "The camera photo could not be attached.", Toast.LENGTH_LONG).show() }
         }
     }
 
-    LaunchedEffect(attachmentToRead) {
-        val pending = attachmentToRead ?: return@LaunchedEffect
+    LaunchedEffect(attachmentsToRead) {
+        val pending = attachmentsToRead
+        if (pending.isEmpty()) return@LaunchedEffect
         val result = runCatching {
-            withContext(Dispatchers.IO) { readChatAttachment(context, pending.first, pending.second) }
+            withContext(Dispatchers.IO) { pending.map { (uri, isDocument) -> readChatAttachment(context, uri, isDocument) } }
         }
-        result.onSuccess { selectedAttachment = it }
-            .onFailure { Toast.makeText(context, it.message ?: "The attachment could not be read.", Toast.LENGTH_LONG).show() }
-        attachmentToRead = null
+        result.onSuccess { loaded ->
+            selectedAttachments = (selectedAttachments + loaded).distinctBy { it.uri?.toString() ?: it.displayName }
+        }.onFailure { Toast.makeText(context, it.message ?: "The attachment could not be read.", Toast.LENGTH_LONG).show() }
+        attachmentsToRead = emptyList()
     }
 
     // Merges a piece of dictated text into whatever the user already typed, so review/edit
@@ -212,15 +230,19 @@ fun ChatScreen(
     // Single submit path for both a normal send and an edit-resend, wired to both the
     // keyboard "Send" action and the send button below.
     fun submitInput() {
-        val attachment = selectedAttachment
-        val attachmentText = when {
-            attachment == null -> ""
-            attachment.imageBase64 != null -> if (inputQuery.isBlank()) {
-                "Please analyze the attached image (${attachment.displayName})."
-            } else {
-                "\n[Attached image: ${attachment.displayName}]"
+        val attachments = selectedAttachments
+        val primaryImage = attachments.firstOrNull { it.imageBase64 != null }?.imageBase64
+        val attachmentText = buildString {
+            attachments.forEachIndexed { index, attachment ->
+                when {
+                    attachment.imageBase64 != null -> append("\n[Attached image: ${attachment.displayName}]")
+                    attachment.textContent != null -> append("\n\n[Attached text file: ${attachment.displayName}; ${attachment.displaySize}; ${attachment.mimeType}]\n${attachment.textContent}")
+                    else -> append("\n[Attached file metadata only: ${attachment.displayName}; ${attachment.displaySize}; ${attachment.mimeType}. The file bytes are not analyzed or executed.]")
+                }
+                if (index > 0 && attachment.imageBase64 != null && attachment.imageBase64 != primaryImage) {
+                    append(" [Only the first image is sent as image content by this message format.]")
+                }
             }
-            else -> "\n\n[Attached document: ${attachment.displayName}]\n${attachment.textContent.orEmpty()}"
         }
         val modeInstructions = buildString {
             if (thinkEnabled) append("\n[Use deeper internal reasoning before answering; do not reveal private chain-of-thought.]\n")
@@ -237,17 +259,17 @@ fun ChatScreen(
             }
         }
         val text = inputQuery + attachmentText + modeInstructions
-        if (inputQuery.isBlank() && attachment == null) return
+        if (inputQuery.isBlank() && attachments.isEmpty()) return
         val editing = editingMessageId
         if (editing != null) {
-            viewModel.editAndResend(editing, text, context, attachment?.imageBase64)
+            viewModel.editAndResend(editing, text, context, primaryImage)
             editingMessageId = null
             textBeforeEdit = ""
         } else {
-            viewModel.sendMessage(text, context, attachment?.imageBase64, chatTarget, selectedPluginIds.toList(), thinkEnabled)
+            viewModel.sendMessage(text, context, primaryImage, chatTarget, selectedPluginIds.toList(), thinkEnabled)
         }
         inputQuery = ""
-        selectedAttachment = null
+        selectedAttachments = emptyList()
         thinkEnabled = false
         searchEnabled = false
         selectedPluginIds = emptySet()
@@ -256,15 +278,14 @@ fun ChatScreen(
         chatTarget = ChatTarget.API_MODEL
     }
 
-    // With reverseLayout, item 0 is the visual bottom. A newly received message
-    // becomes item 0 and is brought into view; changing sessions also re-anchors
-    // even when both conversations contain the same number of messages.
-    LaunchedEffect(currentSessionId, history.size, history.lastOrNull()?.id, visibleAgentState) {
-        listState.animateScrollToItem(0)
-    }
+    // The backing history remains chronological; history.asReversed() is displayed with
+    // reverseLayout so visual/list index 0 is always the newest item at the bottom.
+    LaunchedEffect(history.lastOrNull()?.id) { listState.animateScrollToItem(0) }
+    LaunchedEffect(imeVisible) { if (imeVisible) listState.animateScrollToItem(0) }
+    LaunchedEffect(Unit) { listState.scrollToItem(0) }
 
     val speechRecognizer = remember { SpeechRecognitionEngine(context) }
-    
+
     val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -353,6 +374,15 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = { if (automationEnabled) KillSwitch.disable() else KillSwitch.enable() },
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Security,
+                            contentDescription = if (automationEnabled) "Disable all automation" else "Enable all automation",
+                            tint = if (automationEnabled) AccentCyan else AccentRed,
+                        )
+                    }
                     val autoMode = llmConfig.resolvedAutoMode()
                     val chipColor = when (autoMode) {
                         AutoMode.OFF -> TextSecondary
@@ -488,177 +518,13 @@ fun ChatScreen(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBackground)
             )
         },
-        containerColor = DarkBackground,
-        modifier = modifier
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .consumeWindowInsets(padding)
-                .imePadding()
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(bottom = 80.dp)
-            ) {
-                // Messages List
-                LazyColumn(
-                    state = listState,
-                    reverseLayout = true,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp)
-                ) {
-                    if (history.isEmpty()) {
-                        item(key = "welcome") {
-                            Column(
-                                modifier = Modifier.fillMaxWidth().padding(top = 96.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                            ) {
-                                Text("How can I help?", color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
-                                Spacer(Modifier.height(18.dp))
-                                val suggestions = listOf(
-                                    "Find free video editors on FMHY",
-                                    "Research latest Python updates",
-                                    "Launch OpenSwarm to build a script",
-                                )
-                                suggestions.forEach { suggestion ->
-                                    AssistChip(
-                                        onClick = { inputQuery = suggestion },
-                                        label = { Text(suggestion, color = TextPrimary, fontSize = 12.sp) },
-                                        modifier = Modifier.padding(vertical = 4.dp),
-                                        colors = AssistChipDefaults.assistChipColors(containerColor = DarkSurface),
-                                        border = BorderStroke(1.dp, BorderColor),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    items(history.asReversed(), key = { it.id }) { msg ->
-                        ChatBubble(
-                            message = msg,
-                            viewModel = viewModel,
-                            context = context,
-                            onEditRequested = { startEditingMessage(it) },
-                            onMessageLongPressed = { messageForActions = it },
-                            onToolApproved = { call -> viewModel.approveChatToolCall(call, context) },
-                            onRetry = { failed -> viewModel.retryMessage(failed.id, currentSessionId, context) },
-                        )
-                    }
-                    
-                    // Show a typing/thinking bubble if thinking - scoped to this chat, see
-                    // visibleAgentState.
-                    if (visibleAgentState is AgentState.Thinking) {
-                        item {
-                            ThinkingBubble("${llmConfig.activeProvider} is thinking…")
-                        }
-                    }
-
-                    cloudTaskState?.takeIf { it.sessionId == currentSessionId }?.let { cloudTask ->
-                        item(key = "cloud-task-${cloudTask.taskId}") {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                if (cloudTask.status in setOf("RUNNING", "CANCEL_REQUESTED")) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp,
-                                        color = AccentCyan,
-                                    )
-                                } else {
-                                    Icon(
-                                        imageVector = Icons.Filled.Warning,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
-                                        tint = if (cloudTask.status in setOf("FAILED", "UNKNOWN")) AccentRed else AccentCyan,
-                                    )
-                                }
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = when (cloudTask.status) {
-                                            "RUNNING" -> "Chat + tools is working…"
-                                            "CANCEL_REQUESTED" -> "Stop requested; waiting for a safe checkpoint…"
-                                            "CANCELLED" -> "Chat + tools stopped."
-                                            "UNKNOWN" -> "Task outcome unknown; check the task before retrying."
-                                            "FAILED" -> "Chat + tools failed."
-                                            else -> "Chat + tools completed."
-                                        },
-                                        color = if (cloudTask.status in setOf("FAILED", "UNKNOWN")) AccentRed else TextSecondary,
-                                        fontSize = 12.sp,
-                                    )
-                                    cloudTask.message?.let { Text(it, color = TextSecondary, fontSize = 10.sp) }
-                                }
-                                if (cloudTask.status == "RUNNING") {
-                                    TextButton(onClick = { viewModel.stopTask() }) { Text("Stop", color = AccentRed) }
-                                }
-                            }
-                        }
-                    }
-
-                    chatError?.let { error ->
-                        item(key = "chat-error-${error.requestId}-${error.runId}") {
-                            ChatErrorRecoveryCard(
-                                error = error,
-                                onPrimary = {
-                                    when (error.primaryAction()) {
-                                        ChatErrorPrimaryAction.RETRY ->
-                                            viewModel.retryAfterChatError(context)
-                                        ChatErrorPrimaryAction.EDIT_MESSAGE -> {
-                                            // Edit the exact message the error is about;
-                                            // fall back to the last user message only if
-                                            // the requestId no longer resolves to one.
-                                            val target = history.firstOrNull {
-                                                it.id == error.requestId &&
-                                                    it.sender == ChatMessage.Sender.USER
-                                            } ?: history.lastOrNull {
-                                                it.sender == ChatMessage.Sender.USER
-                                            }
-                                            target?.let { startEditingMessage(it) }
-                                            viewModel.dismissChatError()
-                                        }
-                                        else -> viewModel.dismissChatError()
-                                    }
-                                },
-                                onDismiss = { viewModel.dismissChatError() }
-                            )
-                        }
-                    }
-                }
-
-                // If agent proposed a plan for THIS chat, show a modal prompt to approve or
-                // reject. A plan proposed for a different chat must never surface here - the
-                // user could approve/reject the wrong chat's plan without realizing it.
-                if (visibleAgentState is AgentState.PlanProposed) {
-                    val proposedPlan = (visibleAgentState as AgentState.PlanProposed).plan
-                    val blocked = if (llmConfig.resolvedAutoMode() == AutoMode.AUTO) {
-                        AutoApprovalPolicy.blockedActions(
-                            llmConfig.effectiveGrantedActions().keys, proposedPlan.steps
-                        )
-                    } else emptyList()
-                    ProposedPlanPrompt(
-                        planId = proposedPlan.planId,
-                        goal = proposedPlan.goal,
-                        stepsCount = proposedPlan.estimatedSteps,
-                        blockedActions = blocked,
-                        grantableActions = blocked.filter { AutoApprovalPolicy.isGrantable(it) }.toSet(),
-                        onApprove = { grants -> viewModel.approvePlan(context, grants) },
-                        onReject = { viewModel.rejectPlan() }
-                    )
-                }
-            }
-
+        bottomBar = {
             // Bottom Input Section with Orb overlay
             Box(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
+                    .imePadding()
+                    .navigationBarsPadding()
                     .background(
                         brush = Brush.verticalGradient(
                             colors = listOf(Color.Transparent, DarkBackground),
@@ -667,6 +533,7 @@ fun ChatScreen(
                         )
                     )
                     .padding(16.dp)
+                    .onGloballyPositioned { composerHeightPx = it.size.height }
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
                     if (editingMessageId != null) {
@@ -738,16 +605,35 @@ fun ChatScreen(
                             onClick = { searchEnabled = !searchEnabled },
                             label = { Text("Search", fontSize = 11.sp) }
                         )
-                        selectedAttachment?.let { attachment ->
-                            Text(
-                                "Attached: ${attachment.displayName}",
-                                color = AccentCyan,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                modifier = Modifier.weight(1f),
-                            )
-                            IconButton(onClick = { selectedAttachment = null }, modifier = Modifier.size(28.dp)) {
-                                Icon(Icons.Default.Close, contentDescription = "Remove attachment", tint = TextSecondary)
+                    }
+                    if (selectedAttachments.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 6.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            selectedAttachments.forEach { attachment ->
+                                Surface(color = DarkSurface, shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, BorderColor)) {
+                                    Row(modifier = Modifier.widthIn(max = 260.dp).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(attachment.displayName, color = TextPrimary, fontSize = 11.sp, maxLines = 1)
+                                            Text("${attachment.displaySize} · ${attachment.mimeType}", color = TextSecondary, fontSize = 9.sp, maxLines = 1)
+                                            if (attachment.sendToColabEligible) {
+                                                TextButton(onClick = {
+                                                    val content = attachment.textContent.orEmpty()
+                                                    scope.launch {
+                                                        val result = runCatching { viewModel.sendTextAttachmentToColab(context, attachment.displayName, content) }
+                                                        Toast.makeText(context, result.getOrElse { it.message ?: "Colab transfer failed." }, Toast.LENGTH_LONG).show()
+                                                    }
+                                                }, contentPadding = PaddingValues(0.dp)) { Text("Send to Colab", fontSize = 10.sp) }
+                                            } else {
+                                                Text(attachment.sendToColabRejectionReason ?: "Not eligible for Colab text transfer.", color = TextSecondary, fontSize = 9.sp, maxLines = 2)
+                                            }
+                                        }
+                                        IconButton(onClick = { selectedAttachments = selectedAttachments - attachment }, modifier = Modifier.size(28.dp)) {
+                                            Icon(Icons.Default.Close, contentDescription = "Remove ${attachment.displayName}", tint = TextSecondary, modifier = Modifier.size(14.dp))
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -853,7 +739,7 @@ fun ChatScreen(
                         }
 
                         AnimatedVisibility(
-                            visible = !isListening && (inputQuery.isNotBlank() || selectedAttachment != null),
+                            visible = !isListening && (inputQuery.isNotBlank() || selectedAttachments.isNotEmpty()),
                             enter = fadeIn(animationSpec = tween(150)) + scaleIn(initialScale = 0.8f),
                             exit = fadeOut(animationSpec = tween(150)) + scaleOut(targetScale = 0.8f)
                         ) {
@@ -877,6 +763,175 @@ fun ChatScreen(
                     }
                 }
             }
+        },
+        containerColor = DarkBackground,
+        modifier = modifier
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .consumeWindowInsets(padding)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize()
+            ) {
+                // Messages List
+                LazyColumn(
+                    state = listState,
+                    reverseLayout = true,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    contentPadding = PaddingValues(
+                        top = 16.dp,
+                        bottom = with(density) { composerHeightPx.toDp() } + 16.dp,
+                    )
+                ) {
+                    if (history.isEmpty()) {
+                        item(key = "welcome") {
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(top = 96.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Text("How can I help?", color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+                                Spacer(Modifier.height(18.dp))
+                                val suggestions = listOf(
+                                    "Find free video editors on FMHY",
+                                    "Research latest Python updates",
+                                    "Launch OpenSwarm to build a script",
+                                )
+                                suggestions.forEach { suggestion ->
+                                    AssistChip(
+                                        onClick = { inputQuery = suggestion },
+                                        label = { Text(suggestion, color = TextPrimary, fontSize = 12.sp) },
+                                        modifier = Modifier.padding(vertical = 4.dp),
+                                        colors = AssistChipDefaults.assistChipColors(containerColor = DarkSurface),
+                                        border = BorderStroke(1.dp, BorderColor),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    // Show a typing/thinking bubble if thinking - scoped to this chat, see
+                    // visibleAgentState.
+                    if (visibleAgentState is AgentState.Thinking) {
+                        item {
+                            ThinkingBubble("${llmConfig.activeProvider} is thinking…")
+                        }
+                    }
+
+                    cloudTaskState?.takeIf { it.sessionId == currentSessionId }?.let { cloudTask ->
+                        item(key = "cloud-task-${cloudTask.taskId}") {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                if (cloudTask.status in setOf("RUNNING", "CANCEL_REQUESTED")) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp,
+                                        color = AccentCyan,
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Filled.Warning,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (cloudTask.status in setOf("FAILED", "UNKNOWN")) AccentRed else AccentCyan,
+                                    )
+                                }
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = when (cloudTask.status) {
+                                            "RUNNING" -> "Chat + tools is working…"
+                                            "CANCEL_REQUESTED" -> "Stop requested; waiting for a safe checkpoint…"
+                                            "CANCELLED" -> "Chat + tools stopped."
+                                            "UNKNOWN" -> "Task outcome unknown; check the task before retrying."
+                                            "FAILED" -> "Chat + tools failed."
+                                            else -> "Chat + tools completed."
+                                        },
+                                        color = if (cloudTask.status in setOf("FAILED", "UNKNOWN")) AccentRed else TextSecondary,
+                                        fontSize = 12.sp,
+                                    )
+                                    cloudTask.message?.let { Text(it, color = TextSecondary, fontSize = 10.sp) }
+                                }
+                                if (cloudTask.status == "RUNNING") {
+                                    TextButton(onClick = { viewModel.stopTask() }) { Text("Stop", color = AccentRed) }
+                                }
+                            }
+                        }
+                    }
+
+                    chatError?.let { error ->
+                        item(key = "chat-error-${error.requestId}-${error.runId}") {
+                            ChatErrorRecoveryCard(
+                                error = error,
+                                onPrimary = {
+                                    when (error.primaryAction()) {
+                                        ChatErrorPrimaryAction.RETRY ->
+                                            viewModel.retryAfterChatError(context)
+                                        ChatErrorPrimaryAction.EDIT_MESSAGE -> {
+                                            // Edit the exact message the error is about;
+                                            // fall back to the last user message only if
+                                            // the requestId no longer resolves to one.
+                                            val target = history.firstOrNull {
+                                                it.id == error.requestId &&
+                                                    it.sender == ChatMessage.Sender.USER
+                                            } ?: history.lastOrNull {
+                                                it.sender == ChatMessage.Sender.USER
+                                            }
+                                            target?.let { startEditingMessage(it) }
+                                            viewModel.dismissChatError()
+                                        }
+                                        else -> viewModel.dismissChatError()
+                                    }
+                                },
+                                onDismiss = { viewModel.dismissChatError() }
+                            )
+                        }
+                    }
+
+                    items(history.asReversed(), key = { it.id }) { msg ->
+                        ChatBubble(
+                            message = msg,
+                            viewModel = viewModel,
+                            context = context,
+                            onEditRequested = { startEditingMessage(it) },
+                            onMessageLongPressed = { messageForActions = it },
+                            onToolApproved = { call -> viewModel.approveChatToolCall(call, context) },
+                            onRetry = { failed -> viewModel.retryMessage(failed.id, currentSessionId, context) },
+                        )
+                    }
+
+
+                }
+
+                // If agent proposed a plan for THIS chat, show a modal prompt to approve or
+                // reject. A plan proposed for a different chat must never surface here - the
+                // user could approve/reject the wrong chat's plan without realizing it.
+                if (visibleAgentState is AgentState.PlanProposed) {
+                    val proposedPlan = (visibleAgentState as AgentState.PlanProposed).plan
+                    val blocked = if (llmConfig.resolvedAutoMode() == AutoMode.AUTO) {
+                        AutoApprovalPolicy.blockedActions(
+                            llmConfig.effectiveGrantedActions().keys, proposedPlan.steps
+                        )
+                    } else emptyList()
+                    ProposedPlanPrompt(
+                        planId = proposedPlan.planId,
+                        goal = proposedPlan.goal,
+                        stepsCount = proposedPlan.estimatedSteps,
+                        blockedActions = blocked,
+                        grantableActions = blocked.filter { AutoApprovalPolicy.isGrantable(it) }.toSet(),
+                        onApprove = { grants -> viewModel.approvePlan(context, grants) },
+                        onReject = { viewModel.rejectPlan() }
+                    )
+                }
+            }
+
         }
     }
     }
@@ -1015,28 +1070,13 @@ fun ChatScreen(
                         scope.launch {
                             attachmentSheetState.hide()
                             showAttachmentSheet = false
-                            documentLauncher.launch(
-                                arrayOf(
-                                    "text/*",
-                                    "application/json",
-                                    "application/xml",
-                                    "application/csv",
-                                    "application/pdf",
-                                    "application/msword",
-                                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                                    "application/vnd.android.package-archive",
-                                    "application/zip",
-                                    "application/x-zip-compressed",
-                                    "application/octet-stream",
-                                    "application/x-binary",
-                                )
-                            )
+                            documentLauncher.launch(UniversalFilePickerContract.REQUIRED_MIME_TYPES.toTypedArray())
                         }
                     }
                     AttachmentOption("Plugins & AI apps", Icons.Default.Extension) { showPluginSelector = true }
                     ListItem(
                         headlineContent = { Text("Think Harder", color = TextPrimary) },
-                        supportingContent = { Text("Use the selected provider for up to 30 agent steps", color = TextSecondary, fontSize = 12.sp) },
+                        supportingContent = { Text("Ask the selected provider to reason carefully; private chain-of-thought is not displayed.", color = TextSecondary, fontSize = 12.sp) },
                         trailingContent = { Switch(checked = thinkEnabled, onCheckedChange = { thinkEnabled = it }) },
                         leadingContent = { Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = AccentCyan) },
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
@@ -1437,7 +1477,7 @@ fun ChatBubble(
                         )
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.height(4.dp))
 
                 Row(
@@ -1826,6 +1866,13 @@ private fun ChatErrorRecoveryCard(
                 )
             }
             Text(text = error.guidance(), color = TextSecondary, fontSize = 13.sp)
+            error.redactedDetail?.providerMessage?.let { safeProviderMessage ->
+                Text(
+                    text = "${error.provider}: $safeProviderMessage",
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                )
+            }
             if (phase is ChatErrorUiState.Phase.WaitingUntil && waitSecondsLeft > 0L) {
                 Text(
                     text = "Retry available in ${waitSecondsLeft}s",

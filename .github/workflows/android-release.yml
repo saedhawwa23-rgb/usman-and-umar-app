@@ -10,7 +10,7 @@ on:
       tag:
         description: GitHub Release tag to create
         required: true
-        default: v3.8.2
+        default: v3.9.0
 
 permissions:
   contents: write
@@ -94,8 +94,8 @@ jobs:
           out=dist
           mkdir -p "$out"
           test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.8.2'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='28'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.9.0'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='29'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
           certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt")
           expected_sha1=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | awk -F': ' '/SHA1:/{print toupper($2); exit}')
@@ -107,33 +107,43 @@ jobs:
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
           grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' "$out/PROOT_ELF.txt"
           sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
-          cp "$apk" "$out/USMAN-AND-UMAR-v3.8.2.apk"
-          sha256sum "$out/USMAN-AND-UMAR-v3.8.2.apk" | tee "$out/SHA256SUMS.txt"
+          cp "$apk" "$out/USMAN-AND-UMAR-v3.9.0.apk"
+          sha256sum "$out/USMAN-AND-UMAR-v3.9.0.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nref=%s\ntag=%s\n' "$(git rev-parse HEAD)" "${{ inputs.ref }}" "${{ inputs.tag }}" > "$out/BUILD_METADATA.txt"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
         with:
-          tag_name: ${{ inputs.tag || 'v3.8.2' }}
+          tag_name: ${{ inputs.tag || 'v3.9.0' }}
           target_commitish: ${{ steps.build-meta.outputs.commit }}
-          name: USMAN AND UMAR ${{ inputs.tag || 'v3.8.2' }}
+          name: USMAN AND UMAR ${{ inputs.tag || 'v3.9.0' }}
           body: |
-            USMAN AND UMAR v3.8.2 — unified agent and on-device safety release.
+            USMAN AND UMAR v3.9.0 — universal file picker, modern chat, approval-gated device automation, FMHY discovery, and unified agent.
 
             Commit: `${{ steps.build-meta.outputs.commit }}`
             Package: `com.usmanandumar.app`
-            Version: `3.8.2` (versionCode `28`)
+            Version: `3.9.0` (versionCode `29`)
             ABI: `armeabi-v7a`
 
             Highlights:
-            - Chat offers API Model — Chat only and API Model — Chat + tools.
-            - Chat + tools uses the bounded 12-step Unified Agent Loop with cooperative Stop behavior.
-            - On-device controls are guarded by the global Kill Switch and accessibility permission.
-            - FMHY discovery binds dynamic `site.<host>` tools to trusted hosts and validates rooted paths.
-            - Colab Playwright setup uses the explicit `/content/ms-playwright` browser path; browser-use is not a runtime dependency.
+            - Universal multi-select file picker accepts APK, ZIP, BIN, `.ipynb`, `.py`, and other document types as metadata; only UTF-8 text up to 1 MB can be explicitly sent to Colab after per-call approval. No attachment is executed.
+            - Chat uses a reverse-layout message list and measured Scaffold bottom bar, with separate new-message, IME-open, and initial-scroll effects.
+            - Device actions are globally disabled by default, require the owner-enabled Accessibility service, and require exact per-call approval. Kill Switch is available in Chat and Settings.
+            - FMHY links are untrusted candidates. Exact hosts require persistent owner approval; browser requests and redirects are pinned to exact allowed hosts.
+            - The unified agent combines configured Colab tools, approved site tools, and device tools. It allows at most 12 model iterations and 10 minutes, counts model iterations (not tool calls), and stops after two consecutive non-denial tool failures.
+            - OpenRouter model IDs are validated and trimmed; chat-only requests omit tools/tool_choice. Safe bounded vendor messages may appear in the transient error card, never in chat history or prompts.
+
+            Setup and permissions:
+            - Local deterministic Android actions require no Colab setup. Accessibility actions require the owner to enable the app's Accessibility service manually; the app never enables it.
+            - Colab actions require the owner's Colab runtime and OpenSwarm node configuration. Playwright needs its browser/system libraries installed by the notebook. GitHub reads may require the owner's `GITHUB_TOKEN`; Bubblewrap tooling is only needed for the notebook's optional isolated shell workflow.
+            - This app does not automate third-party AI chat websites, execute downloaded attachments, or bypass authentication, CAPTCHAs, paywalls, or rate limits.
+
+            Verification:
+            - The Android unit-test task must pass in this workflow before publishing; check the Actions job for the exact test result.
+            - Emulator UI/IME and picker-listing checks: NOT VERIFIED by this workflow.
+            - Real-phone checks and screenshots (APK/ZIP/`.ipynb` attachments, 20-message scrolling, IME behavior, Kill Switch block, approved/denied device action, FMHY approval flow): NOT VERIFIED by this workflow.
 
             APK signature and SHA-256 checksum are included with the assets. This package uses the repository's stable Android debug signing key; it is not a Play Store production signing key.
-            Physical-device runtime verification remains separate and is not claimed by this release.
           files: dist/*
           fail_on_unmatched_files: true
           draft: false

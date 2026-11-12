@@ -37,6 +37,8 @@ import com.opendroid.ai.data.repository.ProviderCredentialPersistenceState
 import com.opendroid.ai.data.repository.CloudServerConfig
 import com.opendroid.ai.core.browser.CloudServerClient
 import com.opendroid.ai.core.browser.CloudServerHealth
+import com.opendroid.ai.core.connector.OpenSwarmConnector
+import com.opendroid.ai.core.connector.FmhyResource
 import com.opendroid.ai.core.browser.OpenSwarmConnectionState
 import com.opendroid.ai.core.browser.mapOpenSwarmHealth
 import com.opendroid.ai.core.service.CloudServerKeepAliveService
@@ -61,6 +63,7 @@ class SettingsViewModel @Inject constructor(
     private val okHttpClient: OkHttpClient,
     private val providerCredentialStore: ProviderCredentialStore,
     private val cloudServerClient: CloudServerClient,
+    private val openSwarmConnector: OpenSwarmConnector,
     @ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
 
@@ -73,6 +76,13 @@ class SettingsViewModel @Inject constructor(
     val pingingCloudServers: StateFlow<Boolean> = mutablePingingCloudServers.asStateFlow()
     val cloudKeepAliveEnabled: StateFlow<Boolean> = settingsRepository.cloudKeepAliveEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val fmhyCandidates: StateFlow<List<FmhyResource>> = openSwarmConnector.fmhyCandidates
+    val approvedFmhyHosts: StateFlow<Set<String>> = settingsRepository.approvedFmhyHosts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptySet())
+
+    fun setFmhyHostApproved(host: String, approved: Boolean) = viewModelScope.launch {
+        runCatching { openSwarmConnector.setFmhyHostApproved(host, approved) }
+    }
     private var cloudHealthJob: Job? = null
     data class OpenSwarmConnectionCheck(
         val state: OpenSwarmConnectionState,

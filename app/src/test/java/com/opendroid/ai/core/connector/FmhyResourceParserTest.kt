@@ -6,7 +6,7 @@ import org.junit.Test
 
 class FmhyResourceParserTest {
     @Test
-    fun `parser keeps only public http and https hosts and deduplicates normalized URLs`() {
+    fun `parser keeps only public HTTPS hosts and deduplicates normalized URLs`() {
         val text = """
             https://good.example/page https://good.example:443/page.
             http://plain.example http://plain-port.example:8080/path https://user:pass@auth.example/path
@@ -20,15 +20,13 @@ class FmhyResourceParserTest {
         assertEquals(
             listOf(
                 "https://good.example/page",
-                "http://plain.example/",
-                "http://plain-port.example:8080/path",
                 "https://port.example:8443/path",
                 "https://good.example/other",
             ),
             resources.map { it.url },
         )
         assertEquals(
-            listOf("good.example", "plain.example", "plain-port.example", "port.example", "good.example"),
+            listOf("good.example", "port.example", "good.example"),
             resources.map { it.host },
         )
     }
@@ -48,7 +46,7 @@ class FmhyResourceParserTest {
     }
 
     @Test
-    fun `FMHY outbound links map dynamically to arbitrary public http and https destinations`() {
+    fun `FMHY outbound links map dynamically to arbitrary public HTTPS destinations`() {
         val resources = FmhyResourceParser.parse(
             "AI generator: https://tool-one.example/generate?model=fast " +
                 "another tool: http://tools.example.org:8080/create " +
@@ -56,11 +54,11 @@ class FmhyResourceParserTest {
         )
 
         assertEquals(
-            listOf("https://tool-one.example/generate?model=fast", "http://tools.example.org:8080/create"),
+            listOf("https://tool-one.example/generate?model=fast"),
             resources.map { it.url },
         )
-        assertEquals(listOf("tool-one.example", "tools.example.org"), resources.map { it.host })
-        assertTrue(resources.all { it.url.startsWith("https://") || it.url.startsWith("http://") })
+        assertEquals(listOf("tool-one.example"), resources.map { it.host })
+        assertTrue(resources.all { it.url.startsWith("https://") })
     }
 
     @Test

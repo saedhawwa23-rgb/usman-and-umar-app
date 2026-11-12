@@ -101,8 +101,10 @@ fun SettingsScreen(
     val cloudServerHealth by viewModel.cloudServerHealth.collectAsState()
     val pingingCloudServers by viewModel.pingingCloudServers.collectAsState()
     val cloudKeepAliveEnabled by viewModel.cloudKeepAliveEnabled.collectAsState()
+    val fmhyCandidates by viewModel.fmhyCandidates.collectAsState()
+    val approvedFmhyHosts by viewModel.approvedFmhyHosts.collectAsState()
     val openSwarmConnectionCheck by viewModel.openSwarmConnectionCheck.collectAsState()
-    val killSwitchEngaged by KillSwitch.state.collectAsState()
+    val automationEnabled by KillSwitch.state.collectAsState()
     var expandedCloudServerIds by remember { mutableStateOf(emptySet<String>()) }
     var newServerName by remember { mutableStateOf("") }
     var newServerUrl by remember { mutableStateOf("") }
@@ -189,7 +191,7 @@ fun SettingsScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth().border(
                         1.dp,
-                        if (killSwitchEngaged) Color(0xFFFF5252) else AccentCyan,
+                        if (automationEnabled) AccentCyan else Color(0xFFFF5252),
                         RoundedCornerShape(12.dp),
                     ),
                     colors = CardDefaults.cardColors(containerColor = CardBackground),
@@ -200,16 +202,16 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
                         Column(Modifier.weight(1f)) {
-                            Text("DEVICE CONTROL KILL SWITCH", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                            Text("GLOBAL AUTOMATION KILL SWITCH", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
                             Text(
-                                if (killSwitchEngaged) "ENGAGED · all device actions are blocked" else "RELEASED · approved device tools may run",
+                                if (automationEnabled) "ENABLED · local and cloud tools may run" else "OFF · all automation is blocked",
                                 fontSize = 12.sp,
-                                color = if (killSwitchEngaged) Color(0xFFFF5252) else TextSecondary,
+                                color = if (automationEnabled) AccentCyan else Color(0xFFFF5252),
                             )
                         }
                         Switch(
-                            checked = killSwitchEngaged,
-                            onCheckedChange = { enabled -> if (enabled) KillSwitch.engage() else KillSwitch.release() },
+                            checked = automationEnabled,
+                            onCheckedChange = { enabled -> if (enabled) KillSwitch.enable() else KillSwitch.disable() },
                         )
                     }
                 }
@@ -516,6 +518,34 @@ fun SettingsScreen(
                                     detectedServerToken = ""
                                 },
                             )
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().border(1.dp, BorderColor, RoundedCornerShape(12.dp)),
+                    colors = CardDefaults.cardColors(containerColor = CardBackground),
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("FMHY DISCOVERED HOSTS", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
+                        Text("Discovered URLs are untrusted candidates. Approve an exact host before its site tool can send a request. Links are never opened automatically.", color = TextSecondary, fontSize = 12.sp)
+                        val candidates = fmhyCandidates.distinctBy { it.host }
+                        if (candidates.isEmpty()) {
+                            Text("No candidates yet. Ask the chat agent to discover HTTPS links written in the FMHY page text.", color = TextSecondary, fontSize = 11.sp)
+                        }
+                        candidates.forEach { candidate ->
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(candidate.url, color = TextPrimary, fontSize = 12.sp)
+                                    Text(candidate.host, color = TextSecondary, fontSize = 11.sp)
+                                }
+                                val approved = candidate.host in approvedFmhyHosts
+                                OutlinedButton(onClick = { viewModel.setFmhyHostApproved(candidate.host, !approved) }) {
+                                    Text(if (approved) "Revoke" else "Approve")
+                                }
+                            }
                         }
                     }
                 }

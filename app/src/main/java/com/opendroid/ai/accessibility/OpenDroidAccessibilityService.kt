@@ -26,6 +26,7 @@ import androidx.core.graphics.toColorInt
 import com.opendroid.ai.R
 import com.opendroid.ai.core.agent.AgentLoop
 import com.opendroid.ai.core.agent.AgentState
+import com.opendroid.ai.core.connector.KillSwitch
 import com.opendroid.ai.core.service.OpenDroidService
 import com.opendroid.ai.data.repository.SettingsRepository
 import com.opendroid.ai.data.repository.WorkspaceTaskRepository
@@ -709,11 +710,13 @@ class UsmanAccessibilityService : AccessibilityService() {
     // --- Node Automation Methods ---
 
     fun findAndClick(text: String): Boolean {
+        if (!KillSwitch.isEnabled) return false
         val rootNode = rootInActiveWindow ?: return false
         return nodeTraversal.findAndClick(rootNode, text)
     }
 
     fun findAndClickById(viewId: String): Boolean {
+        if (!KillSwitch.isEnabled) return false
         val rootNode = rootInActiveWindow ?: return false
         val nodes = rootNode.findAccessibilityNodeInfosByViewId(viewId)
         for (node in nodes) {
@@ -738,37 +741,35 @@ class UsmanAccessibilityService : AccessibilityService() {
     }
 
     fun findAndType(searchText: String, content: String): Boolean {
-        val rootNode = rootInActiveWindow ?: return false
-        val nodes = rootNode.findAccessibilityNodeInfosByText(searchText)
-        for (node in nodes) {
-            if (node.isEditable) {
-                val arguments = Bundle().apply {
-                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, content)
-                }
-                node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
-                node.recycle()
-                return true
-            }
-            node.recycle()
-        }
-        return false
+        if (!KillSwitch.isEnabled) return false
+        return setFocusedText(content, searchText)
     }
 
     fun findAndTypeById(viewId: String, content: String): Boolean {
+        if (!KillSwitch.isEnabled) return false
+        return setFocusedText(content, viewId)
+    }
+
+    private fun setFocusedText(content: String, selector: String?): Boolean {
+        if (!KillSwitch.isEnabled || content.length > 10_000) return false
         val rootNode = rootInActiveWindow ?: return false
-        val nodes = rootNode.findAccessibilityNodeInfosByViewId(viewId)
-        for (node in nodes) {
-            if (node.isEditable) {
-                val arguments = Bundle().apply {
-                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, content)
-                }
-                node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
-                node.recycle()
-                return true
+        val focusedNode = rootNode.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
+        return try {
+            if (!focusedNode.isEditable || focusedNode.isPassword) return false
+            if (selector != null) {
+                val selectorMatches = selector.equals(focusedNode.text?.toString(), ignoreCase = true) ||
+                    selector.equals(focusedNode.contentDescription?.toString(), ignoreCase = true) ||
+                    selector.equals(focusedNode.viewIdResourceName, ignoreCase = true)
+                if (!selectorMatches) return false
             }
-            node.recycle()
+            val arguments = Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, content)
+            }
+            focusedNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
+        } finally {
+            focusedNode.recycle()
+            rootNode.recycle()
         }
-        return false
     }
 
     /**
@@ -780,6 +781,7 @@ class UsmanAccessibilityService : AccessibilityService() {
      * a submit action ("search", "go", "send", "done", "submit", "ok", "enter").
      */
     fun performImeEnter(): Boolean {
+        if (!KillSwitch.isEnabled) return false
         val focusedNode = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
         val success = if (focusedNode != null) {
             try {
@@ -805,6 +807,7 @@ class UsmanAccessibilityService : AccessibilityService() {
     }
 
     fun performScroll(forward: Boolean): Boolean {
+        if (!KillSwitch.isEnabled) return false
         val rootNode = rootInActiveWindow ?: return false
         val action = if (forward) AccessibilityNodeInfo.ACTION_SCROLL_FORWARD else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
         val success = performScrollOnNode(rootNode, action)
@@ -830,6 +833,13 @@ class UsmanAccessibilityService : AccessibilityService() {
     // --- Gesture Automation Methods (Coordinate Taps) ---
 
     fun clickCoordinates(x: Float, y: Float): Boolean {
+        if (!KillSwitch.isEnabled || !x.isFinite() || !y.isFinite()) return false
+        val metrics = android.util.DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager?.defaultDisplay?.getRealMetrics(metrics)
+        val width = metrics.widthPixels.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+        val height = metrics.heightPixels.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels
+        if (x < 0f || y < 0f || x >= width || y >= height) return false
         val path = Path().apply {
             moveTo(x, y)
         }
@@ -844,6 +854,7 @@ class UsmanAccessibilityService : AccessibilityService() {
     // --- Screen Text Extraction ---
 
     fun getScreenText(): String {
+        if (!KillSwitch.isEnabled) return "Action blocked by Kill Switch"
         val rootNode = rootInActiveWindow ?: return ""
         val text = nodeTraversal.screenText(rootNode)
         rootNode.recycle()
@@ -851,6 +862,7 @@ class UsmanAccessibilityService : AccessibilityService() {
     }
 
     suspend fun takeScreenshotAndEncode(): String? {
+        if (!KillSwitch.isEnabled) return null
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return null
         }
@@ -909,7 +921,7 @@ class UsmanAccessibilityService : AccessibilityService() {
         fun getInstance(): UsmanAccessibilityService? = instance
 
         fun startLocalAiTask(taskId: String, packageName: String, appLabel: String, prompt: String): Boolean =
-            instance?.beginLocalAiTask(taskId, packageName, appLabel, prompt) ?: false
+            KillSwitch.isEnabled && (instance?.beginLocalAiTask(taskId, packageName, appLabel, prompt) ?: false)
     }
 }
 

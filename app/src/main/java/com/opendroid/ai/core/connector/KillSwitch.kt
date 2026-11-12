@@ -1,27 +1,28 @@
 package com.opendroid.ai.core.connector
 
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.MutableStateFlow
 
-/** Process-wide, thread-safe gate callers can check before device actions. */
+/** Process-wide global automation gate. A fresh process starts disabled (fail-closed). */
 object KillSwitch {
-    private val mutableEngaged = MutableStateFlow(false)
+    private val mutableEnabled = MutableStateFlow(false)
 
-    /** Observable state for settings and other UI consumers. */
-    val state: StateFlow<Boolean> = mutableEngaged.asStateFlow()
+    /** Observable state for the main screen and Settings. `true` means automation is enabled. */
+    val state: StateFlow<Boolean> = mutableEnabled.asStateFlow()
 
-    @get:Synchronized
-    val isEngaged: Boolean
-        get() = mutableEngaged.value
+    val isEnabled: Boolean
+        get() = mutableEnabled.value
 
+    /** The only operation that permits local or cloud automation. */
     @Synchronized
-    fun engage() {
-        mutableEngaged.value = true
+    fun enable() {
+        mutableEnabled.value = true
     }
 
+    /** The only operation that blocks local and cloud automation. */
     @Synchronized
-    fun release() {
-        mutableEngaged.value = false
+    fun disable() {
+        mutableEnabled.value = false
     }
 }

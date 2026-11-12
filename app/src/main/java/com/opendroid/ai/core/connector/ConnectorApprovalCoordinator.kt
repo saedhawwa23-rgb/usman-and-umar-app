@@ -28,7 +28,10 @@ class ConnectorApprovalCoordinator @Inject constructor() {
             mutablePending.value = PendingConnectorApproval(
                 invocation.invocationId,
                 invocation.tool.qualifiedName,
-                redactSecretFields(invocation.argumentsJson),
+                redactSecretFields(
+                    invocation.argumentsJson,
+                    if (invocation.tool.connectorId == "colab" && invocation.tool.name == "files_write") 6_200_000 else 64_000,
+                ),
             )
         }
         return try { deferred.await() } finally {
@@ -47,14 +50,14 @@ class ConnectorApprovalCoordinator @Inject constructor() {
 
     fun cancelPending() { decide(false) }
 
-    private fun redactSecretFields(json: String): String = runCatching {
+    private fun redactSecretFields(json: String, maxChars: Int): String = runCatching {
         val obj = com.google.gson.JsonParser.parseString(json).asJsonObject
         obj.keySet().forEach { key ->
             if (Regex("(?i)(token|secret|password|api.?key|authorization|credential)").containsMatchIn(key)) {
                 obj.addProperty(key, "[REDACTED]")
             }
         }
-        obj.toString().take(8_000)
+        obj.toString().also { require(it.length <= maxChars) { "Tool arguments exceed the approval display limit." } }
     }.getOrDefault("[invalid JSON]")
 }
 
