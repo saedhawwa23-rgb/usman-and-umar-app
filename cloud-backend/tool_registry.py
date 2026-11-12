@@ -62,7 +62,9 @@ async def _terminal_execute(payload: dict[str, Any]) -> dict[str, Any]:
     if not command_path:
         raise ValueError(f"Command is not installed in the Colab runtime: {argv[0]}")
     resolved_command = Path(command_path).resolve()
-    trusted_executable_roots = (Path("/usr/bin"), Path("/bin"), Path("/usr/libexec/coreutils"))
+    trusted_executable_roots = (
+        Path("/usr/bin"), Path("/bin"), Path("/usr/lib"), Path("/usr/libexec"),
+    )
     if not any(resolved_command.is_relative_to(root) for root in trusted_executable_roots):
         raise ValueError("Terminal commands must resolve inside a trusted system executable directory.")
     workspace = _workspace_root()
