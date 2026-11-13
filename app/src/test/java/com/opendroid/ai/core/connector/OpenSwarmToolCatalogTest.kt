@@ -15,7 +15,7 @@ class OpenSwarmToolCatalogTest {
             remote("files.write", configured = true, risk = "high"),
             remote("terminal.execute", configured = true, risk = "critical"),
         ))
-        assertEquals(listOf("colab_browser_extract", "colab_files_write", "colab_terminal_execute"), tools.map { it.name })
+        assertEquals(listOf("colab__browser_extract", "colab__files_write", "colab__terminal_execute"), tools.map { it.name })
     }
 
     @Test

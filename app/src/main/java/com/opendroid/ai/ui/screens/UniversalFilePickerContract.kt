@@ -9,8 +9,7 @@ import androidx.activity.result.contract.ActivityResultContract
 class UniversalFilePickerContract : ActivityResultContract<Array<String>, List<Uri>>() {
     override fun createIntent(context: Context, input: Array<String>): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
         addCategory(Intent.CATEGORY_OPENABLE)
-        // The requested slash sentinel is passed both as the intent type and in EXTRA_MIME_TYPES.
-        type = "/"
+        type = "*/*"
         putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
         putExtra(Intent.EXTRA_MIME_TYPES, (REQUIRED_MIME_TYPES + input).distinct().toTypedArray())
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
@@ -28,7 +27,7 @@ class UniversalFilePickerContract : ActivityResultContract<Array<String>, List<U
 
     companion object {
         val REQUIRED_MIME_TYPES = listOf(
-            "/",
+            "*/*",
             "application/vnd.android.package-archive",
             "application/zip",
             "application/octet-stream",

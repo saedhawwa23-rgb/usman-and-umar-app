@@ -102,10 +102,10 @@ class ChatViewModel @Inject constructor(
     fun approveConnectorToolCall() = connectorApprovals.decide(true)
     fun denyConnectorToolCall() = connectorApprovals.decide(false)
 
-    /** Writes only bounded UTF-8 text to the Colab workspace after exact per-call approval. */
-    suspend fun sendTextAttachmentToColab(context: Context, displayName: String, content: String): String {
+    /** Writes the selected attachment (text or base64 binary) into the Colab workspace after exact per-call approval. */
+    suspend fun sendAttachmentToColab(context: Context, displayName: String, content: String?, contentBase64: String?): String {
         if (!KillSwitch.isEnabled) return "Action blocked by Kill Switch"
-        if (content.toByteArray(Charsets.UTF_8).size > 1_000_000) return "Text file exceeds the 1 MB Colab transfer limit."
+        if (content == null && contentBase64 == null) return "Nothing to transfer: the attachment has no readable content."
         val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return "Network status is unavailable; no Colab request was sent."
         val active = connectivity.activeNetwork
@@ -115,12 +115,13 @@ class ChatViewModel @Inject constructor(
             return "Internet is not validated; no Colab request was sent."
         }
         val safeName = displayName.substringAfterLast('/').substringAfterLast('\\')
-            .replace(Regex("[^A-Za-z0-9_.-]"), "_").take(120).ifBlank { "attachment.txt" }
-        val payload = JSONObject().put("path", "uploads/$safeName").put("content", content)
+            .replace(Regex("[^A-Za-z0-9_.-]"), "_").take(120).ifBlank { "attachment.bin" }
+        val payload = JSONObject().put("path", "uploads/$safeName")
+        if (content != null) payload.put("content", content) else payload.put("content_base64", contentBase64)
         val tool = ConnectorTool(
             connectorId = "colab",
             name = "files_write",
-            description = "Write the selected UTF-8 text attachment into the Colab workspace.",
+            description = "Write the selected attachment into the Colab workspace.",
             parametersJsonSchema = OpenSwarmToolCatalog.specs.first { it.capabilityId == "files.write" }.schema,
             risk = ConnectorRisk.HIGH,
         )
@@ -138,7 +139,7 @@ class ChatViewModel @Inject constructor(
             val response = cloudServerClient.executeOpenSwarmTool("files.write", payload, approved = true)
             val result = response.optJSONObject("result")
             if (result?.optBoolean("verified") == true) {
-                "Saved verified text file to Colab: ${result.optString("path", "uploads/$safeName")} (${result.optLong("size_bytes")} bytes). The file was not executed."
+                "Saved verified file to Colab: ${result.optString("path", "uploads/$safeName")} (${result.optLong("size_bytes")} bytes). The file was not executed."
             } else {
                 "Colab did not verify the file write: ${response.toString().take(500)}"
             }

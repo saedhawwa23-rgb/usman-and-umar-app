@@ -102,7 +102,6 @@ fun SettingsScreen(
     val pingingCloudServers by viewModel.pingingCloudServers.collectAsState()
     val cloudKeepAliveEnabled by viewModel.cloudKeepAliveEnabled.collectAsState()
     val fmhyCandidates by viewModel.fmhyCandidates.collectAsState()
-    val approvedFmhyHosts by viewModel.approvedFmhyHosts.collectAsState()
     val openSwarmConnectionCheck by viewModel.openSwarmConnectionCheck.collectAsState()
     val automationEnabled by KillSwitch.state.collectAsState()
     var expandedCloudServerIds by remember { mutableStateOf(emptySet<String>()) }
@@ -530,7 +529,7 @@ fun SettingsScreen(
                 ) {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("FMHY DISCOVERED HOSTS", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
-                        Text("Discovered URLs are untrusted candidates. Approve an exact host before its site tool can send a request. Links are never opened automatically.", color = TextSecondary, fontSize = 12.sp)
+                        Text("Every HTTPS host found in the FMHY page text is immediately callable by the agent through its site tool. The host is fixed by the registry; the model can only supply a rooted path. All calls stay Kill Switch gated, and links are never opened automatically.", color = TextSecondary, fontSize = 12.sp)
                         val candidates = fmhyCandidates.distinctBy { it.host }
                         if (candidates.isEmpty()) {
                             Text("No candidates yet. Ask the chat agent to discover HTTPS links written in the FMHY page text.", color = TextSecondary, fontSize = 11.sp)
@@ -541,10 +540,7 @@ fun SettingsScreen(
                                     Text(candidate.url, color = TextPrimary, fontSize = 12.sp)
                                     Text(candidate.host, color = TextSecondary, fontSize = 11.sp)
                                 }
-                                val approved = candidate.host in approvedFmhyHosts
-                                OutlinedButton(onClick = { viewModel.setFmhyHostApproved(candidate.host, !approved) }) {
-                                    Text(if (approved) "Revoke" else "Approve")
-                                }
+                                Text("Callable", color = AccentCyan, fontSize = 11.sp)
                             }
                         }
                     }

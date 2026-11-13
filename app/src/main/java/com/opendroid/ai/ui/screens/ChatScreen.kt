@@ -620,9 +620,10 @@ fun ChatScreen(
                                             Text("${attachment.displaySize} · ${attachment.mimeType}", color = TextSecondary, fontSize = 9.sp, maxLines = 1)
                                             if (attachment.sendToColabEligible) {
                                                 TextButton(onClick = {
-                                                    val content = attachment.textContent.orEmpty()
+                                                    val content = attachment.textContent
+                                                    val base64 = attachment.contentBase64
                                                     scope.launch {
-                                                        val result = runCatching { viewModel.sendTextAttachmentToColab(context, attachment.displayName, content) }
+                                                        val result = runCatching { viewModel.sendAttachmentToColab(context, attachment.displayName, content, base64) }
                                                         Toast.makeText(context, result.getOrElse { it.message ?: "Colab transfer failed." }, Toast.LENGTH_LONG).show()
                                                     }
                                                 }, contentPadding = PaddingValues(0.dp)) { Text("Send to Colab", fontSize = 10.sp) }

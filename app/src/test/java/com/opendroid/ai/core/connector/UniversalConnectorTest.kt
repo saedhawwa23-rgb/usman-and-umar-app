@@ -3,12 +3,26 @@ package com.opendroid.ai.core.connector
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.async
 import kotlinx.coroutines.yield
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 class UniversalConnectorTest {
+    @Before
+    fun enableKillSwitch() {
+        // The registry fail-closes on a disabled kill switch before it consults the approval
+        // gate, so these approval-path tests must run with automation enabled.
+        KillSwitch.enable()
+    }
+
+    @After
+    fun disableKillSwitch() {
+        KillSwitch.disable()
+    }
+
     private val tool = ConnectorTool(
         connectorId = "cloudflare",
         name = "deploy",

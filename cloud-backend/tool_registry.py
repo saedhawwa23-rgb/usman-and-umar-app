@@ -124,6 +124,10 @@ def _workspace_root() -> Path:
     root.mkdir(parents=True, exist_ok=True)
     return root
 
+# Uploads and downloads are transferred whole; this bound exists only to avoid unbounded
+# memory use on the Colab node, not to restrict what the owner may send.
+MAX_ATTACHMENT_BYTES = int(os.getenv("OPENSWARM_MAX_ATTACHMENT_BYTES", str(64 * 1024 * 1024)))
+
 def _workspace_path(raw_path: Any) -> Path:
     if not isinstance(raw_path, str) or not raw_path.strip():
         raise ValueError("A relative workspace path is required.")
@@ -297,11 +301,18 @@ def build_default_capability_registry(memory_store: Any | None = None) -> Capabi
     async def file_write(payload: dict[str, Any]) -> dict[str, Any]:
         path = _workspace_path(payload.get("path"))
         content = payload.get("content")
-        if not isinstance(content, str):
-            raise ValueError("files.write requires UTF-8 text content.")
-        encoded = content.encode("utf-8")
-        if len(encoded) > 1_000_000:
-            raise ValueError("File exceeds the 1 MB write limit.")
+        content_base64 = payload.get("content_base64")
+        if isinstance(content, str):
+            encoded = content.encode("utf-8")
+        elif isinstance(content_base64, str):
+            try:
+                encoded = base64.b64decode(content_base64, validate=True)
+            except Exception:
+                raise ValueError("content_base64 is not valid base64.")
+        else:
+            raise ValueError("files.write requires UTF-8 text content or base64 file content.")
+        if len(encoded) > MAX_ATTACHMENT_BYTES:
+            raise ValueError(f"File exceeds the {MAX_ATTACHMENT_BYTES} byte transfer limit.")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(encoded)
         return {"path": str(path.relative_to(_workspace_root())), "size_bytes": len(encoded),

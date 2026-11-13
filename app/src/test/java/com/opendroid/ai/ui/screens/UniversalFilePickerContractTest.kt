@@ -22,11 +22,11 @@ class UniversalFilePickerContractTest {
         val intent = contract.createIntent(context, UniversalFilePickerContract.REQUIRED_MIME_TYPES.toTypedArray())
         assertEquals(Intent.ACTION_OPEN_DOCUMENT, intent.action)
         assertTrue(intent.categories?.contains(Intent.CATEGORY_OPENABLE) == true)
-        assertEquals("/", intent.type)
+        assertEquals("*/*", intent.type)
         assertTrue(intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false))
         val types = intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES).orEmpty().toSet()
         assertTrue(types.containsAll(setOf(
-            "/",
+            "*/*",
             "application/vnd.android.package-archive",
             "application/zip",
             "application/octet-stream",
@@ -37,17 +37,17 @@ class UniversalFilePickerContractTest {
         val requiredFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
         assertEquals(requiredFlags, intent.flags and requiredFlags)
 
-        // Every representative file category can be kept in the composer as metadata;
-        // binary formats are attachable but never implicitly decoded or executable.
+        // Every file category is attachable and eligible for Colab transfer; nothing is
+        // implicitly decoded, executed, or filtered by type.
         val attachments = listOf(
-            PendingChatAttachment("app.apk", "application/vnd.android.package-archive"),
-            PendingChatAttachment("archive.zip", "application/zip"),
-            PendingChatAttachment("payload.bin", "application/octet-stream"),
+            PendingChatAttachment("app.apk", "application/vnd.android.package-archive", sendToColabEligible = true),
+            PendingChatAttachment("archive.zip", "application/zip", sendToColabEligible = true),
+            PendingChatAttachment("payload.bin", "application/octet-stream", sendToColabEligible = true),
             PendingChatAttachment("notebook.ipynb", "application/x-ipynb+json", textContent = "{}", sendToColabEligible = true),
             PendingChatAttachment("script.py", "text/x-python", textContent = "print('ok')", sendToColabEligible = true),
         )
         assertEquals(listOf("app.apk", "archive.zip", "payload.bin", "notebook.ipynb", "script.py"), attachments.map { it.displayName })
-        assertTrue(attachments.take(3).none { it.sendToColabEligible })
+        assertTrue(attachments.all { it.sendToColabEligible })
     }
 
     @Test

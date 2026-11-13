@@ -26,6 +26,8 @@ data class PendingChatAttachment(
     val uri: Uri? = null,
     val imageBase64: String? = null,
     val textContent: String? = null,
+    /** Base64 of the raw bytes, used to transfer binary files to Colab. */
+    val contentBase64: String? = null,
     val sendToColabEligible: Boolean = false,
     val sendToColabRejectionReason: String? = null,
 ) {
@@ -68,7 +70,8 @@ fun readChatAttachment(context: Context, uri: Uri, isDocument: Boolean): Pending
             sizeBytes = reportedSize,
             uri = uri,
             imageBase64 = image,
-            sendToColabRejectionReason = "Only UTF-8 plain-text files up to 1 MB can be sent to Colab.",
+            contentBase64 = image,
+            sendToColabEligible = image != null,
         )
     }
 
@@ -102,7 +105,7 @@ fun readChatAttachment(context: Context, uri: Uri, isDocument: Boolean): Pending
         else -> null
     }
     if (extractedDocumentText != null) {
-        return PendingChatAttachment(displayName, mimeType, reportedSize, uri, textContent = extractedDocumentText, sendToColabRejectionReason = "Only UTF-8 plain-text files up to 1 MB can be sent to Colab.")
+        return PendingChatAttachment(displayName, mimeType, reportedSize, uri, textContent = extractedDocumentText, sendToColabEligible = true)
     }
 
     if (isLikelyUtf8Text(displayName, mimeType)) {
@@ -113,7 +116,7 @@ fun readChatAttachment(context: Context, uri: Uri, isDocument: Boolean): Pending
                 while (true) {
                     val count = input.read(buffer)
                     if (count < 0) break
-                    if (output.size() + count > MAX_COLAB_TEXT_BYTES) return@use null
+                    if (output.size() + count > MAX_TEXT_READ_BYTES) return@use null
                     output.write(buffer, 0, count)
                 }
                 output.toByteArray()
@@ -133,20 +136,28 @@ fun readChatAttachment(context: Context, uri: Uri, isDocument: Boolean): Pending
                     sizeBytes = reportedSize ?: bytes.size.toLong(),
                     uri = uri,
                     textContent = decoded.take(MAX_CHAT_TEXT_CHARS),
-                    sendToColabEligible = bytes.size <= MAX_COLAB_TEXT_BYTES,
+                    contentBase64 = bytes.toBase64(),
+                    sendToColabEligible = true,
                 )
             }
         }
     }
 
-    // Binary, unknown, invalid-UTF-8, and oversized files remain attachable as metadata.
-    val rejection = when {
-        isLikelyUtf8Text(displayName, mimeType) && reportedSize != null && reportedSize > MAX_COLAB_TEXT_BYTES -> "Text file exceeds the 1 MB Colab transfer limit."
-        isLikelyUtf8Text(displayName, mimeType) -> "File is not valid UTF-8 text or could not be read."
-        else -> "Binary and unsupported files can be attached, but only UTF-8 text up to 1 MB can be sent to Colab."
-    }
-    return PendingChatAttachment(displayName, mimeType, reportedSize, uri, sendToColabRejectionReason = rejection)
+    // Any file — binary, unknown, or invalid UTF-8 — is transferable to Colab as raw bytes.
+    val binary = runCatching { readBounded(resolver.openInputStream(uri), MAX_ATTACHMENT_BYTES)?.toBase64() }.getOrNull()
+    return PendingChatAttachment(
+        displayName = displayName,
+        mimeType = mimeType,
+        sizeBytes = reportedSize ?: binary?.let { (it.length * 3L) / 4L },
+        uri = uri,
+        contentBase64 = binary,
+        sendToColabEligible = binary != null,
+        sendToColabRejectionReason = if (binary == null) "File could not be read for transfer." else null,
+    )
 }
+
+private fun ByteArray.toBase64(): String = Base64.encodeToString(this, Base64.NO_WRAP)
+
 
 private fun readBounded(input: java.io.InputStream?, maximumBytes: Int): ByteArray? {
     if (input == null) return null
@@ -174,7 +185,10 @@ private fun formatFileSize(bytes: Long): String = when {
     else -> "${bytes / (1024 * 1024)} MB"
 }
 
-private const val MAX_COLAB_TEXT_BYTES = 1024 * 1024
+// No transfer size limit: any file may be sent to Colab as base64. These bounds only
+// cap how much is held in memory while reading, not what the user may attach.
+private const val MAX_TEXT_READ_BYTES = 64 * 1024 * 1024
+private const val MAX_ATTACHMENT_BYTES = 64 * 1024 * 1024
 private const val MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
 private const val MAX_CHAT_TEXT_CHARS = 2_000_000
 
