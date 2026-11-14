@@ -163,7 +163,9 @@ class UniversalToolRegistry @Inject constructor() {
         approval: ConnectorApprovalGate = DefaultConnectorApprovalGate,
         log: ConnectorExecutionLog = InMemoryConnectorExecutionLog()
     ): ConnectorResult {
-        val argumentLimit = if (invocation.tool.connectorId == "colab" && invocation.tool.name == "files_write") 6_200_000 else 64_000
+        val argumentLimit = if (invocation.tool.connectorId == "colab" && invocation.tool.name == "files_write") {
+            OpenSwarmToolCatalog.MAX_FILE_ARGUMENT_CHARS
+        } else 64_000
         if (invocation.argumentsJson.length > argumentLimit) {
             return ConnectorResult(false, error = "Tool arguments exceed the safety limit")
         }

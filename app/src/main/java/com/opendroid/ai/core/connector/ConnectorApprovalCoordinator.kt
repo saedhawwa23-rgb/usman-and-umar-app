@@ -30,7 +30,9 @@ class ConnectorApprovalCoordinator @Inject constructor() {
                 invocation.tool.qualifiedName,
                 redactSecretFields(
                     invocation.argumentsJson,
-                    if (invocation.tool.connectorId == "colab" && invocation.tool.name == "files_write") 6_200_000 else 64_000,
+                    if (invocation.tool.connectorId == "colab" && invocation.tool.name == "files_write") {
+                        OpenSwarmToolCatalog.MAX_FILE_ARGUMENT_CHARS
+                    } else 64_000,
                 ),
             )
         }

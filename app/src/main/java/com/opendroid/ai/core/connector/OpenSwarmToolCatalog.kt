@@ -26,7 +26,7 @@ object OpenSwarmToolCatalog {
         Spec("research.search", "research_search", "Search public web sources.", objectSchema(mapOf("query" to "string", "limit" to "integer"), setOf("query")), setOf("query"), setOf("limit"), mapOf("query" to "string", "limit" to "integer")),
         Spec("files.list", "files_list", "List files inside the configured Colab workspace.", objectSchema(mapOf("path" to "string"), setOf("path")), setOf("path"), emptySet(), mapOf("path" to "string")),
         Spec("files.read", "files_read", "Read a UTF-8 text file inside the configured Colab workspace.", objectSchema(mapOf("path" to "string"), setOf("path")), setOf("path"), emptySet(), mapOf("path" to "string")),
-        Spec("files.write", "files_write", "Create or replace a UTF-8 text file inside the configured Colab workspace. This writes data and requires user approval.", objectSchema(mapOf("path" to "string", "content" to "string"), setOf("path", "content")), setOf("path", "content"), emptySet(), mapOf("path" to "string", "content" to "string")),
+        Spec("files.write", "files_write", "Create or replace a file inside the configured Colab workspace. Supply UTF-8 text as content, or any bytes as content_base64. This writes data and requires user approval.", objectSchema(mapOf("path" to "string", "content" to "string", "content_base64" to "string"), setOf("path")), setOf("path"), setOf("content", "content_base64"), mapOf("path" to "string", "content" to "string", "content_base64" to "string")),
         Spec("data.analyze", "data_analyze", "Analyze CSV or JSON data inside the configured Colab workspace.", objectSchema(mapOf("path" to "string"), setOf("path")), setOf("path"), emptySet(), mapOf("path" to "string")),
         Spec("documents.create", "documents_create", "Create a Markdown document in the configured Colab workspace. This writes data and requires user approval.", objectSchema(mapOf("path" to "string", "markdown" to "string"), setOf("path", "markdown")), setOf("path", "markdown"), emptySet(), mapOf("path" to "string", "markdown" to "string")),
         Spec("github.read", "github_read", "Read a file from a public or authorized GitHub repository.", objectSchema(mapOf("repo" to "string", "path" to "string", "ref" to "string"), setOf("repo", "path")), setOf("repo", "path"), setOf("ref"), mapOf("repo" to "string", "path" to "string", "ref" to "string")),
@@ -68,18 +68,33 @@ object OpenSwarmToolCatalog {
             val value = obj.get(key)
             require(matchesType(value, expected)) { "Argument '$key' must be $expected." }
             if (expected == "string") {
-                val maximum = if (spec.capabilityId == "files.write" && key == "content") 1_000_000 else 4_096
-                require(value.asString.length <= maximum && (key == "content" || value.asString.isNotBlank())) {
-                    "Argument '$key' must be ${if (key == "content") "at most 1 MB of text" else "non-empty and at most 4096 characters"}."
-                }
-                if (spec.capabilityId == "files.write" && key == "content") {
-                    require(value.asString.toByteArray(Charsets.UTF_8).size <= 1_000_000) { "File content exceeds the 1 MB UTF-8 limit." }
+                val isFilePayload = spec.capabilityId == "files.write" && (key == "content" || key == "content_base64")
+                if (isFilePayload) {
+                    // Any file is transferable whole; the transfer limit only bounds Colab-node
+                    // memory, so it is far above the small-argument cap used elsewhere.
+                    val byteLength = if (key == "content_base64") {
+                        runCatching { java.util.Base64.getDecoder().decode(value.asString) }
+                            .getOrElse { throw IllegalArgumentException("Argument 'content_base64' must be valid base64.") }
+                            .size
+                    } else {
+                        value.asString.toByteArray(Charsets.UTF_8).size
+                    }
+                    require(byteLength <= MAX_FILE_CONTENT_BYTES) {
+                        "Argument '$key' exceeds the $MAX_FILE_CONTENT_BYTES byte transfer limit."
+                    }
+                } else {
+                    require(value.asString.length <= 4_096 && value.asString.isNotBlank()) {
+                        "Argument '$key' must be non-empty and at most 4096 characters."
+                    }
                 }
             }
             if (key == "allowed_domains") require(value.asJsonArray.size() <= 32 && value.asJsonArray.all { it.isJsonPrimitive && it.asJsonPrimitive.isString }) { "allowed_domains must be an array of at most 32 hostnames." }
             if (key == "argv") require(value.asJsonArray.size() in 1..32 && value.asJsonArray.all { it.isJsonPrimitive && it.asJsonPrimitive.isString && it.asString.isNotBlank() && it.asString.length <= 4096 }) { "argv must contain 1–32 non-empty strings of at most 4096 characters." }
             if (key == "limit") require(value.asInt in 1..10) { "limit must be between 1 and 10." }
             if (key == "timeout_seconds") require(value.asInt in 1..30) { "timeout_seconds must be between 1 and 30." }
+        }
+        if (spec.capabilityId == "files.write" && !obj.has("content") && !obj.has("content_base64")) {
+            require(false) { "files.write requires either 'content' (UTF-8 text) or 'content_base64'." }
         }
         return obj.toString()
     }
@@ -93,6 +108,16 @@ object OpenSwarmToolCatalog {
         "boolean" -> value.isJsonPrimitive && value.asJsonPrimitive.isBoolean
         else -> false
     }
+
+    /** Matches the Colab node's OPENSWARM_MAX_ATTACHMENT_BYTES default (64 MiB). */
+    const val MAX_FILE_CONTENT_BYTES = 64 * 1024 * 1024
+
+    /**
+     * Serialized-argument ceiling for a whole-file write: base64 expansion (4/3) plus
+     * JSON envelope headroom, so a payload accepted by [validate] is never rejected later
+     * by the registry or the approval display.
+     */
+    const val MAX_FILE_ARGUMENT_CHARS = MAX_FILE_CONTENT_BYTES / 3 * 4 + 1_000_000
 
     private fun objectSchema(properties: Map<String, String>, required: Set<String>): String {
         val props = properties.entries.joinToString(",") { (name, type) ->

@@ -66,6 +66,39 @@ class OpenSwarmToolCatalogTest {
         assertFalse(type == null)
     }
 
+    @Test
+    fun `files write accepts whole text and binary payloads within the transfer limit`() {
+        // A text file larger than the old 1 MB cap is accepted (limit matches the Colab node).
+        val largeText = "x".repeat(1_500_000)
+        assertTrue(runCatching {
+            OpenSwarmToolCatalog.validate("colab_files_write", """{"path":"big.txt","content":"$largeText"}""")
+        }.isSuccess)
+
+        // Any file may be transferred whole as base64, and the bytes are what is measured.
+        val encoder = java.util.Base64.getEncoder()
+        val binary = encoder.encodeToString(ByteArray(1_500_000) { it.toByte() })
+        assertTrue(runCatching {
+            OpenSwarmToolCatalog.validate("colab_files_write", """{"path":"blob.bin","content_base64":"$binary"}""")
+        }.isSuccess)
+
+        // Invalid base64 and an oversized payload are both rejected before dispatch.
+        assertTrue(runCatching {
+            OpenSwarmToolCatalog.validate("colab_files_write", """{"path":"bad.bin","content_base64":"not*base64"}""")
+        }.isFailure)
+        val oversize = encoder.encodeToString(ByteArray(OpenSwarmToolCatalog.MAX_FILE_CONTENT_BYTES + 1))
+        assertTrue(runCatching {
+            OpenSwarmToolCatalog.validate("colab_files_write", """{"path":"huge.bin","content_base64":"$oversize"}""")
+        }.isFailure)
+    }
+
+    @Test
+    fun `registry argument ceiling accommodates every accepted file payload`() {
+        // The serialized base64 for a max-size payload must fit under the registry ceiling,
+        // otherwise a file that validate() accepts is rejected later with a vague message.
+        val maxBase64 = OpenSwarmToolCatalog.MAX_FILE_CONTENT_BYTES / 3 * 4 + 4
+        assertTrue(maxBase64 <= OpenSwarmToolCatalog.MAX_FILE_ARGUMENT_CHARS)
+    }
+
     private fun remote(id: String, configured: Boolean, risk: String = "low", reason: String? = null) =
         OpenSwarmRemoteTool(id, "test $id", emptyList(), risk, configured, reason)
 }
