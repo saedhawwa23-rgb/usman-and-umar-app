@@ -19,7 +19,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -355,7 +354,7 @@ fun ChatScreen(
             }
         }
     ) {
-    Scaffold(
+    ChatScaffoldLayout(
         topBar = {
             TopAppBar(
                 navigationIcon = {
@@ -519,7 +518,10 @@ fun ChatScreen(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBackground)
             )
         },
-        bottomBar = {
+        composerHeightPx = composerHeightPx,
+        listState = listState,
+        modifier = modifier,
+        composer = {
             // Bottom Input Section with Orb overlay
             Box(
                 modifier = Modifier
@@ -766,34 +768,9 @@ fun ChatScreen(
                 }
             }
         },
-        containerColor = DarkBackground,
-        modifier = modifier
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .consumeWindowInsets(padding)
-        ) {
-            Column(
-                modifier = Modifier.fillMaxSize()
-            ) {
-                // Messages List
-                LazyColumn(
-                    state = listState,
-                    reverseLayout = true,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    contentPadding = PaddingValues(
-                        top = 16.dp,
-                        bottom = listBottomPaddingDp(composerHeightPx, density.density),
-                    )
-                ) {
-                    if (history.isEmpty()) {
-                        item(key = "welcome") {
+        messages = {
+            if (history.isEmpty()) {
+                item(key = "welcome") {
                             Column(
                                 modifier = Modifier.fillMaxWidth().padding(top = 96.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -910,8 +887,8 @@ fun ChatScreen(
                     }
 
 
-                }
-
+                },
+        belowList = {
                 // If agent proposed a plan for THIS chat, show a modal prompt to approve or
                 // reject. A plan proposed for a different chat must never surface here - the
                 // user could approve/reject the wrong chat's plan without realizing it.
@@ -932,10 +909,8 @@ fun ChatScreen(
                         onReject = { viewModel.rejectPlan() }
                     )
                 }
-            }
-
         }
-    }
+    )
     }
 
     sessionPendingDelete?.let { session ->
