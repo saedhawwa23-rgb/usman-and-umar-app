@@ -2,6 +2,33 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.9.1] - 2026-11-14
+
+Chat layout, kill-switch coverage, owner-approved FMHY hosts, and clear denial reporting.
+
+### Changed
+
+- **Chat layout**: the Scaffold, composer, and reverse-layout message list now live in
+  `ChatScaffoldLayout.kt`; `listBottomPaddingDp` is the single bottom-padding decision,
+  called once, with the composer measured once.
+- **FMHY trust**: a discovered host is a candidate only. A host becomes callable through
+  its `site.<host>` tool only after the owner approves that exact host in Settings
+  (Approve/Revoke per host). Approval is re-checked at call time, so a host revoked after
+  the tool was handed out cannot be reached through a stale reference.
+- **Settings**: the FMHY host list shows each host's approval state with Approve/Revoke
+  controls, replacing the always-on "Callable" label.
+
+### Fixed
+
+- **Kill Switch coverage**: `ActionDispatcher.execute` — the single chokepoint reached
+  directly by `AgentLoop`, `McpServer`, and `WorkspaceWorkflowRunner` — now fails closed
+  on the global automation Kill Switch before any resolution or side effect. These paths
+  previously bypassed the connector registry's gate.
+- **Denial reporting**: a user-denied tool call is no longer reported as a failure. The
+  unified agent loop emits a `denied` event (never `status=failed`), a denial never counts
+  toward the stop-after-two-consecutive-failures rule, and the chat surfaces a specific,
+  resumable message ("Action denied by the owner").
+
 ## [3.9.0] - 2026-11-13
 
 Hybrid task orchestrator, unrestricted file picker, and full dynamic FMHY trust.

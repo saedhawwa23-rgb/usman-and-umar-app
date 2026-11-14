@@ -10,7 +10,7 @@ on:
       tag:
         description: GitHub Release tag to create
         required: true
-        default: v3.9.0
+        default: v3.9.1
 
 permissions:
   contents: write
@@ -94,8 +94,8 @@ jobs:
           out=dist
           mkdir -p "$out"
           test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.9.0'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='29'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.9.1'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='30'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
           certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt")
           expected_sha1=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | awk -F': ' '/SHA1:/{print toupper($2); exit}')
@@ -107,30 +107,30 @@ jobs:
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
           grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' "$out/PROOT_ELF.txt"
           sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
-          cp "$apk" "$out/USMAN-AND-UMAR-v3.9.0.apk"
-          sha256sum "$out/USMAN-AND-UMAR-v3.9.0.apk" | tee "$out/SHA256SUMS.txt"
+          cp "$apk" "$out/USMAN-AND-UMAR-v3.9.1.apk"
+          sha256sum "$out/USMAN-AND-UMAR-v3.9.1.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nref=%s\ntag=%s\n' "$(git rev-parse HEAD)" "${{ inputs.ref }}" "${{ inputs.tag }}" > "$out/BUILD_METADATA.txt"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
         with:
-          tag_name: ${{ inputs.tag || 'v3.9.0' }}
+          tag_name: ${{ inputs.tag || 'v3.9.1' }}
           target_commitish: ${{ steps.build-meta.outputs.commit }}
-          name: USMAN AND UMAR ${{ inputs.tag || 'v3.9.0' }}
+          name: USMAN AND UMAR ${{ inputs.tag || 'v3.9.1' }}
           body: |
-            USMAN AND UMAR v3.9.0 — universal file picker, modern chat, approval-gated device automation, FMHY discovery, and unified agent.
+            USMAN AND UMAR v3.9.1 — owner-approved FMHY hosts, kill-switch coverage, clearer denial reporting, and the extracted chat layout.
 
             Commit: `${{ steps.build-meta.outputs.commit }}`
             Package: `com.usmanandumar.app`
-            Version: `3.9.0` (versionCode `29`)
+            Version: `3.9.1` (versionCode `30`)
             ABI: `armeabi-v7a`
 
             Highlights:
             - Universal multi-select file picker accepts any file type (MIME `*/*`). Text attachments can be sent to Colab as text and binary files as base64, bounded only by the in-memory read limit (64 MiB); anything larger is attached as metadata. No attachment is executed.
             - Chat uses a reverse-layout message list and measured Scaffold bottom bar, with separate new-message, IME-open, and initial-scroll effects.
             - Device actions are globally disabled by default, require the owner-enabled Accessibility service, and require exact per-call approval. Kill Switch is available in Chat and Settings.
-            - FMHY links are untrusted candidates. Every host parsed from FMHY page text is immediately callable, but the host is always bound by the trusted registry (never a model-supplied argument), only a rooted path may be supplied, and every call stays Kill Switch gated.
-            - The unified agent combines configured Colab tools, discovered site tools, and device tools. It allows at most 12 model iterations and 10 minutes, counts model iterations (not tool calls), and stops after two consecutive non-denial tool failures.
+            - FMHY links are untrusted candidates. A discovered host is a candidate only: it becomes callable through its `site.<host>` tool only after the owner approves that exact host in Settings, approval is re-checked at call time, the host is always bound by the trusted registry (never a model-supplied argument), only a rooted path may be supplied, and every call stays Kill Switch gated.
+            - The unified agent combines configured Colab tools, discovered site tools, and device tools. It allows at most 12 model iterations and 10 minutes, counts model iterations (not tool calls), and stops after two consecutive non-denial tool failures. A user-denied call is reported as denied, never as a failure, and does not count toward that stop.
             - OpenRouter model IDs are validated and trimmed; chat-only requests omit tools/tool_choice. Safe bounded vendor messages may appear in the transient error card, never in chat history or prompts.
 
             Setup and permissions:
