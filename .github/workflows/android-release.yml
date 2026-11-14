@@ -126,11 +126,11 @@ jobs:
             ABI: `armeabi-v7a`
 
             Highlights:
-            - Universal multi-select file picker accepts APK, ZIP, BIN, `.ipynb`, `.py`, and other document types as metadata; only UTF-8 text up to 1 MB can be explicitly sent to Colab after per-call approval. No attachment is executed.
+            - Universal multi-select file picker accepts any file type (MIME `*/*`). Text attachments can be sent to Colab as text and binary files as base64, bounded only by the in-memory read limit (64 MiB); anything larger is attached as metadata. No attachment is executed.
             - Chat uses a reverse-layout message list and measured Scaffold bottom bar, with separate new-message, IME-open, and initial-scroll effects.
             - Device actions are globally disabled by default, require the owner-enabled Accessibility service, and require exact per-call approval. Kill Switch is available in Chat and Settings.
-            - FMHY links are untrusted candidates. Exact hosts require persistent owner approval; browser requests and redirects are pinned to exact allowed hosts.
-            - The unified agent combines configured Colab tools, approved site tools, and device tools. It allows at most 12 model iterations and 10 minutes, counts model iterations (not tool calls), and stops after two consecutive non-denial tool failures.
+            - FMHY links are untrusted candidates. Every host parsed from FMHY page text is immediately callable, but the host is always bound by the trusted registry (never a model-supplied argument), only a rooted path may be supplied, and every call stays Kill Switch gated.
+            - The unified agent combines configured Colab tools, discovered site tools, and device tools. It allows at most 12 model iterations and 10 minutes, counts model iterations (not tool calls), and stops after two consecutive non-denial tool failures.
             - OpenRouter model IDs are validated and trimmed; chat-only requests omit tools/tool_choice. Safe bounded vendor messages may appear in the transient error card, never in chat history or prompts.
 
             Setup and permissions:
