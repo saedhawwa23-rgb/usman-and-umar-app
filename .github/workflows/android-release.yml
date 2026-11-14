@@ -10,7 +10,7 @@ on:
       tag:
         description: GitHub Release tag to create
         required: true
-        default: v3.9.1
+        default: v3.10.0
 
 permissions:
   contents: write
@@ -94,8 +94,8 @@ jobs:
           out=dist
           mkdir -p "$out"
           test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.9.1'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='30'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.10.0'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='31'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
           certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt")
           expected_sha1=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | awk -F': ' '/SHA1:/{print toupper($2); exit}')
@@ -107,41 +107,46 @@ jobs:
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
           grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' "$out/PROOT_ELF.txt"
           sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
-          cp "$apk" "$out/USMAN-AND-UMAR-v3.9.1.apk"
-          sha256sum "$out/USMAN-AND-UMAR-v3.9.1.apk" | tee "$out/SHA256SUMS.txt"
+          cp "$apk" "$out/USMAN-AND-UMAR-v3.10.0.apk"
+          sha256sum "$out/USMAN-AND-UMAR-v3.10.0.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nref=%s\ntag=%s\n' "$(git rev-parse HEAD)" "${{ inputs.ref }}" "${{ inputs.tag }}" > "$out/BUILD_METADATA.txt"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
         with:
-          tag_name: ${{ inputs.tag || 'v3.9.1' }}
+          tag_name: ${{ inputs.tag || 'v3.10.0' }}
           target_commitish: ${{ steps.build-meta.outputs.commit }}
-          name: USMAN AND UMAR ${{ inputs.tag || 'v3.9.1' }}
+          name: USMAN AND UMAR ${{ inputs.tag || 'v3.10.0' }}
           body: |
-            USMAN AND UMAR v3.9.1 — owner-approved FMHY hosts, kill-switch coverage, clearer denial reporting, and the extracted chat layout.
+            USMAN AND UMAR v3.10.0 - plugin registry, owner-paired remote control, and one design system.
 
             Commit: `${{ steps.build-meta.outputs.commit }}`
             Package: `com.usmanandumar.app`
-            Version: `3.9.1` (versionCode `30`)
-            ABI: `armeabi-v7a`
+            Version: `3.10.0` (versionCode `31`)
+            Build type: `debug` (release signing secrets are not in the repository)
 
-            Highlights:
-            - Universal multi-select file picker accepts any file type (MIME `*/*`). Text attachments can be sent to Colab as text and binary files as base64, bounded only by the in-memory read limit (64 MiB); anything larger is attached as metadata. No attachment is executed.
-            - Chat uses a reverse-layout message list and measured Scaffold bottom bar, with separate new-message, IME-open, and initial-scroll effects.
-            - Device actions are globally disabled by default, require the owner-enabled Accessibility service, and require exact per-call approval. Kill Switch is available in Chat and Settings.
-            - FMHY links are untrusted candidates. A discovered host is a candidate only: it becomes callable through its `site.<host>` tool only after the owner approves that exact host in Settings, approval is re-checked at call time, the host is always bound by the trusted registry (never a model-supplied argument), only a rooted path may be supplied, and every call stays Kill Switch gated.
-            - The unified agent combines configured Colab tools, discovered site tools, and device tools. It allows at most 12 model iterations and 10 minutes, counts model iterations (not tool calls), and stops after two consecutive non-denial tool failures. A user-denied call is reported as denied, never as a failure, and does not count toward that stop.
-            - OpenRouter model IDs are validated and trimmed; chat-only requests omit tools/tool_choice. Safe bounded vendor messages may appear in the transient error card, never in chat history or prompts.
+            Verified by automated unit tests (656 tests, 0 failures):
+            - Plugin registry: unlisted, unapproved, and revoked plugins are refused before any
+              request; a 300-plugin registry loads and lists correctly; a plugin manifest cannot
+              widen the owner's grant and the owner cannot over-grant a capability.
+            - Remote control: unpaired device, expired pairing code, reused code, replayed nonce,
+              expired timestamp, bad signature, and tampered arguments are all rejected; the
+              default approval is Deny after 60 seconds; the kill switch blocks and closes
+              sessions; unpair removes keys; audit records carry no secrets.
+            - Design: primary text meets WCAG 2.2 AA contrast in both themes; spacing sits on the
+              8 dp grid; the 48 dp touch target and 200% font scale are asserted.
 
-            Setup and permissions:
-            - Local deterministic Android actions require no Colab setup. Accessibility actions require the owner to enable the app's Accessibility service manually; the app never enables it.
-            - Colab actions require the owner's Colab runtime and OpenSwarm node configuration. Playwright needs its browser/system libraries installed by the notebook. GitHub reads may require the owner's `GITHUB_TOKEN`; Bubblewrap tooling is only needed for the notebook's optional isolated shell workflow.
-            - This app does not automate third-party AI chat websites, execute downloaded attachments, or bypass authentication, CAPTCHAs, paywalls, or rate limits.
+            Not verified (needs a real device or the owner's setup):
+            - No real-device or emulator run. All Stage 1-3 checks above are JVM unit tests.
+            - Stage 3 does not yet extract every hardcoded English string into strings.xml, and
+              RTL and emulator screenshot tests are not yet present.
+            - Remote control needs the owner to pair a device and supply their own private
+              network or tunnel before it can be exercised end to end.
 
-            Verification:
-            - The Android unit-test task must pass in this workflow before publishing; check the Actions job for the exact test result.
-            - Emulator UI/IME and picker-listing checks: NOT VERIFIED by this workflow.
-            - Real-phone checks and screenshots (APK/ZIP/`.ipynb` attachments, 20-message scrolling, IME behavior, Kill Switch block, approved/denied device action, FMHY approval flow): NOT VERIFIED by this workflow.
+            Owner setup required to use the new features:
+            - Add plugins and approve each one explicitly; discovery only suggests candidates.
+            - Start pairing on the target device, enter the code on the controlling phone, and
+              provide the transport (the app never opens an inbound port and uses no public relay).
 
             APK signature and SHA-256 checksum are included with the assets. This package uses the repository's stable Android debug signing key; it is not a Play Store production signing key.
           files: dist/*

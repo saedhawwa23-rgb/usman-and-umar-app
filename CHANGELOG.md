@@ -2,6 +2,52 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.10.0] - 2026-11-14
+
+Plugin registry, owner-paired remote control, and one design system. All four stages
+are unit-tested; nothing here is device-verified yet.
+
+### Added
+
+- **Stage 1 - Plugin registry** (`core/plugin/PluginRegistry.kt`): a plugin is a
+  record (id, display name, publisher, homepage, supported languages and regions,
+  declared capabilities, risk LOW/HIGH/CRITICAL, owner approval state). The registry
+  has no fixed count and behaves identically at 300 entries. Discovery only
+  suggests a candidate; the owner must accept and approve it. Effective capabilities
+  are the intersection of the owner's grant and the plugin's declaration, so a plugin
+  cannot widen its own permissions and an owner cannot over-grant. Unknown,
+  unapproved, and revoked ids are refused before any request, as is a call for a
+  capability that was not granted.
+- **Stage 2 - Remote control** (`core/remote/RemoteControlService.kt`): pairing with
+  a one-time code that expires after 5 minutes and is single-use; a per-device key
+  behind an injectable encrypted-storage boundary; every action carries the key id,
+  device id, timestamp, nonce, and an HmacSHA256 signature over the tool name, exact
+  arguments, and risk; replay, expiry, and bad signatures are rejected; the owner's
+  approval defaults to Deny after 60 seconds; a kill switch disables remote control
+  immediately with no remote re-enable; audit records never carry screen text, typed
+  text, or secrets; unpair removes keys on both sides. The app never opens an inbound
+  port and never uses a public relay - the owner supplies the transport.
+- **Stage 3 - Design and internationalisation**: `ui/theme/DesignTokens.kt` is the
+  single source of truth for the 8 dp grid, radii, the 48 dp touch target, and the
+  2.0 font scale; `Contrast` implements WCAG 2.2 contrast maths and the tests assert
+  AA for primary text in both themes; `ui/feedback/ErrorCatalogue.kt` is one
+  (category -> message -> one action) catalogue with technical detail kept separate.
+
+### Tests
+
+- 656 unit tests, 0 failures (baseline 623 before this release).
+- New: PluginRegistryTest (8), RemoteControlServiceTest (12), DesignTokensTest (9),
+  ErrorCatalogueTest (4).
+
+### Not verified
+
+- No real-device or emulator run yet; all Stage 1-3 checks are JVM unit tests only.
+- Stage 3 is the design-system and catalogue core: hardcoded English has not yet
+  been extracted from every screen into `strings.xml`, and RTL/emulator screenshot
+  tests are not yet present.
+- Remote control needs the owner to pair a device and supply a private network or
+  tunnel before any of it can be exercised end to end.
+
 ## [3.9.1] - 2026-11-14
 
 Chat layout, kill-switch coverage, owner-approved FMHY hosts, and clear denial reporting.
