@@ -789,7 +789,7 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     contentPadding = PaddingValues(
                         top = 16.dp,
-                        bottom = with(density) { composerHeightPx.toDp() } + 16.dp,
+                        bottom = listBottomPaddingDp(composerHeightPx, density.density),
                     )
                 ) {
                     if (history.isEmpty()) {
