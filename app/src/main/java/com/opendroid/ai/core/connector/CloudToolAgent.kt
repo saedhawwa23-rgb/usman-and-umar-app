@@ -229,11 +229,17 @@ class UnifiedAgentLoop @Inject constructor(
                 }
                 if (!result.success) {
                     val denial = result.error ?: "Connector execution failed"
-                    events += UniversalAgentEvent("blocked", "${tool.qualifiedName} status=failed: $denial", invocation.invocationId, tool.connectorId, tool.name)
+                    if (ToolOutcome.isUserDenial(denial)) {
+                        // A denial is a deliberate owner decision, not a failure: report it as
+                        // "denied", never "failed", and do not count it toward the consecutive-
+                        // failure stop.
+                        events += UniversalAgentEvent("denied", "${tool.qualifiedName} status=denied: user denied", invocation.invocationId, tool.connectorId, tool.name)
+                    } else {
+                        events += UniversalAgentEvent("blocked", "${tool.qualifiedName} status=failed: $denial", invocation.invocationId, tool.connectorId, tool.name)
+                    }
                     messages += ChatMessage(UUID.randomUUID().toString(), denial.take(2_000), ChatMessage.Sender.AGENT,
                         providerRole = "tool", toolCallId = call.id)
-                    val wasUserDenied = denial.equals("user denied", ignoreCase = true)
-                    if (budget.recordToolFailure(wasUserDenied)) {
+                    if (budget.recordToolFailure(ToolOutcome.isUserDenial(denial))) {
                         events += UniversalAgentEvent("stopped", "Stopped after two consecutive tool failures.")
                         return UniversalAgentResult(false, events, lastOutput)
                     }

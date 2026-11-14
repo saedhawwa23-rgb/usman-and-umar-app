@@ -49,6 +49,17 @@ data class ConnectorResult(
     val redacted: Boolean = true
 )
 
+/**
+ * Classifies a failed connector call. A user denial is a deliberate owner decision, not a
+ * tool failure: it must not be reported as "failed", and it must not count toward the
+ * stop-after-two-consecutive-failures rule in the unified agent loop.
+ */
+internal object ToolOutcome {
+    const val USER_DENIAL_ERROR = "user denied"
+
+    fun isUserDenial(error: String?): Boolean = error?.trim().equals(USER_DENIAL_ERROR, ignoreCase = true)
+}
+
 enum class ApprovalDecision { ALLOW, DENY, NEEDS_USER_APPROVAL }
 
 interface ConnectorApprovalGate {

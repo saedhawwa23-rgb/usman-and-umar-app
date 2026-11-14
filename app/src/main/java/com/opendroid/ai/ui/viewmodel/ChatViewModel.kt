@@ -458,7 +458,7 @@ class ChatViewModel @Inject constructor(
                 )
             }
             val steps = result.events
-                .filter { it.type in setOf("thinking", "dispatch", "result", "blocked", "stopped", "error") }
+                .filter { it.type in setOf("thinking", "dispatch", "result", "blocked", "denied", "stopped", "error") }
                 .joinToString("\n") { event -> "${event.type.uppercase()}: ${event.message}" }
                 .take(7_000)
             val visibleOutput = buildString {
@@ -477,16 +477,31 @@ class ChatViewModel @Inject constructor(
                 )
                 updateCloudTask(taskId) { it.copy(status = "COMPLETED", message = null) }
             } else {
-                val failure = result.events.lastOrNull { it.type in setOf("error", "stopped", "blocked") }
-                    ?.message?.take(1_000) ?: "Unified Agent did not produce a verified final response."
-                conversationRepository.updateMessageDelivery(
-                    userMessage.id,
-                    ChatDeliveryState.FAILED,
-                    error = failure,
-                    retryable = !attemptedDispatch,
-                    taskId = taskId,
-                )
-                updateCloudTask(taskId) { it.copy(status = "FAILED", message = failure) }
+                val denied = result.events.lastOrNull { it.type == "denied" }
+                if (denied != null) {
+                    // A denied action is not a failure. Surface the specific reason and keep the
+                    // task resumable rather than reporting a hard failure.
+                    val reason = denied.message.take(1_000)
+                    conversationRepository.updateMessageDelivery(
+                        userMessage.id,
+                        ChatDeliveryState.FAILED,
+                        error = "Action denied by the owner. $reason",
+                        retryable = true,
+                        taskId = taskId,
+                    )
+                    updateCloudTask(taskId) { it.copy(status = "COMPLETED", message = "Action denied by the owner") }
+                } else {
+                    val failure = result.events.lastOrNull { it.type in setOf("error", "stopped", "blocked") }
+                        ?.message?.take(1_000) ?: "Unified Agent did not produce a verified final response."
+                    conversationRepository.updateMessageDelivery(
+                        userMessage.id,
+                        ChatDeliveryState.FAILED,
+                        error = failure,
+                        retryable = !attemptedDispatch,
+                        taskId = taskId,
+                    )
+                    updateCloudTask(taskId) { it.copy(status = "FAILED", message = failure) }
+                }
             }
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             withContext(NonCancellable) {
