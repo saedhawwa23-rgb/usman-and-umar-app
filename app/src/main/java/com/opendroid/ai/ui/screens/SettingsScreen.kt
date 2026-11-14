@@ -102,6 +102,7 @@ fun SettingsScreen(
     val pingingCloudServers by viewModel.pingingCloudServers.collectAsState()
     val cloudKeepAliveEnabled by viewModel.cloudKeepAliveEnabled.collectAsState()
     val fmhyCandidates by viewModel.fmhyCandidates.collectAsState()
+    val approvedFmhyHosts by viewModel.approvedFmhyHosts.collectAsState()
     val openSwarmConnectionCheck by viewModel.openSwarmConnectionCheck.collectAsState()
     val automationEnabled by KillSwitch.state.collectAsState()
     var expandedCloudServerIds by remember { mutableStateOf(emptySet<String>()) }
@@ -529,18 +530,29 @@ fun SettingsScreen(
                 ) {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("FMHY DISCOVERED HOSTS", fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = AccentCyan)
-                        Text("Every HTTPS host found in the FMHY page text is immediately callable by the agent through its site tool. The host is fixed by the registry; the model can only supply a rooted path. All calls stay Kill Switch gated, and links are never opened automatically.", color = TextSecondary, fontSize = 12.sp)
+                        Text("Discovery only suggests hosts. The agent can call a discovered host's site tool only after you approve that exact host. The host is fixed by the registry; the model can only supply a rooted path. All calls stay Kill Switch gated, and links are never opened automatically.", color = TextSecondary, fontSize = 12.sp)
                         val candidates = fmhyCandidates.distinctBy { it.host }
                         if (candidates.isEmpty()) {
                             Text("No candidates yet. Ask the chat agent to discover HTTPS links written in the FMHY page text.", color = TextSecondary, fontSize = 11.sp)
                         }
                         candidates.forEach { candidate ->
+                            val approved = candidate.host in approvedFmhyHosts
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
                                     Text(candidate.url, color = TextPrimary, fontSize = 12.sp)
                                     Text(candidate.host, color = TextSecondary, fontSize = 11.sp)
                                 }
-                                Text("Callable", color = AccentCyan, fontSize = 11.sp)
+                                Text(
+                                    if (approved) "Approved" else "Not approved",
+                                    color = if (approved) AccentCyan else TextSecondary,
+                                    fontSize = 11.sp,
+                                )
+                                TextButton(
+                                    onClick = { viewModel.setFmhyHostApproved(candidate.host, !approved) },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                ) {
+                                    Text(if (approved) "Revoke" else "Approve", color = if (approved) Color(0xFFFF5252) else AccentCyan)
+                                }
                             }
                         }
                     }
