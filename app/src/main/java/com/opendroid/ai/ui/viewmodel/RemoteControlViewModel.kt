@@ -3,12 +3,23 @@ package com.opendroid.ai.ui.viewmodel
 import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.opendroid.ai.core.remote.DesktopSessionState
 import com.opendroid.ai.core.remote.LanRemoteClient
+import com.opendroid.ai.core.remote.PairedDesktop
+import com.opendroid.ai.core.remote.PairedDesktopStore
 import com.opendroid.ai.core.remote.RemoteApprovalGate
+import com.opendroid.ai.core.remote.RemoteDesktopClient
 import com.opendroid.ai.core.remote.RemoteControlCoordinator
 import com.opendroid.ai.core.remote.RemoteRisk
 import com.opendroid.ai.core.remote.RemoteSession
 import com.opendroid.ai.core.remote.RemoteTransportController
+import com.opendroid.ai.remote.protocol.AppEntry
+import com.opendroid.ai.remote.protocol.AppLaunchResult
+import com.opendroid.ai.remote.protocol.AppList
+import com.opendroid.ai.remote.protocol.InputEvent
+import com.opendroid.ai.remote.protocol.ProtocolError
+import com.opendroid.ai.remote.protocol.RemoteMessage
+import com.opendroid.ai.remote.protocol.ScreenFrameCodec
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
 import javax.inject.Inject
@@ -27,6 +38,8 @@ class RemoteControlViewModel @Inject constructor(
     private val transport: RemoteTransportController,
     private val approvalGate: RemoteApprovalGate,
     private val client: LanRemoteClient,
+    private val desktopClient: RemoteDesktopClient,
+    private val desktopStore: PairedDesktopStore,
 ) : ViewModel() {
 
     /** What the screen shows. [pairingCode] is non-null only while a code is live. */
@@ -42,6 +55,13 @@ class RemoteControlViewModel @Inject constructor(
         val pendingApproval: RemoteApprovalGate.Pending? = null,
         val message: String? = null,
         val messageIsError: Boolean = false,
+        // Desktop companion agent
+        val pairedDesktops: List<PairedDesktop> = emptyList(),
+        val desktopConnected: Boolean = false,
+        val desktopName: String? = null,
+        val desktopStreaming: Boolean = false,
+        val lastScreenFrame: ScreenFrameCodec.ScreenFrame? = null,
+        val desktopApplications: List<AppEntry> = emptyList(),
     )
 
     private val mutableState = MutableStateFlow(
@@ -51,6 +71,7 @@ class RemoteControlViewModel @Inject constructor(
             killSwitchActive = coordinator.isKillSwitchActive(),
             listening = transport.state.value.running,
             listenPort = transport.state.value.port,
+            pairedDesktops = desktopStore.load(),
         )
     )
     val state: StateFlow<UiState> = mutableState.asStateFlow()
@@ -76,6 +97,10 @@ class RemoteControlViewModel @Inject constructor(
             }
         }
     }
+
+    private val desktopConnected: Boolean get() = mutableState.value.desktopConnected
+
+    private val pairedDesktops: List<PairedDesktop> get() = mutableState.value.pairedDesktops
 
     /** Turn the LAN listener on so a paired device can reach this phone. */
     fun startListening() {
@@ -220,6 +245,157 @@ class RemoteControlViewModel @Inject constructor(
 
     fun secondsRemaining(): Long =
         mutableState.value.pairingExpiresAtMs.takeIf { it > 0 }?.let(coordinator::secondsRemaining) ?: 0L
+
+    // ---- Desktop companion agent ----
+
+    /**
+     * Pair with a desktop agent running on a computer. The code is the one the agent printed when it
+     * started; nothing is stored unless the agent accepts it.
+     */
+    fun pairWithDesktop(host: String, port: Int, code: String) {
+        if (desktopConnected) {
+            setMessage("Disconnect the current desktop before pairing with another.", isError = true)
+            return
+        }
+        viewModelScope.launch {
+            desktopClient.connect(
+                host = host.trim(),
+                port = port,
+                pairingCode = code.trim().uppercase(),
+                onState = ::onDesktopState,
+                onScreenFrame = { frame -> mutableState.value = mutableState.value.copy(lastScreenFrame = frame) },
+                onMessage = ::onDesktopMessage,
+            )
+        }
+    }
+
+    /** Connect to a desktop that has already been paired. */
+    fun connectToDesktop(host: String, port: Int) {
+        if (desktopConnected) return
+        viewModelScope.launch {
+            desktopClient.connect(
+                host = host.trim(),
+                port = port,
+                pairingCode = null,
+                onState = ::onDesktopState,
+                onScreenFrame = { frame -> mutableState.value = mutableState.value.copy(lastScreenFrame = frame) },
+                onMessage = ::onDesktopMessage,
+            )
+        }
+    }
+
+    fun disconnectDesktop() {
+        desktopClient.disconnect("disconnected from the phone")
+        mutableState.value = mutableState.value.copy(
+            desktopStreaming = false,
+            message = "Disconnected from the desktop.",
+            messageIsError = false,
+        )
+    }
+
+    fun startDesktopStream(width: Int, quality: Int) {
+        if (!desktopConnected) {
+            setMessage("Connect to a desktop before viewing its screen.", isError = true)
+            return
+        }
+        desktopClient.requestScreen(width, quality)
+        mutableState.value = mutableState.value.copy(desktopStreaming = true)
+    }
+
+    fun stopDesktopStream() {
+        desktopClient.stopScreen()
+        mutableState.value = mutableState.value.copy(desktopStreaming = false, lastScreenFrame = null)
+    }
+
+    fun sendDesktopInput(event: InputEvent) {
+        if (!desktopConnected) return
+        desktopClient.sendInput(event)
+    }
+
+    fun listDesktopApplications() {
+        if (!desktopConnected) {
+            setMessage("Connect to a desktop before listing its applications.", isError = true)
+            return
+        }
+        desktopClient.listApplications()
+    }
+
+    fun launchDesktopApplication(id: String) {
+        if (!desktopConnected) return
+        desktopClient.launchApplication(id)
+    }
+
+    /** Forget every paired desktop on this phone. The desktops are told as well. */
+    fun forgetDesktops() {
+        val count = pairedDesktops.size
+        desktopClient.revoke()
+        mutableState.value = mutableState.value.copy(
+            pairedDesktops = emptyList(),
+            desktopConnected = false,
+            desktopStreaming = false,
+            lastScreenFrame = null,
+            desktopApplications = emptyList(),
+            message = if (count == 0) "No desktops were paired." else "Forgot $count paired desktop(s).",
+            messageIsError = false,
+        )
+    }
+
+    private fun onDesktopState(newState: DesktopSessionState) {
+        val current = mutableState.value
+        mutableState.value = when (newState) {
+            is DesktopSessionState.Connected -> current.copy(
+                desktopConnected = true,
+                desktopName = newState.serverName,
+                message = "Connected to ${newState.serverName}.",
+                messageIsError = false,
+            )
+            is DesktopSessionState.Connecting -> current.copy(
+                message = "Connecting to the desktop…",
+                messageIsError = false,
+            )
+            is DesktopSessionState.AwaitingPairing -> current.copy(
+                message = newState.message,
+                messageIsError = false,
+            )
+            is DesktopSessionState.Failed -> current.copy(
+                desktopConnected = false,
+                desktopStreaming = false,
+                lastScreenFrame = null,
+                pairedDesktops = desktopStore.load(),
+                message = newState.reason,
+                messageIsError = true,
+            )
+            is DesktopSessionState.Closed -> current.copy(
+                desktopConnected = false,
+                desktopStreaming = false,
+                lastScreenFrame = null,
+                message = newState.reason,
+                messageIsError = false,
+            )
+            DesktopSessionState.Idle -> current
+        }
+    }
+
+    private fun onDesktopMessage(message: RemoteMessage) {
+        val current = mutableState.value
+        when (message) {
+            is AppList -> mutableState.value = current.copy(
+                desktopApplications = message.entries,
+                message = "${message.entries.size} application(s) on the desktop.",
+                messageIsError = false,
+            )
+            is AppLaunchResult -> mutableState.value = current.copy(
+                message = if (message.accepted) "The desktop started the application."
+                else "The desktop refused to start it: ${message.reason ?: "no reason given"}",
+                messageIsError = !message.accepted,
+            )
+            is ProtocolError -> mutableState.value = current.copy(
+                message = "The desktop reported ${message.code}: ${message.message}",
+                messageIsError = true,
+            )
+            else -> Unit
+        }
+    }
 
     private fun setMessage(text: String, isError: Boolean) {
         mutableState.value = mutableState.value.copy(message = text, messageIsError = isError)

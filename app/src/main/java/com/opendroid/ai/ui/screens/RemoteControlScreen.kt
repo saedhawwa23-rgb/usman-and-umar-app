@@ -34,12 +34,16 @@ import com.opendroid.ai.ui.viewmodel.RemoteControlViewModel
 
 /**
  * Owner-facing device control: pair a controlling device, run the LAN listener, approve or deny
- * inbound actions, and send signed actions to a paired device.
+ * inbound actions, send signed actions to a paired device, and drive a computer that runs the
+ * desktop companion agent.
  *
- * The listener is off until the owner turns it on and is meant for a trusted private network
+ * The LAN listener is off until the owner turns it on and is meant for a trusted private network
  * only: the payload is signed, but the LAN traffic is not encrypted. It does not use a public
- * relay. Controlling a Windows, macOS or Linux computer is not supported - there is no agent to
- * install on one.
+ * relay.
+ *
+ * Controlling a computer works through the desktop agent (see `desktop-agent/`). The agent must be
+ * started on the computer first and prints a pairing code; the code is entered here once. After
+ * that the phone reconnects with a stored secret.
  */
 @Composable
 fun RemoteControlScreen(viewModel: RemoteControlViewModel = hiltViewModel()) {
@@ -275,14 +279,143 @@ fun RemoteControlScreen(viewModel: RemoteControlViewModel = hiltViewModel()) {
             )
         }
 
+        DesktopAgentSection(state = state, viewModel = viewModel)
+
         Text(
-            "What this does not do: this screen cannot reach a Windows, macOS or Linux computer. " +
-                "The app has no agent to install on a PC or desktop, so controlling one is not " +
-                "supported. Requests also need a transport you provide (your own private network " +
-                "or tunnel); the app never opens an inbound port and uses no public relay.",
+            "What this does not do: reaching a computer needs the desktop agent running on it " +
+                "first, and both devices must be able to reach each other. The agent listens on " +
+                "your network; the app never opens an inbound port on the phone and uses no public " +
+                "relay. Use the agent's TLS option when the network is not trusted.",
             color = colors.textSecondary,
             fontSize = 11.sp
         )
+    }
+}
+
+/**
+ * Pairs with, connects to, and drives the desktop companion agent. The pairing code is the one the
+ * agent printed; the phone stores only the secret derived from it.
+ */
+@Composable
+private fun DesktopAgentSection(state: RemoteControlViewModel.UiState, viewModel: RemoteControlViewModel) {
+    val colors = AppTheme.colors
+    var host by remember { mutableStateOf("") }
+    var port by remember { mutableStateOf("8777") }
+    var code by remember { mutableStateOf("") }
+    var width by remember { mutableStateOf("1280") }
+
+    SectionCard(title = "Computer (desktop agent)") {
+        Text(
+            "Start the desktop agent on the computer, then enter its address and the pairing code " +
+                "it printed. The code is valid for five minutes.",
+            color = colors.textSecondary,
+            fontSize = 12.sp
+        )
+
+        OutlinedTextField(
+            value = host,
+            onValueChange = { host = it },
+            label = { Text("Computer address (for example 192.168.1.20)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = port,
+            onValueChange = { port = it.filter(Char::isDigit) },
+            label = { Text("Port") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            value = code,
+            onValueChange = { code = it.uppercase() },
+            label = { Text("Pairing code") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { viewModel.pairWithDesktop(host, port.toIntOrNull() ?: 8777, code) },
+                enabled = host.isNotBlank() && code.isNotBlank() && !state.desktopConnected
+            ) { Text("PAIR") }
+            OutlinedButton(
+                onClick = { viewModel.connectToDesktop(host, port.toIntOrNull() ?: 8777) },
+                enabled = host.isNotBlank() && !state.desktopConnected
+            ) { Text("CONNECT") }
+            OutlinedButton(
+                onClick = { viewModel.disconnectDesktop() },
+                enabled = state.desktopConnected
+            ) { Text("DISCONNECT") }
+        }
+
+        if (state.pairedDesktops.isNotEmpty()) {
+            Text(
+                "Paired: " + state.pairedDesktops.joinToString { "${it.serverName} (${it.host}:${it.port})" },
+                color = colors.textSecondary,
+                fontSize = 12.sp
+            )
+        }
+
+        if (state.desktopConnected) {
+            Text(
+                "Connected to ${state.desktopName ?: "the desktop"}.",
+                color = colors.accentGreenButton,
+                fontSize = 12.sp
+            )
+            OutlinedTextField(
+                value = width,
+                onValueChange = { width = it.filter(Char::isDigit) },
+                label = { Text("Screen width in pixels") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (state.desktopStreaming) {
+                    OutlinedButton(onClick = { viewModel.stopDesktopStream() }) { Text("STOP VIEWING") }
+                } else {
+                    Button(onClick = { viewModel.startDesktopStream(width.toIntOrNull() ?: 1280, 60) }) {
+                        Text("VIEW SCREEN")
+                    }
+                }
+                OutlinedButton(onClick = { viewModel.listDesktopApplications() }) { Text("LIST APPS") }
+            }
+
+            state.lastScreenFrame?.let { frame ->
+                Text(
+                    "Last frame: ${frame.width}x${frame.height} ${frame.format}, " +
+                        "${frame.data.size / 1024} KB",
+                    color = colors.textSecondary,
+                    fontSize = 12.sp
+                )
+            }
+
+            if (state.desktopApplications.isNotEmpty()) {
+                state.desktopApplications.take(10).forEach { app ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(app.name, color = colors.textPrimary, fontSize = 12.sp)
+                        TextButton(onClick = { viewModel.launchDesktopApplication(app.id) }) { Text("START") }
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = {
+                    viewModel.sendDesktopInput(
+                        com.opendroid.ai.remote.protocol.InputEvent(
+                            com.opendroid.ai.remote.protocol.InputEvent.MOUSE_MOVE, x = 10, y = 10,
+                        )
+                    )
+                }) { Text("MOVE CURSOR") }
+            }
+        }
+
+        if (state.pairedDesktops.isNotEmpty()) {
+            OutlinedButton(onClick = { viewModel.forgetDesktops() }) { Text("FORGET PAIRED COMPUTERS") }
+        }
     }
 }
 

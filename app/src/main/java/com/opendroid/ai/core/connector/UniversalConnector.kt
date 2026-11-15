@@ -236,31 +236,33 @@ class HttpConnector(
         withContext(Dispatchers.IO) {
             credentials.withSecret(invocation.credential) { secret ->
                 val pathTemplate = pathByTool[invocation.tool.name] ?: "/"
+                val method = methodByTool[invocation.tool.name]?.uppercase() ?: "POST"
                 val args = runCatching { gson.fromJson(invocation.argumentsJson, JsonObject::class.java) }.getOrNull()
                     ?: return@withSecret ConnectorResult(false, error = "Tool arguments were not a JSON object")
-                val missingPathArgument = Regex("\\{([A-Za-z0-9_]+)}").findAll(pathTemplate)
-                    .map { it.groupValues[1] }.firstOrNull { args.get(it)?.asString.isNullOrBlank() }
-                if (missingPathArgument != null) {
-                    return@withSecret ConnectorResult(false, error = "Required path argument is missing: $missingPathArgument")
+                val placeholderNames = PLACEHOLDER.findAll(pathTemplate).map { it.groupValues[1] }.toList()
+                val missing = placeholderNames.firstOrNull { args.get(it)?.asString.isNullOrBlank() }
+                if (missing != null) {
+                    return@withSecret ConnectorResult(false, error = "Required parameter is missing: $missing")
                 }
-                val path = Regex("\\{([A-Za-z0-9_]+)}").replace(pathTemplate) { match ->
+                val path = PLACEHOLDER.replace(pathTemplate) { match ->
                     val value = args.get(match.groupValues[1]).asString
-                    require(value.length <= 200 && value.none { it.isISOControl() }) { "Path parameter is invalid" }
+                    require(value.length <= 2_000 && value.none { it.isISOControl() }) { "Parameter is invalid" }
                     URLEncoder.encode(value, "UTF-8").replace("+", "%20")
                 }
                 val requestUrl = baseUrl.trimEnd('/') + "/" + path.trimStart('/')
+                val bodyJson = buildBody(args, placeholderNames)
                 val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
-                    requestMethod = methodByTool[invocation.tool.name] ?: "POST"
+                    requestMethod = method
                     connectTimeout = 20_000
                     readTimeout = 60_000
                     doInput = true
-                    if (requestMethod != "GET") doOutput = true
+                    if (method != "GET" && method != "DELETE") doOutput = true
                     staticHeaders.forEach { (key, value) -> setRequestProperty(key, value) }
                     if (!secret.isNullOrBlank()) setRequestProperty("Authorization", "Bearer $secret")
                     setRequestProperty("Content-Type", "application/json")
                 }
                 try {
-                    if (connection.doOutput) connection.outputStream.use { it.write(invocation.argumentsJson.toByteArray()) }
+                    if (connection.doOutput) connection.outputStream.use { it.write(bodyJson.toByteArray()) }
                     val code = connection.responseCode
                     val stream = if (code in 200..299) connection.inputStream else connection.errorStream
                     val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty().take(32_000)
@@ -268,4 +270,23 @@ class HttpConnector(
                 } finally { connection.disconnect() }
             }
         }
+
+    /**
+     * The request body is the `body` argument when the importer produced one (the request body
+     * schema), otherwise every argument that was not consumed as a path or query placeholder.
+     * This keeps a hand-registered connector behaving exactly as before.
+     */
+    private fun buildBody(args: JsonObject, placeholders: List<String>): String {
+        val explicitBody = args.get("body")
+        if (explicitBody != null && explicitBody.isJsonObject) return explicitBody.toString()
+        val body = JsonObject()
+        args.entrySet().forEach { (key, value) ->
+            if (key !in placeholders && key != "body") body.add(key, value)
+        }
+        return body.toString()
+    }
+
+    private companion object {
+        val PLACEHOLDER = Regex("\\{([A-Za-z0-9_]+)}")
+    }
 }

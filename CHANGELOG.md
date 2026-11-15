@@ -5,12 +5,26 @@ All notable changes to USMAN AND UMAR are recorded here.
 ## [Unreleased]
 
 Standards-alignment pass on the Plugin and Remote features: a real session lifecycle for remote
-control, a documented plugin manifest with interoperability and version compatibility, and plugin
-health/execution history. All additions are covered by unit tests (753 total, 0 failures) and are
-not device-verified yet. The app version stays 3.10.1; this work is not released.
+control, a documented plugin manifest with interoperability and version compatibility, plugin
+health/execution history, and a real desktop companion agent for remote control. All additions are
+covered by unit tests (862 total, 0 failures) and are not device-verified yet. The app version stays
+3.10.1; this work is not released.
 
 ### Added
 
+- **Desktop companion agent** (`desktop-agent/`, `remote-protocol/`): a real Windows/Linux/macOS
+  agent that captures the screen through AWT `Robot`, injects mouse, wheel, key and text input,
+  lists and launches installed applications, and transfers files inside a single shared folder.
+  Pairing exchanges a one-time code for a shared secret derived with HKDF-SHA256 over both handshake
+  nonces; every later connection is proved with an HMAC over a fresh challenge. Input and file
+  transfer can each be disabled, and a client can be revoked. Covered by 23 tests over a real
+  loopback socket, including a cross-implementation check that the phone and agent derive the same
+  secret.
+- **Remote desktop client** (`core/remote/RemoteDesktopClient.kt`, `KeystorePairedDesktopStore.kt`):
+  the phone side of the agent protocol, with a Keystore-backed store for the pairing secret, and a
+  Remote screen section to pair, connect, view the screen, list and start applications, and forget
+  paired computers. Covered by 4 integration tests that drive the real client against the real
+  agent session handler.
 - **Remote session lifecycle** (`core/remote/RemoteSessionManager.kt`): sessions now have explicit
   states (Pairing, Connected, Reconnecting, Disconnected, Expired, Revoked) and explicit end
   reasons. Heartbeat monitoring moves a silent session to Reconnecting, then to Disconnected after
@@ -38,9 +52,12 @@ not device-verified yet. The app version stays 3.10.1; this work is not released
 
 ### Known limitations (not verified on a device)
 
-- Remote control still has no desktop agent: controlling a Windows, macOS or Linux computer, and
-  routing a phone's internet through a desktop gateway, are not implemented. See the comparison
-  report for the BLOCKED items.
+- The desktop agent is built and unit-tested on this machine, but no real phone-to-desktop session
+  has been run: screen capture on a real desktop, input on a real desktop, and the phone UI against
+  a real agent all need a device and a computer and are **not verified**.
+- Routing a phone's internet through a desktop gateway is **BLOCKED**, not implemented. It needs a
+  `VpnService` on the phone, a NAT gateway on the desktop, and the school network administrator's
+  permission. See `docs/remote/remote-internet-status.md`.
 
 ## [3.10.1] - 2026-11-12
 

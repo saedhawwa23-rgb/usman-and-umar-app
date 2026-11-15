@@ -1,6 +1,7 @@
 package com.opendroid.ai.di
 
 import android.content.Context
+import android.os.Build
 import com.opendroid.ai.core.security.AndroidProviderCredentialStore
 import com.opendroid.ai.core.security.AndroidSensitiveMemoryStore
 import com.opendroid.ai.core.security.AndroidUserProfileStore
@@ -18,6 +19,9 @@ import com.opendroid.ai.core.agent.ActionSequenceExecutor
 import com.opendroid.ai.accessibility.AndroidAgentToolEnvironment
 import com.opendroid.ai.core.agent.AgentToolEnvironment
 import com.opendroid.ai.core.remote.DeviceKeyStore
+import com.opendroid.ai.core.remote.KeystorePairedDesktopStore
+import com.opendroid.ai.core.remote.PairedDesktopStore
+import com.opendroid.ai.core.remote.RemoteDesktopClient
 import com.opendroid.ai.core.remote.LanRemoteClient
 import com.opendroid.ai.core.remote.LanRemoteControlServer
 import com.opendroid.ai.core.remote.RemoteApprovalGate
@@ -111,6 +115,35 @@ object AppModule {
     fun provideRemoteControlService(keyStore: DeviceKeyStore): RemoteControlService =
         RemoteControlService(keyStore = keyStore)
 
+    /**
+     * Pairing secrets for the desktop companion agent, kept in the same Keystore-backed record store
+     * as the other remote secrets. Separate alias and preferences file from the LAN control keys, so
+     * the two features cannot overwrite each other's records.
+     */
+    @Provides
+    @Singleton
+    fun providePairedDesktopStore(@ApplicationContext context: Context): PairedDesktopStore =
+        KeystorePairedDesktopStore(
+            KeystoreSecretBytesStore(
+                KeystoreSecretRecords(
+                    storage = SharedPreferencesSecretRecordStorage(
+                        context.applicationContext.getSharedPreferences(DESKTOP_PREFERENCES, Context.MODE_PRIVATE)
+                    ),
+                    cipher = AndroidKeyStoreAeadCipher(DESKTOP_KEY_ALIAS),
+                )
+            )
+        )
+
+    @Provides
+    @Singleton
+    fun provideRemoteDesktopClient(
+        store: PairedDesktopStore,
+        @ApplicationContext context: Context,
+    ): RemoteDesktopClient = RemoteDesktopClient(
+        store = store,
+        deviceName = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
+    )
+
     @Provides
     @Singleton
     fun provideRemoteSessionManager(): RemoteSessionManager = RemoteSessionManager()
@@ -175,4 +208,6 @@ object AppModule {
 
     private const val REMOTE_PREFERENCES = "remote_control_secure"
     private const val REMOTE_KEY_ALIAS = "opendroid_remote_control_key"
+    private const val DESKTOP_PREFERENCES = "remote_desktop_secure"
+    private const val DESKTOP_KEY_ALIAS = "opendroid_remote_desktop_key"
 }

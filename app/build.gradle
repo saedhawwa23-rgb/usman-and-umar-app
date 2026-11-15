@@ -212,6 +212,12 @@ room {
 }
 
 dependencies {
+    // The remote-control wire protocol, shared verbatim with the desktop agent so both sides
+    // cannot drift apart.
+    implementation project(':remote-protocol')
+    // The desktop agent is pulled in for unit tests only, so the Android client is exercised
+    // against the real session handler rather than a re-implementation of it.
+    testImplementation project(':desktop-agent')
     // AndroidX Core & Lifecycle
     // Core 1.19.0 merges the Kotlin extensions into androidx.core:core (making
     // core-ktx an empty compatibility artifact). The AGP 9.1+ half of that
