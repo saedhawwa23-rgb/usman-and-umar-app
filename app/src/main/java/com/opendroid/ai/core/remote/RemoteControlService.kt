@@ -71,23 +71,6 @@ data class RemoteAuditRecord(
     val outcome: String,
 )
 
-/** Encrypted-storage boundary for per-device keys. The core never persists keys itself. */
-interface DeviceKeyStore {
-    fun put(keyId: String, secret: ByteArray)
-    fun get(keyId: String): ByteArray?
-    fun remove(keyId: String)
-    fun keyIds(): Set<String>
-}
-
-/** In-memory key store for tests and for callers that supply their own encrypted storage. */
-class InMemoryDeviceKeyStore : DeviceKeyStore {
-    private val keys = LinkedHashMap<String, ByteArray>()
-    @Synchronized override fun put(keyId: String, secret: ByteArray) { keys[keyId] = secret.copyOf() }
-    @Synchronized override fun get(keyId: String): ByteArray? = keys[keyId]?.copyOf()
-    @Synchronized override fun remove(keyId: String) { keys.remove(keyId) }
-    @Synchronized override fun keyIds(): Set<String> = keys.keys.toSet()
-}
-
 /**
  * Pairing, authentication, approval, and session lifecycle for owner-paired devices.
  *
@@ -128,7 +111,6 @@ class RemoteControlService(
     private val pairingSessions = LinkedHashMap<String, PairingSession>()
     private val consumedCodes = HashSet<String>()
     private val seenNonces = LinkedHashMap<String, Long>()
-    private val pairedDevices = LinkedHashMap<String, String>() // keyId -> deviceId
     private var killSwitchActive = false
 
     /** The target device starts pairing and shows a one-time code plus a device name. */
@@ -146,8 +128,8 @@ class RemoteControlService(
     }
 
     /**
-     * The controlling phone enters the code. On success a per-device key is created and stored,
-     * and the code is consumed so it can never be used again.
+     * The controlling phone enters the code. On success a per-device key is created and stored
+     * with the device id, and the code is consumed so it can never be used again.
      */
     @Synchronized
     fun completePairing(code: String, keyId: String): RemoteAuthentication {
@@ -157,8 +139,7 @@ class RemoteControlService(
             return RemoteAuthentication.Rejected(EXPIRED_PAIRING_CODE)
         }
         val secret = ByteArray(32).also { random.nextBytes(it) }
-        keyStore.put(keyId, secret)
-        pairedDevices[keyId] = session.deviceId
+        keyStore.put(PairedDevice(keyId = keyId, deviceId = session.deviceId, secret = secret))
         consumedCodes.add(code)
         pairingSessions.remove(code)
         audit(session.deviceId, "pair", "approved", "paired")
@@ -167,9 +148,9 @@ class RemoteControlService(
 
     /** Sign an action with a stored key. Used by the controlling side. */
     fun sign(keyId: String, deviceId: String, action: RemoteAction, timestampMs: Long, nonce: String): SignedRemoteRequest {
-        val secret = keyStore.get(keyId) ?: throw IllegalArgumentException(UNKNOWN_DEVICE)
+        val device = keyStore.get(keyId) ?: throw IllegalArgumentException(UNKNOWN_DEVICE)
         val unsigned = SignedRemoteRequest(keyId, deviceId, action, timestampMs, nonce, "")
-        val signature = hmacHex(secret, unsigned.canonicalPayload())
+        val signature = hmacHex(device.secret, unsigned.canonicalPayload())
         return unsigned.copy(signatureHex = signature)
     }
 
@@ -181,17 +162,15 @@ class RemoteControlService(
     fun authenticate(request: SignedRemoteRequest): RemoteAuthentication {
         if (killSwitchActive) return RemoteAuthentication.Rejected(KILL_SWITCH_ACTIVE)
 
-        val secret = keyStore.get(request.keyId) ?: return RemoteAuthentication.Rejected(UNKNOWN_DEVICE)
-        val pairedDevice = pairedDevices[request.keyId]
-            ?: return RemoteAuthentication.Rejected(UNKNOWN_DEVICE)
-        if (pairedDevice != request.deviceId) return RemoteAuthentication.Rejected(UNKNOWN_DEVICE)
+        val device = keyStore.get(request.keyId) ?: return RemoteAuthentication.Rejected(UNKNOWN_DEVICE)
+        if (device.deviceId != request.deviceId) return RemoteAuthentication.Rejected(UNKNOWN_DEVICE)
 
         val delta = kotlin.math.abs(now() - request.timestampMs)
         if (delta > MAX_CLOCK_SKEW_MS) return RemoteAuthentication.Rejected(EXPIRED_REQUEST)
 
         if (request.nonce in seenNonces) return RemoteAuthentication.Rejected(REPLAYED_REQUEST)
 
-        val expected = hmacHex(secret, request.canonicalPayload())
+        val expected = hmacHex(device.secret, request.canonicalPayload())
         if (!constantTimeEquals(expected, request.signatureHex)) {
             return RemoteAuthentication.Rejected(BAD_SIGNATURE)
         }
@@ -243,15 +222,17 @@ class RemoteControlService(
     /** Remove a paired device: deletes the key and invalidates open sessions on both sides. */
     @Synchronized
     fun unpair(keyId: String): Boolean {
-        val deviceId = pairedDevices.remove(keyId)
+        val device = keyStore.get(keyId)
         keyStore.remove(keyId)
-        pairingSessions.entries.removeIf { it.value.deviceId == deviceId }
-        if (deviceId != null) audit(deviceId, "unpair", "approved", "keys removed")
-        return deviceId != null
+        if (device != null) {
+            pairingSessions.entries.removeIf { it.value.deviceId == device.deviceId }
+            audit(device.deviceId, "unpair", "approved", "keys removed")
+        }
+        return device != null
     }
 
     @Synchronized
-    fun pairedKeyIds(): Set<String> = pairedDevices.keys.toSet()
+    fun pairedKeyIds(): Set<String> = keyStore.all().map { it.keyId }.toSet()
 
     private fun audit(deviceId: String, action: String, approval: String, outcome: String) {
         auditSink(RemoteAuditRecord(now(), deviceId, action, approval, outcome))
