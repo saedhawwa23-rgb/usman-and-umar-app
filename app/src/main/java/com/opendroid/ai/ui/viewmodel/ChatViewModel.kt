@@ -16,6 +16,8 @@ import com.opendroid.ai.accessibility.LocalAiAppExecutor
 import com.opendroid.ai.core.agent.AgentLoop
 import com.opendroid.ai.core.agent.AgentState
 import com.opendroid.ai.core.agent.ChatToolCall
+import com.opendroid.ai.core.agent.AgentToolEnvironment
+import com.opendroid.ai.core.agent.AgentToolRegistry
 import com.opendroid.ai.core.agent.ChatErrorPrimaryAction
 import com.opendroid.ai.core.agent.ChatErrorUiState
 import com.opendroid.ai.core.agent.primaryAction
@@ -613,75 +615,48 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private suspend fun executeApprovedChatTool(call: ChatToolCall, context: Context): String {
-        val packageManager = context.packageManager
-        return when (call.action) {
-            "shell" -> {
-                val command = call.command?.trim().orEmpty()
-                require(command.isNotBlank()) { "The proposed shell action has no command." }
-                when {
-                    Regex("^pm\\s+list\\s+packages(?:\\s+-3)?$").matches(command) -> {
-                        val thirdPartyOnly = command.endsWith("-3")
-                        val apps = installedApplications(packageManager)
-                            .filter { !thirdPartyOnly || it.flags and ApplicationInfo.FLAG_SYSTEM == 0 }
-                            .map { it.packageName }.sorted()
-                        "Native PackageManager result (${apps.size} package(s)):\n" +
-                            apps.take(500).joinToString("\n").ifBlank { "No packages found." }
-                    }
-                    command in setOf("getprop ro.build.version.release", "getprop ro.build.version.sdk", "getprop ro.product.model") ->
-                        nativeDeviceProperty(command)
-                    command == "dumpsys battery" -> nativeBatteryStatus(context)
-                    command == "settings get system screen_brightness" -> {
-                        val value = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
-                        "Screen brightness setting: ${if (value >= 0) value else "unavailable"} (0–255 scale)."
-                    }
-                    command == "wm size" -> {
-                        val metrics = context.resources.displayMetrics
-                        "Current app display metrics: ${metrics.widthPixels} x ${metrics.heightPixels} pixels."
-                    }
-                    Regex("^(python3?|python[0-9.]*|git|npm|node)(?:\\s|$)", RegexOption.IGNORE_CASE).containsMatchIn(command) -> {
-                        require(!Regex("[;&|<>`\\n\\r$]").containsMatchIn(command)) {
-                            "Only one simple Linux command may be approved at a time; shell chaining and redirection are blocked."
-                        }
-                        executeExplicitLinuxTask(command)
-                    }
-                    command.startsWith("open app ", ignoreCase = true) ->
-                        openInstalledApp(context, command.substringAfter("open app ").trim())
-                    command.startsWith("open url ", ignoreCase = true) ->
-                        openUrl(context, command.substringAfter("open url ").trim())
-                    else -> error("Unsupported shell action. Native mode supports read-only Android queries, 'pm list packages', 'open app …', and 'open url …'. Python/Git/npm/Node tasks require Termux.")
-                }
-            }
-            "pm_list_packages", "list_packages" -> {
-                val apps = installedApplications(packageManager).map { it.packageName }.sorted()
-                "Native PackageManager result (${apps.size} package(s)):\n" +
-                    apps.take(500).joinToString("\n").ifBlank { "No packages found." }
-            }
-            "open_app", "launch_app" -> {
-                val target = call.packageName ?: call.appName
-                require(!target.isNullOrBlank()) { "Specify an app name or package name." }
-                openInstalledApp(context, target)
-            }
-            "open_url", "open_uri" -> {
-                val url = call.url ?: call.appName
-                require(!url.isNullOrBlank()) { "Specify an HTTP or HTTPS URL." }
-                openUrl(context, url)
-            }
-            "use_local_app" -> localAiAppExecutor.execute(
-                context = context,
-                appName = call.appName,
-                packageName = call.packageName,
-                prompt = call.prompt ?: call.command ?: error("Specify the prompt to send to the local AI app."),
-            )
-            "device_info", "android_device_info" -> nativeDeviceProperty("getprop ro.build.version.release")
-            "battery_status", "get_battery_status" -> nativeBatteryStatus(context)
-            "network_status", "get_network_status" -> nativeNetworkStatus(context)
-            "screen_brightness" -> {
-                val value = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
-                "Screen brightness setting: ${if (value >= 0) value else "unavailable"} (0–255 scale)."
-            }
-            else -> error("Unsupported tool action '${call.action}'. No action was executed.")
+    private val agentTools = AgentToolRegistry.standard()
+
+    private suspend fun executeApprovedChatTool(call: ChatToolCall, context: Context): String =
+        agentTools.execute(call, ChatEnvironment(context))
+
+    /**
+     * Adapts the view model's existing Android helpers to the tool registry, so tools stay
+     * platform-free and the registry can be unit-tested without a Context.
+     */
+    private inner class ChatEnvironment(private val context: Context) : AgentToolEnvironment {
+        override fun listInstalledPackages(thirdPartyOnly: Boolean): String {
+            val apps = installedApplications(context.packageManager)
+                .filter { !thirdPartyOnly || it.flags and ApplicationInfo.FLAG_SYSTEM == 0 }
+                .map { it.packageName }.sorted()
+            return "Native PackageManager result (${apps.size} package(s)):\n" +
+                apps.take(500).joinToString("\n").ifBlank { "No packages found." }
         }
+
+        override fun deviceProperty(command: String): String = nativeDeviceProperty(command)
+
+        override fun batteryStatus(): String = nativeBatteryStatus(context)
+
+        override fun networkStatus(): String = nativeNetworkStatus(context)
+
+        override fun screenBrightness(): String {
+            val value = Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
+            return "Screen brightness setting: ${if (value >= 0) value else "unavailable"} (0-255 scale)."
+        }
+
+        override fun displaySize(): String {
+            val metrics = context.resources.displayMetrics
+            return "Current app display metrics: ${metrics.widthPixels} x ${metrics.heightPixels} pixels."
+        }
+
+        override suspend fun runLinux(command: String): String = executeExplicitLinuxTask(command)
+
+        override suspend fun openApp(target: String): String = openInstalledApp(context, target)
+
+        override suspend fun openUrl(url: String): String = openUrl(context, url)
+
+        override suspend fun useLocalApp(appName: String?, packageName: String?, prompt: String): String =
+            localAiAppExecutor.execute(context, appName, packageName, prompt)
     }
 
     private fun nativeDeviceProperty(command: String): String = when (command) {

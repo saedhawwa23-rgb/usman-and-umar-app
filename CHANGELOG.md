@@ -2,6 +2,53 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.10.1] - 2026-11-12
+
+Fixes for the attachment picker, the chat layout, and the remote-control execution path. The
+existing security core, approval gate, kill switch, and provider wiring are unchanged; the
+additions are covered by unit tests and are not device-verified yet.
+
+### Fixed
+
+- **Universal file picker** (`ui/screens/UniversalFilePickerContract.kt`,
+  `ui/screens/ChatScreen.kt`): the attachment sheet passed a MIME hint list that mixed `*/*`
+  with specific types. Android applies `EXTRA_MIME_TYPES` as a filter even when the intent
+  type is the wildcard, so document providers greyed out APK, BIN, ZIP, IPYNB, source and
+  config files. The filter is no longer applied, and the "Photos" entry now opens the same
+  unfiltered multi-select picker instead of the single-select `GetContent()` path, which was
+  a second source of greyed-out files.
+- **Chat layout on a narrow screen** (`ui/screens/ChatScreen.kt`, `ui/Navigation.kt`): the
+  top bar held four actions plus a text "Clear" button, which pushed the title off a 240 dp
+  wide screen. New chat, the chat list and clear now live in an overflow menu, the title and
+  the agent status line are single-line with ellipsis, and the empty-state heading no longer
+  uses a fixed 96 dp top padding that overlapped the first message. Bottom navigation shows a
+  short label per tab, with the full name kept as the icon's content description.
+- **Chat scrolling** (`ui/screens/ChatScreen.kt`): the list auto-scrolled to the newest
+  message on every history change, which pulled the view back to the bottom while the user
+  was reading older messages. It now follows only when the newest item is already in view.
+
+### Added
+
+- **One shared tool registry** (`core/agent/AgentToolRegistry.kt`): the set of executable
+  tool actions used to be a hard-coded `when` inside `ChatViewModel`, so no other caller
+  could run a tool and adding one meant editing the view model. The set is now data
+  (`AgentTool`), resolved by name and alias through a registry, with the platform side
+  supplied by an `AgentToolEnvironment`. The chat agent, the remote-control handler, and any
+  future caller execute the same actions with the same names. Behaviour of every existing
+  action is unchanged.
+- **Remote-control execution** (`core/remote/RemoteRequestHandler.kt`): v3.10.0 shipped the
+  security core but nothing executed an authenticated request. The handler is the missing
+  link: authenticate, ask the owner, then execute, in that order, using the shared registry.
+  A rejection, a denial, a timeout, the kill switch, or an unknown tool each stop before
+  execution. `RemoteControlService` remains the only authority on pairing, replay, the clock
+  window and the kill switch; the handler does not re-implement any of those checks.
+
+### Tests
+
+- `core/agent/AgentToolRegistryTest` (14) and `core/remote/RemoteRequestHandlerTest` (8) are
+  new; `UniversalFilePickerContractTest` (2) now asserts arbitrary file types are accepted.
+  Full JVM suite: 689 tests, 0 failures, 0 errors, 0 skipped.
+
 ## [3.10.0] - 2026-11-14
 
 Plugin registry, owner-paired remote control, one design system, and durable state. All stages

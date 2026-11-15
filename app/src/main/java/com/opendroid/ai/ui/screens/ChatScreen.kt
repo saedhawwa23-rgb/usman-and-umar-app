@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Cloud
@@ -66,6 +67,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -143,6 +145,7 @@ fun ChatScreen(
     var transcriptionText by remember { mutableStateOf("") }
     var voiceError by remember { mutableStateOf<String?>(null) }
     var showChatMenu by remember { mutableStateOf(false) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
     var sessionPendingDelete by remember { mutableStateOf<ChatSession?>(null) }
     var sessionPendingRename by remember { mutableStateOf<ChatSession?>(null) }
     var renameText by remember { mutableStateOf("") }
@@ -163,9 +166,9 @@ fun ChatScreen(
     var messageForActions by remember { mutableStateOf<ChatMessage?>(null) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
 
-    val galleryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri -> uri?.let { attachmentsToRead = listOf(it to false) } }
+    // Both the gallery and the document button open the same unfiltered picker. The old
+    // ActivityResultContracts.GetContent() path was single-select and MIME-filtered, which
+    // is what greyed out APK, BIN, notebook, source and ZIP files.
     val documentLauncher = rememberLauncherForActivityResult(
         UniversalFilePickerContract()
     ) { uris ->
@@ -280,8 +283,18 @@ fun ChatScreen(
 
     // The backing history remains chronological; history.asReversed() is displayed with
     // reverseLayout so visual/list index 0 is always the newest item at the bottom.
-    LaunchedEffect(history.lastOrNull()?.id) { listState.animateScrollToItem(0) }
-    LaunchedEffect(imeVisible) { if (imeVisible) listState.animateScrollToItem(0) }
+    //
+    // Auto-follow only when the newest item is already in view. Unconditionally calling
+    // animateScrollToItem(0) on every history change yanked the list back to the bottom
+    // while the user was reading older messages, which is why scrolling "did not work".
+    LaunchedEffect(history.lastOrNull()?.id) {
+        if (listState.firstVisibleItemIndex <= 1) {
+            listState.animateScrollToItem(0)
+        }
+    }
+    LaunchedEffect(imeVisible) {
+        if (imeVisible && listState.firstVisibleItemIndex <= 1) listState.animateScrollToItem(0)
+    }
     LaunchedEffect(Unit) { listState.scrollToItem(0) }
 
     val speechRecognizer = remember { SpeechRecognitionEngine(context) }
@@ -369,11 +382,17 @@ fun ChatScreen(
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary,
                             fontSize = 20.sp,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         AgentStatusSubtitle(visibleAgentState, runningElsewhere)
                     }
                 },
                 actions = {
+                    // Only the safety kill switch and the automation mode stay pinned to the
+                    // bar; new chat, the chat list and clear move into the overflow menu so the
+                    // title is not squeezed off a narrow screen (this device is 240 dp wide).
                     IconButton(
                         onClick = { if (automationEnabled) KillSwitch.disable() else KillSwitch.enable() },
                     ) {
@@ -407,21 +426,44 @@ fun ChatScreen(
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    IconButton(onClick = { viewModel.newChat() }) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "New chat",
-                            tint = TextSecondary
-                        )
-                    }
                     Box {
-                        IconButton(onClick = { showChatMenu = true }) {
+                        IconButton(onClick = { showOverflowMenu = true }) {
                             Icon(
-                                imageVector = Icons.Default.Forum,
-                                contentDescription = "Chats",
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "More actions",
                                 tint = TextSecondary
                             )
                         }
+                        DropdownMenu(
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false },
+                            modifier = Modifier.background(DarkSurface)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("New chat", color = TextPrimary, fontSize = 13.sp) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    viewModel.newChat()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Chats", color = TextPrimary, fontSize = 13.sp) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    showChatMenu = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Clear", color = TextPrimary, fontSize = 13.sp) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    viewModel.clearChat()
+                                }
+                            )
+                        }
+                    }
+                    // Chat list, still driven by showChatMenu so the overflow entry above can open it.
+                    Box {
                         DropdownMenu(
                             expanded = showChatMenu,
                             onDismissRequest = { showChatMenu = false },
@@ -510,9 +552,6 @@ fun ChatScreen(
                                 )
                             }
                         }
-                    }
-                    TextButton(onClick = { viewModel.clearChat() }) {
-                        Text("Clear", color = TextSecondary, fontSize = 12.sp)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkBackground)
@@ -772,10 +811,19 @@ fun ChatScreen(
             if (history.isEmpty()) {
                 item(key = "welcome") {
                             Column(
-                                modifier = Modifier.fillMaxWidth().padding(top = 96.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 24.dp, bottom = 24.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally,
                             ) {
-                                Text("How can I help?", color = TextPrimary, fontSize = 28.sp, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    "How can I help?",
+                                    color = TextPrimary,
+                                    fontSize = 28.sp,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                                 Spacer(Modifier.height(18.dp))
                                 val suggestions = listOf(
                                     "Find free video editors on FMHY",
@@ -1040,7 +1088,7 @@ fun ChatScreen(
                         scope.launch {
                             attachmentSheetState.hide()
                             showAttachmentSheet = false
-                            galleryLauncher.launch("image/*")
+                            documentLauncher.launch(UniversalFilePickerContract.REQUIRED_MIME_TYPES.toTypedArray())
                         }
                     }
                     AttachmentOption("Files", Icons.Default.Description) {
@@ -1235,7 +1283,10 @@ fun AgentStatusSubtitle(
         text = text,
         fontSize = 11.sp,
         color = color,
-        fontFamily = FontFamily.SansSerif
+        fontFamily = FontFamily.SansSerif,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
     )
 }
 

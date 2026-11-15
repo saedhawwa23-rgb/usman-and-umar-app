@@ -7,6 +7,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -24,16 +25,9 @@ class UniversalFilePickerContractTest {
         assertTrue(intent.categories?.contains(Intent.CATEGORY_OPENABLE) == true)
         assertEquals("*/*", intent.type)
         assertTrue(intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false))
-        val types = intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES).orEmpty().toSet()
-        assertTrue(types.containsAll(setOf(
-            "*/*",
-            "application/vnd.android.package-archive",
-            "application/zip",
-            "application/octet-stream",
-            "text/*",
-            "application/x-ipynb+json",
-            "application/json",
-        )))
+        // No EXTRA_MIME_TYPES: a hint list is treated as a filter by document providers
+        // even when type is */*, which greyed out APK/BIN/notebook/source/ZIP files.
+        assertNull(intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES))
         val requiredFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
         assertEquals(requiredFlags, intent.flags and requiredFlags)
 

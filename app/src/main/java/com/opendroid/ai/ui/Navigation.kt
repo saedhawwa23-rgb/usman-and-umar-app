@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -332,16 +333,16 @@ fun OpenDroidNavigation(
     }
 }
 
-sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
-    object Chat : Screen("chat", "Chat", Icons.Default.Chat)
-    object TaskManager : Screen("task_manager", "Tasks", Icons.Default.Assignment)
-    object Plan : Screen("plan", "Plan", Icons.Default.List)
-    object Memory : Screen("memory", "Memory", Icons.Default.Star)
-    object Social : Screen("social", "Social", Icons.Default.Share)
-    object Tools : Screen("tools", "Tools", Icons.Default.Extension)
-    object Macros : Screen("macros", "Macros", Icons.Default.Build)
-    object History : Screen("history", "Logs", Icons.Default.History)
-    object Settings : Screen("settings", "Settings", Icons.Default.Settings)
+sealed class Screen(val route: String, val title: String, val navLabel: String, val icon: ImageVector) {
+    object Chat : Screen("chat", "Chat", "Chat", Icons.Default.Chat)
+    object TaskManager : Screen("task_manager", "Tasks", "Tasks", Icons.Default.Assignment)
+    object Plan : Screen("plan", "Plan", "Plan", Icons.Default.List)
+    object Memory : Screen("memory", "Memory", "Mem", Icons.Default.Star)
+    object Social : Screen("social", "Social", "Social", Icons.Default.Share)
+    object Tools : Screen("tools", "Tools", "Tools", Icons.Default.Extension)
+    object Macros : Screen("macros", "Macros", "Macros", Icons.Default.Build)
+    object History : Screen("history", "Logs", "Logs", Icons.Default.History)
+    object Settings : Screen("settings", "Settings", "Set", Icons.Default.Settings)
 }
 
 @Composable
@@ -443,8 +444,11 @@ fun MainDashboard(
                         },
                         label = {
                             Text(
-                                text = tab.title,
+                                text = tab.navLabel,
                                 fontSize = 10.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
                                 color = if (isSelected) AppTheme.colors.textPrimary else AppTheme.colors.textSecondary,
                                 fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
                             )
