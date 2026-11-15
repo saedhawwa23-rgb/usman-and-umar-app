@@ -4,7 +4,7 @@ All notable changes to USMAN AND UMAR are recorded here.
 
 ## [3.10.0] - 2026-11-14
 
-Plugin registry, owner-paired remote control, and one design system. All four stages
+Plugin registry, owner-paired remote control, one design system, and durable state. All stages
 are unit-tested; nothing here is device-verified yet.
 
 ### Added
@@ -32,16 +32,23 @@ are unit-tested; nothing here is device-verified yet.
   2.0 font scale; `Contrast` implements WCAG 2.2 contrast maths and the tests assert
   AA for primary text in both themes; `ui/feedback/ErrorCatalogue.kt` is one
   (category -> message -> one action) catalogue with technical detail kept separate.
+- **Stage 5 - Persistence** (`core/plugin/PluginRegistryPersistence.kt`,
+  `core/remote/DeviceKeyStore.kt`, `core/security/SecretBytesStore.kt`): plugin
+  approvals and device pairings now survive a restart. Device keys are stored
+  through the Keystore-backed encrypted store; a value that cannot be decrypted is
+  treated as absent (fail closed). Restoring a plugin re-applies the capability
+  intersection, so a shrunk manifest can only narrow a grant, never widen it.
 
 ### Tests
 
-- 656 unit tests, 0 failures (baseline 623 before this release).
+- 667 unit tests, 0 failures (baseline 623 before this release).
 - New: PluginRegistryTest (8), RemoteControlServiceTest (12), DesignTokensTest (9),
-  ErrorCatalogueTest (4).
+  ErrorCatalogueTest (4), PluginRegistryPersistenceTest (5),
+  PersistentDeviceKeyStoreTest (6).
 
 ### Not verified
 
-- No real-device or emulator run yet; all Stage 1-3 checks are JVM unit tests only.
+- No real-device or emulator run yet; all Stage 1-5 checks are JVM unit tests only.
 - Stage 3 is the design-system and catalogue core: hardcoded English has not yet
   been extracted from every screen into `strings.xml`, and RTL/emulator screenshot
   tests are not yet present.
