@@ -2,6 +2,7 @@ package com.opendroid.ai.core.remote
 
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.Base64
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -233,6 +234,31 @@ class RemoteControlService(
 
     @Synchronized
     fun pairedKeyIds(): Set<String> = keyStore.all().map { it.keyId }.toSet()
+
+    /** The paired device for a key id, or null. Used by the controlling side to sign. */
+    @Synchronized
+    fun deviceForKey(keyId: String): PairedDevice? = keyStore.get(keyId)
+
+    /**
+     * A transferable copy of the pairing secret, for the owner to move to the controlling device
+     * by a channel they control (a password manager, a QR code, or typing it). It is never logged
+     * and this app never sends it over the network.
+     */
+    @Synchronized
+    fun exportKeyForTransfer(keyId: String): String? = keyStore.get(keyId)?.let { device ->
+        val payload = device.deviceId + "\n" + Base64.getEncoder().encodeToString(device.secret)
+        Base64.getEncoder().encodeToString(payload.toByteArray(Charsets.UTF_8))
+    }
+
+    /** Import a transfer code on the controlling device. Returns false if it cannot be read. */
+    @Synchronized
+    fun importKeyFromTransfer(keyId: String, blob: String): Boolean = runCatching {
+        val payload = String(Base64.getDecoder().decode(blob.trim()), Charsets.UTF_8)
+        val deviceId = payload.substringBefore('\n')
+        val secret = Base64.getDecoder().decode(payload.substringAfter('\n'))
+        require(deviceId.isNotBlank() && secret.isNotEmpty()) { "Transfer code is incomplete" }
+        keyStore.put(PairedDevice(keyId = keyId, deviceId = deviceId, secret = secret))
+    }.isSuccess
 
     private fun audit(deviceId: String, action: String, approval: String, outcome: String) {
         auditSink(RemoteAuditRecord(now(), deviceId, action, approval, outcome))

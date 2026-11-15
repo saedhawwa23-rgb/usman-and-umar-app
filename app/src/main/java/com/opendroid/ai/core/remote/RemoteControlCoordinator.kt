@@ -1,5 +1,7 @@
 package com.opendroid.ai.core.remote
 
+import java.util.UUID
+
 /**
  * Drives a remote-control pairing session on the target device.
  *
@@ -64,6 +66,26 @@ class RemoteControlCoordinator(
     fun isKillSwitchActive(): Boolean = service.isKillSwitchActive()
 
     fun pairedKeyIds(): List<String> = service.pairedKeyIds().sorted()
+
+    /**
+     * Sign an action for a paired device. The timestamp and nonce are fresh for every call, so a
+     * request is never reused.
+     */
+    fun sign(keyId: String, toolName: String, argumentsJson: String, risk: RemoteRisk): SignedRemoteRequest {
+        val device = service.deviceForKey(keyId)
+            ?: return throw IllegalStateException("That device is not paired on this phone.")
+        val timestamp = clock()
+        val nonce = UUID.randomUUID().toString()
+        return service.sign(keyId, device.deviceId, RemoteAction(toolName, argumentsJson, risk), timestamp, nonce)
+    }
+
+    /** The owner-readable transfer code for a paired device, or null if it is not paired. */
+    fun exportTransferCode(keyId: String): String? = service.exportKeyForTransfer(keyId)
+
+    /** Import a transfer code from the other device so this phone can act as the controller. */
+    fun importTransferCode(keyId: String, blob: String): StepResult =
+        if (service.importKeyFromTransfer(keyId, blob)) StepResult.Success("Device key imported. You can now send actions to that device.")
+        else StepResult.Rejected("That transfer code could not be read. Copy it again exactly.")
 
     /** Whole seconds remaining on a pairing code, floored at zero. */
     fun secondsRemaining(expiresAtMs: Long): Long = ((expiresAtMs - clock()).coerceAtLeast(0L)) / 1000L

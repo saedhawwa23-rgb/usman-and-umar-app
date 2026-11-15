@@ -54,13 +54,41 @@ additions are covered by unit tests and are not device-verified yet.
 - **Remote-control DI** (`di/AppModule.kt`): the device key store, service, and coordinator
   are provided as singletons. Keys persist through the same Keystore-backed encrypted store
   the other secrets use, so pairing survives a restart and a lost key fails closed.
+- **LAN transport** (`core/remote/LanRemoteControlServer.kt`,
+  `core/remote/LanRemoteClient.kt`, `core/remote/RemoteRequestCodec.kt`,
+  `core/remote/RemoteApprovalGate.kt`, `core/remote/RemoteTransportController.kt`): v3.10.0
+  and the pairing slice let a device pair but no request could arrive. The owner can now
+  turn on a line-oriented TCP listener (default port 45871, off until switched on) that
+  accepts one signed request at a time and answers it. Every connection goes through
+  `RemoteControlService.authenticate` (kill switch, pairing, clock window, nonce, signature),
+  then the owner's approval gate (deny on timeout), then the shared tool registry; a
+  rejection, denial, timeout, unknown tool, or bad line stops before execution. The app can
+  also act as the controller: it signs an action and sends it to a paired device's address.
+  This is the change to the 3.10.0 statement that the app "never opens an inbound port": it
+  now can, but only when the owner explicitly turns the listener on, and only on the owner's
+  own network. No public relay is used, and the LAN traffic itself is not encrypted, so the
+  screen says to use it only on a trusted network.
+- **Key transfer** (`core/remote/RemoteControlService.kt`,
+  `core/remote/RemoteControlCoordinator.kt`): the controlling phone needs the pairing key to
+  sign. The owner can export a base64 transfer code for a paired device and import it on the
+  controller by a channel they choose. The code is never logged and the app never sends it
+  over the network.
+- **Shared tool environment** (`accessibility/AndroidAgentToolEnvironment.kt`): the Android
+  side of the tool registry used to be a private inner class of `ChatViewModel`, so only the
+  chat agent could run a tool. It is now an injected `AgentToolEnvironment`, so the chat agent
+  and the LAN transport execute the same actions through the same code. Behaviour is
+  unchanged; the Android-specific code is now covered by the LAN transport tests through a
+  fake environment.
 
 ### Tests
 
 - `core/agent/AgentToolRegistryTest` (14), `core/remote/RemoteRequestHandlerTest` (8) and
   `core/remote/RemoteControlCoordinatorTest` (11) are new; `UniversalFilePickerContractTest`
-  (2) now asserts arbitrary file types are accepted. Full JVM suite: 700 tests, 0 failures,
-  0 errors, 0 skipped.
+  (2) now asserts arbitrary file types are accepted. The LAN transport adds
+  `core/remote/RemoteRequestCodecTest` (6), `core/remote/RemoteApprovalGateTest` (6) and
+  `core/remote/LanRemoteControlServerTest` (8), the last driving a real loopback socket
+  through a real service, gate, and registry. Full JVM suite: 720 tests, 0 failures, 0
+  errors, 0 skipped.
 
 ## [3.10.0] - 2026-11-14
 

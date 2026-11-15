@@ -33,18 +33,20 @@ import com.opendroid.ai.ui.theme.AppTheme
 import com.opendroid.ai.ui.viewmodel.RemoteControlViewModel
 
 /**
- * Owner-facing device control: pair a controlling device, list and remove paired devices, and
- * engage the kill switch.
+ * Owner-facing device control: pair a controlling device, run the LAN listener, approve or deny
+ * inbound actions, and send signed actions to a paired device.
  *
- * This screen pairs and manages devices only. It does not open an inbound port and does not use
- * a public relay; carrying a request to this device needs the owner's own private network or
- * tunnel. Controlling this phone's own apps runs through the accessibility service and is not
- * started from here.
+ * The listener is off until the owner turns it on and is meant for a trusted private network
+ * only: the payload is signed, but the LAN traffic is not encrypted. It does not use a public
+ * relay. Controlling a Windows, macOS or Linux computer is not supported - there is no agent to
+ * install on one.
  */
 @Composable
 fun RemoteControlScreen(viewModel: RemoteControlViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsState()
     var codeEntry by remember { mutableStateOf("") }
+    var transferCode by remember { mutableStateOf("") }
+    var host by remember { mutableStateOf("") }
     val colors = AppTheme.colors
 
     Column(
@@ -61,6 +63,43 @@ fun RemoteControlScreen(viewModel: RemoteControlViewModel = hiltViewModel()) {
             color = colors.textSecondary,
             fontSize = 13.sp
         )
+
+        state.pendingApproval?.let { pending ->
+            SectionCard(title = "Remote action needs your approval") {
+                Text(pending.summary, color = colors.textPrimary, fontSize = 13.sp)
+                Text("Risk: ${pending.risk.name}", color = colors.textSecondary, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = { viewModel.approvePending() }) { Text("APPROVE") }
+                    OutlinedButton(onClick = { viewModel.denyPending() }) { Text("DENY") }
+                }
+            }
+        }
+
+        SectionCard(title = "Connection (LAN)") {
+            Text(
+                if (state.listening)
+                    "Listening on port ${state.listenPort ?: "?"}. A paired device on this network can reach this phone."
+                else "Not listening. Turn this on so a paired device on this network can reach this phone.",
+                color = if (state.listening) colors.accentGreenButton else colors.textSecondary,
+                fontSize = 12.sp
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(
+                    onClick = { viewModel.startListening() },
+                    enabled = !state.listening && !state.killSwitchActive
+                ) { Text("START LISTENING") }
+                OutlinedButton(
+                    onClick = { viewModel.stopListening() },
+                    enabled = state.listening
+                ) { Text("STOP") }
+            }
+            Text(
+                "Use this only on a trusted network. The request is signed, but the connection " +
+                    "itself is not encrypted. No public relay is used.",
+                color = colors.textSecondary,
+                fontSize = 11.sp
+            )
+        }
 
         SectionCard(title = "Pair this device") {
             Text(
@@ -109,9 +148,59 @@ fun RemoteControlScreen(viewModel: RemoteControlViewModel = hiltViewModel()) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(keyId, color = colors.textPrimary, fontSize = 13.sp)
-                        TextButton(onClick = { viewModel.unpair(keyId) }) { Text("UNPAIR") }
+                        Row {
+                            TextButton(onClick = { viewModel.exportTransferCode(keyId) }) { Text("EXPORT") }
+                            TextButton(onClick = { viewModel.unpair(keyId) }) { Text("UNPAIR") }
+                        }
                     }
                 }
+                Text(
+                    "To control another phone, copy its transfer code here (the other phone shows " +
+                        "it from its own Remote screen).",
+                    color = colors.textSecondary,
+                    fontSize = 12.sp
+                )
+                OutlinedTextField(
+                    value = transferCode,
+                    onValueChange = { transferCode = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Transfer code from the other device") }
+                )
+                Button(
+                    onClick = { viewModel.importTransferCode(transferCode); transferCode = "" },
+                    enabled = transferCode.isNotBlank()
+                ) { Text("IMPORT TRANSFER CODE") }
+            }
+        }
+
+        SectionCard(title = "Send an action to a paired device") {
+            Text(
+                "Enter the paired device's LAN address and the tool to run. The request is signed " +
+                    "with the shared key before it is sent.",
+                color = colors.textSecondary,
+                fontSize = 12.sp
+            )
+            OutlinedTextField(
+                value = host,
+                onValueChange = { host = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Device address (e.g. 192.168.1.20)") },
+                singleLine = true
+            )
+            OutlinedButton(
+                onClick = { viewModel.sendAction(host, "battery_status", "{}") },
+                enabled = host.isNotBlank() && state.pairedDevices.isNotEmpty()
+            ) { Text("SEND: BATTERY STATUS") }
+            OutlinedButton(
+                onClick = { viewModel.sendAction(host, "network_status", "{}") },
+                enabled = host.isNotBlank() && state.pairedDevices.isNotEmpty()
+            ) { Text("SEND: NETWORK STATUS") }
+            if (state.pairedDevices.isEmpty()) {
+                Text(
+                    "Pair a device, or import its transfer code, before sending.",
+                    color = colors.textSecondary,
+                    fontSize = 11.sp
+                )
             }
         }
 

@@ -15,7 +15,13 @@ import com.opendroid.ai.actions.AndroidMediaPlaybackVerifier
 import com.opendroid.ai.actions.ActionDispatcher
 import com.opendroid.ai.actions.MediaPlaybackVerifier
 import com.opendroid.ai.core.agent.ActionSequenceExecutor
+import com.opendroid.ai.accessibility.AndroidAgentToolEnvironment
+import com.opendroid.ai.core.agent.AgentToolEnvironment
 import com.opendroid.ai.core.remote.DeviceKeyStore
+import com.opendroid.ai.core.remote.LanRemoteClient
+import com.opendroid.ai.core.remote.LanRemoteControlServer
+import com.opendroid.ai.core.remote.RemoteApprovalGate
+import com.opendroid.ai.core.remote.RemoteTransportController
 import com.opendroid.ai.core.remote.PersistentDeviceKeyStore
 import com.opendroid.ai.core.remote.RemoteControlCoordinator
 import com.opendroid.ai.core.remote.RemoteControlService
@@ -108,6 +114,36 @@ object AppModule {
     @Singleton
     fun provideRemoteControlCoordinator(service: RemoteControlService): RemoteControlCoordinator =
         RemoteControlCoordinator(service = service)
+
+    @Provides
+    @Singleton
+    fun provideRemoteApprovalGate(): RemoteApprovalGate = RemoteApprovalGate()
+
+    @Provides
+    @Singleton
+    fun provideLanRemoteControlServer(
+        service: RemoteControlService,
+        approvalGate: RemoteApprovalGate,
+        environment: AgentToolEnvironment,
+    ): LanRemoteControlServer = LanRemoteControlServer(
+        service = service,
+        approvalGate = approvalGate,
+        environment = environment,
+    )
+
+    @Provides
+    @Singleton
+    fun provideRemoteTransportController(server: LanRemoteControlServer): RemoteTransportController =
+        RemoteTransportController(server)
+
+    @Provides
+    @Singleton
+    fun provideLanRemoteClient(): LanRemoteClient = LanRemoteClient()
+
+    @Provides
+    @Singleton
+    fun provideAgentToolEnvironment(environment: AndroidAgentToolEnvironment): AgentToolEnvironment =
+        environment
 
     @Provides
     @Singleton
