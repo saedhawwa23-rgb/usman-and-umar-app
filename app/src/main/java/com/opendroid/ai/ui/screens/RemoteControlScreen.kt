@@ -108,6 +108,13 @@ fun RemoteControlScreen(viewModel: RemoteControlViewModel = hiltViewModel()) {
                 color = colors.textSecondary,
                 fontSize = 12.sp
             )
+            Text(
+                "The pairing code is short-lived for safety. It is not a session limit: once a " +
+                    "device is paired and connected, the session stays up until you disconnect it, " +
+                    "revoke it, or it goes idle past the inactivity policy.",
+                color = colors.textSecondary,
+                fontSize = 11.sp
+            )
             Button(
                 onClick = { viewModel.startPairing() },
                 enabled = !state.killSwitchActive
@@ -116,7 +123,11 @@ fun RemoteControlScreen(viewModel: RemoteControlViewModel = hiltViewModel()) {
             state.pairingCode?.let { code ->
                 Text("Pairing code", color = colors.textSecondary, fontSize = 12.sp)
                 Text(code, color = colors.accentCyan, fontSize = 34.sp, fontWeight = FontWeight.Bold)
-                Text("Expires in about 5 minutes.", color = colors.textSecondary, fontSize = 11.sp)
+                Text(
+                    "Pairing code expires in about 5 minutes. This does not limit a connected session.",
+                    color = colors.textSecondary,
+                    fontSize = 11.sp
+                )
             }
 
             Text(
@@ -135,6 +146,45 @@ fun RemoteControlScreen(viewModel: RemoteControlViewModel = hiltViewModel()) {
                 onClick = { viewModel.completePairing(codeEntry); codeEntry = "" },
                 enabled = codeEntry.length == 6 && !state.killSwitchActive
             ) { Text("PAIR") }
+        }
+
+        SectionCard(title = "Active sessions") {
+            if (state.sessions.isEmpty()) {
+                Text(
+                    "No sessions yet. A session starts when a device is paired and connected, and " +
+                        "stays up until you disconnect it or policy ends it.",
+                    color = colors.textSecondary,
+                    fontSize = 12.sp
+                )
+            } else {
+                state.sessions.forEach { session ->
+                    val statusColor = when (session.state) {
+                        com.opendroid.ai.core.remote.RemoteSessionState.CONNECTED -> colors.accentGreenButton
+                        com.opendroid.ai.core.remote.RemoteSessionState.RECONNECTING -> colors.accentCyan
+                        com.opendroid.ai.core.remote.RemoteSessionState.PAIRING -> colors.textSecondary
+                        else -> colors.accentRed
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(session.deviceId, color = colors.textPrimary, fontSize = 13.sp)
+                            Text(
+                                session.state.name + " - " + session.endReason.message,
+                                color = statusColor,
+                                fontSize = 12.sp
+                            )
+                        }
+                        if (session.isLive) {
+                            TextButton(onClick = { viewModel.disconnectSession(session.deviceId) }) {
+                                Text("DISCONNECT")
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         SectionCard(title = "Paired devices") {

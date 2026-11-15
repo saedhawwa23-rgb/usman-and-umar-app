@@ -25,6 +25,7 @@ import com.opendroid.ai.core.remote.RemoteTransportController
 import com.opendroid.ai.core.remote.PersistentDeviceKeyStore
 import com.opendroid.ai.core.remote.RemoteControlCoordinator
 import com.opendroid.ai.core.remote.RemoteControlService
+import com.opendroid.ai.core.remote.RemoteSessionManager
 import com.opendroid.ai.core.security.KeystoreSecretBytesStore
 import com.opendroid.ai.core.security.KeystoreSecretRecords
 import com.opendroid.ai.core.security.SharedPreferencesSecretRecordStorage
@@ -112,8 +113,14 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideRemoteControlCoordinator(service: RemoteControlService): RemoteControlCoordinator =
-        RemoteControlCoordinator(service = service)
+    fun provideRemoteSessionManager(): RemoteSessionManager = RemoteSessionManager()
+
+    @Provides
+    @Singleton
+    fun provideRemoteControlCoordinator(
+        service: RemoteControlService,
+        sessions: RemoteSessionManager,
+    ): RemoteControlCoordinator = RemoteControlCoordinator(service = service, sessions = sessions)
 
     @Provides
     @Singleton

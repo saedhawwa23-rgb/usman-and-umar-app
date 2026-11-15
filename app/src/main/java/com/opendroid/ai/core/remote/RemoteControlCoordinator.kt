@@ -12,6 +12,7 @@ import java.util.UUID
  */
 class RemoteControlCoordinator(
     private val service: RemoteControlService,
+    private val sessions: RemoteSessionManager = RemoteSessionManager(),
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -31,6 +32,7 @@ class RemoteControlCoordinator(
     /** Start pairing on this device. The code is short-lived and single-use. */
     fun startPairing(deviceId: String, deviceName: String): PairingStart {
         val session = service.startPairing(deviceId = deviceId, deviceName = deviceName)
+        sessions.beginPairing(deviceId, clock())
         return PairingStart(
             code = session.code,
             deviceId = session.deviceId,
@@ -46,20 +48,54 @@ class RemoteControlCoordinator(
             return StepResult.Rejected("Enter the $PAIRING_CODE_LENGTH-digit pairing code.")
         }
         return when (val result = service.completePairing(trimmed, keyId)) {
-            RemoteAuthentication.Authenticated ->
+            RemoteAuthentication.Authenticated -> {
+                // The device is authenticated now, so the session clock starts here - not when the
+                // pairing code was shown. A five-minute code never bounds the session.
+                val deviceId = service.deviceForKey(keyId)?.deviceId
+                if (deviceId != null) sessions.markConnected(deviceId, clock())
                 StepResult.Success("Device paired. It can now send actions for your approval.")
+            }
             is RemoteAuthentication.Rejected -> StepResult.Rejected(result.reason)
         }
     }
 
-    /** Remove a paired device and delete its key. */
-    fun unpair(keyId: String): StepResult =
-        if (service.unpair(keyId)) StepResult.Success("Device unpaired and its key was deleted.")
-        else StepResult.Rejected("That device is not paired.")
+    // ---- Session lifecycle ----
 
-    /** The kill switch disables remote control immediately and clears open sessions. */
+    fun sessionFor(deviceId: String): RemoteSession? = sessions.session(deviceId)
+
+    fun sessions(): List<RemoteSession> = sessions.all()
+
+    /** Evaluate session policy; returns any sessions that just ended, with the reason. */
+    fun tickSessions(): List<RemoteSession> = sessions.tick(clock())
+
+    /** Count a signed, authenticated action as activity and as a heartbeat. */
+    fun noteSessionActivity(deviceId: String) = sessions.recordActivity(deviceId, clock())
+
+    fun noteHeartbeat(deviceId: String) = sessions.recordHeartbeat(deviceId, clock())
+
+    fun disconnectSession(deviceId: String): StepResult {
+        val ended = sessions.disconnect(deviceId, clock())
+            ?: return StepResult.Rejected("There is no session for that device.")
+        return StepResult.Success(ended.endReason.message)
+    }
+
+    fun idleSecondsRemaining(deviceId: String): Long = sessions.idleSecondsRemaining(deviceId, clock())
+
+    /** Remove a paired device and delete its key. Any live session for it ends as revoked. */
+    fun unpair(keyId: String): StepResult {
+        val device = service.deviceForKey(keyId)
+        return if (service.unpair(keyId)) {
+            device?.let { sessions.revoke(it.deviceId) }
+            StepResult.Success("Device unpaired and its key was deleted.")
+        } else {
+            StepResult.Rejected("That device is not paired.")
+        }
+    }
+
+    /** The kill switch disables remote control immediately and ends every open session. */
     fun engageKillSwitch(): StepResult {
         service.engageKillSwitch()
+        sessions.onKillSwitch()
         return StepResult.Success("Kill switch engaged. Remote control is disabled and open sessions are closed.")
     }
 

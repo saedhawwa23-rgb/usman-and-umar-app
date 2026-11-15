@@ -2,6 +2,46 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [Unreleased]
+
+Standards-alignment pass on the Plugin and Remote features: a real session lifecycle for remote
+control, a documented plugin manifest with interoperability and version compatibility, and plugin
+health/execution history. All additions are covered by unit tests (753 total, 0 failures) and are
+not device-verified yet. The app version stays 3.10.1; this work is not released.
+
+### Added
+
+- **Remote session lifecycle** (`core/remote/RemoteSessionManager.kt`): sessions now have explicit
+  states (Pairing, Connected, Reconnecting, Disconnected, Expired, Revoked) and explicit end
+  reasons. Heartbeat monitoring moves a silent session to Reconnecting, then to Disconnected after
+  the reconnect grace window. Inactivity and maximum-duration policies end a session, and every end
+  reports why. The pairing code's five-minute expiry never bounds an established session.
+- **Plugin manifest and interoperability** (`core/plugin/PluginManifest.kt`): a machine-readable
+  manifest with declared kind, interoperability protocols (OpenAPI 3.1, MCP, OAuth 2.0/OIDC,
+  REST/JSON, browser, local device), capabilities, dependencies and version compatibility.
+  `checkManifest` fails closed on a missing dependency, an app version that is too low, or an
+  unsatisfied semver range.
+- **Plugin lifecycle** (`core/plugin/PluginRegistry.kt`): install, connect, enable, disable, update
+  and remove, plus `noteUpdate`/`applyUpdate` that can never widen the owner's grant, and
+  health (UNKNOWN/HEALTHY/DEGRADED/FAILING) derived from a bounded execution history.
+
+### Fixed
+
+- **Remote session no longer ends with the pairing code**: there was no session model at all; the
+  transport was one-shot. A completed pairing now opens a Connected session that survives past the
+  five-minute pairing window while heartbeats continue.
+- **A disabled plugin is refused before any request**: `authorize` now denies a plugin whose
+  install state is Disabled or Removed, not only an unapproved or revoked one.
+- **The Remote screen explains the two timers**: the pairing-code text now states that the
+  five-minute code is not a session limit, and an Active sessions list shows each session's state
+  and end reason with an immediate Disconnect.
+
+### Known limitations (not verified on a device)
+
+- Remote control still has no desktop agent: controlling a Windows, macOS or Linux computer, and
+  routing a phone's internet through a desktop gateway, are not implemented. See the comparison
+  report for the BLOCKED items.
+
 ## [3.10.1] - 2026-11-12
 
 Fixes for the attachment picker, the chat layout, and the remote-control execution path. The
