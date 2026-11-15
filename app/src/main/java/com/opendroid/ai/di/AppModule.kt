@@ -15,6 +15,14 @@ import com.opendroid.ai.actions.AndroidMediaPlaybackVerifier
 import com.opendroid.ai.actions.ActionDispatcher
 import com.opendroid.ai.actions.MediaPlaybackVerifier
 import com.opendroid.ai.core.agent.ActionSequenceExecutor
+import com.opendroid.ai.core.remote.DeviceKeyStore
+import com.opendroid.ai.core.remote.PersistentDeviceKeyStore
+import com.opendroid.ai.core.remote.RemoteControlCoordinator
+import com.opendroid.ai.core.remote.RemoteControlService
+import com.opendroid.ai.core.security.KeystoreSecretBytesStore
+import com.opendroid.ai.core.security.KeystoreSecretRecords
+import com.opendroid.ai.core.security.SharedPreferencesSecretRecordStorage
+import com.opendroid.ai.core.security.AndroidKeyStoreAeadCipher
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -72,6 +80,35 @@ object AppModule {
     @Singleton
     fun provideMediaPlaybackVerifier(): MediaPlaybackVerifier = AndroidMediaPlaybackVerifier()
 
+    /**
+     * Encrypted, Keystore-backed storage for paired-device keys, kept in the same SharedPreferences
+     * file the other secret stores use. A value that cannot be decrypted is treated as absent, so a
+     * lost key fails closed (the device reads as unpaired) instead of falling back to plaintext.
+     */
+    @Provides
+    @Singleton
+    fun provideRemoteDeviceKeyStore(@ApplicationContext context: Context): DeviceKeyStore =
+        PersistentDeviceKeyStore(
+            KeystoreSecretBytesStore(
+                KeystoreSecretRecords(
+                    storage = SharedPreferencesSecretRecordStorage(
+                        context.applicationContext.getSharedPreferences(REMOTE_PREFERENCES, Context.MODE_PRIVATE)
+                    ),
+                    cipher = AndroidKeyStoreAeadCipher(REMOTE_KEY_ALIAS),
+                )
+            )
+        )
+
+    @Provides
+    @Singleton
+    fun provideRemoteControlService(keyStore: DeviceKeyStore): RemoteControlService =
+        RemoteControlService(keyStore = keyStore)
+
+    @Provides
+    @Singleton
+    fun provideRemoteControlCoordinator(service: RemoteControlService): RemoteControlCoordinator =
+        RemoteControlCoordinator(service = service)
+
     @Provides
     @Singleton
     fun provideOkHttpClient(): OkHttpClient {
@@ -92,4 +129,7 @@ object AppModule {
         },
         hasAction = { action -> actionDispatcher.get().hasAction(action) }
     )
+
+    private const val REMOTE_PREFERENCES = "remote_control_secure"
+    private const val REMOTE_KEY_ALIAS = "opendroid_remote_control_key"
 }

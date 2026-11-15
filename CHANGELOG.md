@@ -42,12 +42,25 @@ additions are covered by unit tests and are not device-verified yet.
   A rejection, a denial, a timeout, the kill switch, or an unknown tool each stop before
   execution. `RemoteControlService` remains the only authority on pairing, replay, the clock
   window and the kill switch; the handler does not re-implement any of those checks.
+- **Device pairing screen** (`ui/screens/RemoteControlScreen.kt`,
+  `ui/viewmodel/RemoteControlViewModel.kt`, `core/remote/RemoteControlCoordinator.kt`): the
+  remote-control core was reachable only from its own tests. The new Remote Control screen,
+  opened from the chat drawer's "Remote" entry, starts a pairing session, shows the one-time
+  code, completes pairing with a code from another device, lists paired devices with an
+  unpair action, and engages the kill switch. The coordinator only sequences
+  `RemoteControlService`; it holds no key material and performs no cryptography. The screen
+  states plainly that it cannot reach a Windows, macOS or Linux computer and that requests
+  need a transport the owner provides.
+- **Remote-control DI** (`di/AppModule.kt`): the device key store, service, and coordinator
+  are provided as singletons. Keys persist through the same Keystore-backed encrypted store
+  the other secrets use, so pairing survives a restart and a lost key fails closed.
 
 ### Tests
 
-- `core/agent/AgentToolRegistryTest` (14) and `core/remote/RemoteRequestHandlerTest` (8) are
-  new; `UniversalFilePickerContractTest` (2) now asserts arbitrary file types are accepted.
-  Full JVM suite: 689 tests, 0 failures, 0 errors, 0 skipped.
+- `core/agent/AgentToolRegistryTest` (14), `core/remote/RemoteRequestHandlerTest` (8) and
+  `core/remote/RemoteControlCoordinatorTest` (11) are new; `UniversalFilePickerContractTest`
+  (2) now asserts arbitrary file types are accepted. Full JVM suite: 700 tests, 0 failures,
+  0 errors, 0 skipped.
 
 ## [3.10.0] - 2026-11-14
 

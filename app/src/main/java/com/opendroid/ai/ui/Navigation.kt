@@ -62,6 +62,7 @@ object OpenDroidRoutes {
     const val TERMUX = "termux"
     const val GOOGLE_DRIVE = "google_drive"
     const val UNIVERSAL_AGENT = "universal_agent"
+    const val REMOTE_CONTROL = "remote_control"
 }
 
 /**
@@ -191,6 +192,9 @@ fun OpenDroidNavigation(
                 },
                 onNavigateToGoogleDrive = {
                     navController.navigate(OpenDroidRoutes.GOOGLE_DRIVE)
+                },
+                onNavigateToRemoteControl = {
+                    navController.navigate(OpenDroidRoutes.REMOTE_CONTROL)
                 }
             )
         }
@@ -330,6 +334,10 @@ fun OpenDroidNavigation(
                 onBack = { navController.popBackStack() },
             )
         }
+
+        composable(OpenDroidRoutes.REMOTE_CONTROL) {
+            RemoteControlScreen(viewModel = hiltViewModel())
+        }
     }
 }
 
@@ -363,6 +371,7 @@ fun MainDashboard(
     onNavigateToTermux: () -> Unit = {},
     onNavigateToUniversalAgent: () -> Unit = {},
     onNavigateToGoogleDrive: () -> Unit = {},
+    onNavigateToRemoteControl: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -484,7 +493,7 @@ fun MainDashboard(
                     Screen.Chat -> ChatScreen(
                         viewModel = chatViewModel,
                         onOpenProjects = { currentTab = Screen.TaskManager },
-                        onOpenRemote = { currentTab = Screen.Settings },
+                        onOpenRemote = onNavigateToRemoteControl,
                         onOpenScheduled = onNavigateToRoutines,
                         onOpenPlugins = {},
                     )
