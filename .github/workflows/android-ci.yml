@@ -59,7 +59,9 @@ jobs:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Run unit tests and build debug APK
-        run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
+        # The two JVM modules carry the remote-control protocol and the desktop agent; their
+        # tests are plain JUnit and headless, so they run here alongside the app's.
+        run: ./gradlew testDebugUnitTest :remote-protocol:test :desktop-agent:test assembleDebug --stacktrace
 
       - name: Upload installable debug APK
         if: success()

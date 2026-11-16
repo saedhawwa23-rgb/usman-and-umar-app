@@ -7,8 +7,16 @@ All notable changes to USMAN AND UMAR are recorded here.
 Standards-alignment pass on the Plugin and Remote features: a real session lifecycle for remote
 control, a documented plugin manifest with interoperability and version compatibility, plugin
 health/execution history, and a real desktop companion agent for remote control. All additions are
-covered by unit tests (862 total, 0 failures) and are not device-verified yet. The app version stays
-3.10.1; this work is not released.
+covered by unit tests (862 total: 813 in `:app`, 26 in `:remote-protocol`, 23 in `:desktop-agent`)
+and are not device-verified yet. The app version stays 3.10.1; this work is not released.
+
+### Changed
+
+- **CI runs the new modules' tests** (`.github/workflows/android-ci.yml`): the unit-test job ran only
+  `:app:testDebugUnitTest`, so the 49 tests added with `:remote-protocol` and `:desktop-agent` were
+  never executed on CI even though the changelog counted them. The job now runs
+  `:remote-protocol:test` and `:desktop-agent:test` as well. Both are plain JUnit over JVM modules
+  with no AWT `Robot` in the tests, so they run headless.
 
 ### Added
 
