@@ -18,3 +18,28 @@ Canonical defaults — `needs-triage`, `needs-info`, `ready-for-agent`, `ready-f
 ### Domain docs
 
 Single-context: `CONTEXT.md` at the root, ADRs in `docs/adr/`. See `docs/agents/domain.md`.
+
+## Workspace facts (verified)
+
+Two separate apps live side by side in `/workspace/project`. Do not confuse them.
+
+- **This repo (`uu-app`)** — `saedhawwa23-rgb/usman-and-umar-app`, package
+  `com.usmanandumar.app`, branch `feature/hybrid-task-orchestrator`, version 3.10.1
+  (versionCode 32). Remote/plugin development. APK deliverable:
+  `USMAN-AND-UMAR-v3.10.1.apk` (debug-signed, ABIs arm64-v8a, armeabi-v7a, x86, x86_64).
+- **`../umar-work` (Mobile-Harness)** — package `com.jarves.mh`, version 1.0.15, remote
+  `saedhawwa23-rgb/UMAR-and-Usman-ASHEBIR.git`. This is the app with the PRoot / DeepSeek
+  Harness / Claude Code / Antigravity behaviors. It is a separate workstream; never copy
+  commits or APKs between the two.
+
+Build: `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ANDROID_HOME=/tmp/tools/sdk \
+ANDROID_SDK_ROOT=/tmp/tools/sdk ./gradlew :app:assembleDebug` (and `:app:testDebugUnitTest`).
+Build tools 36.0.0. Unit suite: 917 tests (868 `:app`, 26 `:remote-protocol`, 23
+`:desktop-agent`), all green as of 3.10.1.
+
+Push to this repo currently fails with HTTP 403: `GITHUB_TOKEN` is a GitHub App
+installation token (read-only; API write returns "Resource not accessible by
+integration"). Commits stay local until push access is granted.
+
+The `AGENTS.md` content above this section (issue tracker `JMAN730/opendroid`) is inherited
+from an upstream fork and does not describe this repository.
