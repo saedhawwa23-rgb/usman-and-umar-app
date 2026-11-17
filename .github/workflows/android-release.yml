@@ -10,7 +10,7 @@ on:
       tag:
         description: GitHub Release tag to create
         required: true
-        default: v3.10.2
+        default: v3.10.4
 
 permissions:
   contents: write
@@ -94,8 +94,8 @@ jobs:
           out=dist
           mkdir -p "$out"
           test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.10.2'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='33'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.10.4'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='34'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
           certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt")
           expected_sha1=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | awk -F': ' '/SHA1:/{print toupper($2); exit}')
@@ -107,25 +107,25 @@ jobs:
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
           grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' "$out/PROOT_ELF.txt"
           sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
-          cp "$apk" "$out/USMAN-AND-UMAR-v3.10.2.apk"
-          sha256sum "$out/USMAN-AND-UMAR-v3.10.2.apk" | tee "$out/SHA256SUMS.txt"
+          cp "$apk" "$out/USMAN-AND-UMAR-v3.10.4.apk"
+          sha256sum "$out/USMAN-AND-UMAR-v3.10.4.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nref=%s\ntag=%s\n' "$(git rev-parse HEAD)" "${{ inputs.ref }}" "${{ inputs.tag }}" > "$out/BUILD_METADATA.txt"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631
         with:
-          tag_name: ${{ inputs.tag || 'v3.10.2' }}
+          tag_name: ${{ inputs.tag || 'v3.10.4' }}
           target_commitish: ${{ steps.build-meta.outputs.commit }}
-          name: USMAN AND UMAR ${{ inputs.tag || 'v3.10.2' }}
+          name: USMAN AND UMAR ${{ inputs.tag || 'v3.10.4' }}
           body: |
-            USMAN AND UMAR v3.10.2 - encrypted remote/grant stores, durable workflow receipts, MCP and OpenAPI execution.
+            USMAN AND UMAR v3.10.4 - Plugin and Remote redesigned as working dashboards on a shared navy, emerald and electric-blue identity.
 
             Commit: `${{ steps.build-meta.outputs.commit }}`
             Package: `com.usmanandumar.app`
-            Version: `3.10.2` (versionCode `33`)
+            Version: `3.10.4` (versionCode `34`)
             Build type: `debug` (release signing secrets are not in the repository)
 
-            Verified by automated unit tests (937 tests, 0 failures):
+            Verified by automated unit tests (956 tests, 0 failures):
             - Remote: pairing (expired/reused code), replay, expiry, bad signature, and tampered
               arguments are rejected; the owner's approval defaults to Deny after 60 seconds; the
               kill switch blocks and closes sessions; unpair removes keys; audit records carry no
