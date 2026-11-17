@@ -2,15 +2,18 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
-## [Unreleased]
+## [3.10.2] - 2026-11-12
+
+Encrypted persistence for the unattended-operation groundwork, durable workflow execution, and a
+real MCP client plus OpenAPI route execution. The app version moves to 3.10.2 (versionCode 33) and
+this work is released as the `v3.10.2` GitHub Release (debug-signed).
 
 Unattended-operation groundwork on the Plugin and Remote features: a persistent, revocable
 authorization grant that is enforced at the real execution boundary, automatic reconnection that
 survives an app or phone restart and a network drop, and three built-in integrations that are
 registered at startup so the workflow engine has real tools before any external plugin exists.
-All additions are covered by unit tests (917 total: 868 in `:app`, 26 in `:remote-protocol`, 23 in
-`:desktop-agent`) and are not device-verified yet. The app version stays 3.10.1; this work is not
-released.
+All additions are covered by unit tests (937 total: 888 in `:app`, 26 in `:remote-protocol`, 23 in
+`:desktop-agent`) and are not device-verified yet.
 
 ### Added
 
@@ -50,6 +53,21 @@ released.
   `MultiPluginWorkflowDemoTest` runs one workflow across three real registered integrations in
   sequence and asserts the exact order and that the HTTP integration fetched the URL the text
   integration produced.
+- **Encrypted reconnect and grant stores** (`core/remote/ReconnectionCoordinator.kt`,
+  `core/plugin/PersistentAuthorizationStore.kt`, `di/AppModule.kt`): the reconnect record and the
+  plugin grant are now persisted through the Keystore-backed secret store instead of a plaintext
+  JSON file, so a record that cannot be decrypted reads as absent rather than being trusted.
+- **Durable execution receipts** (`core/workflow/ExecutionReceiptStore.kt`,
+  `core/workflow/WorkflowEngine.kt`, `data/repository/WorkspaceWorkflowRunner.kt`): a step's
+  external effect is recorded by a stable receipt key before the tool runs, so an interrupted run
+  resumed at application start does not repeat an action that already happened; an explicit owner
+  retry clears the receipt for that step only.
+- **MCP client and OpenAPI route execution** (`core/connector/McpToolDiscovery.kt`,
+  `core/plugin/OpenApiToolRegistrar.kt`): an MCP server's tools are discovered with a JSON-RPC
+  `tools/list` call and registered on the existing MCP connector, and an imported OpenAPI
+  document's operations are registered so they execute through the generic HTTP connector. Both
+  run through the same `UniversalToolRegistry.execute` path, so the kill switch, the approval gate
+  and the execution log apply unchanged.
 
 ### Fixed
 
@@ -69,7 +87,7 @@ Standards-alignment pass on the Plugin and Remote features: a real session lifec
 control, a documented plugin manifest with interoperability and version compatibility, plugin
 health/execution history, and a real desktop companion agent for remote control. All additions are
 covered by unit tests (862 total: 813 in `:app`, 26 in `:remote-protocol`, 23 in `:desktop-agent`)
-and are not device-verified yet. The app version stays 3.10.1; this work is not released.
+and are not device-verified yet.
 
 ### Changed
 
