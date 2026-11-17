@@ -176,6 +176,10 @@ class PluginExecutionGate(
         return delegate.decide(invocation)
     }
 
+    /** A copy of this gate that forwards non-plugin tools to [delegate]. */
+    fun withDelegate(delegate: ConnectorApprovalGate): PluginExecutionGate =
+        PluginExecutionGate(pluginRegistry, authorizationStore, delegate)
+
     /** The specific refusal reason, for a UI or a log line. Null when the call may proceed. */
     fun refusalReason(invocation: ConnectorInvocation): String? {
         val plugin = pluginRegistry.get(invocation.tool.connectorId) ?: return null

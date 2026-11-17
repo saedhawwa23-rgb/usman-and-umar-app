@@ -8,7 +8,7 @@ Unattended-operation groundwork on the Plugin and Remote features: a persistent,
 authorization grant that is enforced at the real execution boundary, automatic reconnection that
 survives an app or phone restart and a network drop, and three built-in integrations that are
 registered at startup so the workflow engine has real tools before any external plugin exists.
-All additions are covered by unit tests (916 total: 867 in `:app`, 26 in `:remote-protocol`, 23 in
+All additions are covered by unit tests (917 total: 868 in `:app`, 26 in `:remote-protocol`, 23 in
 `:desktop-agent`) and are not device-verified yet. The app version stays 3.10.1; this work is not
 released.
 
@@ -23,8 +23,11 @@ released.
   without spending the use budget.
 - **The grant is enforced where tools actually run** (`core/plugin/PluginInstaller.kt`):
   `PluginExecutionGate` now refuses a plugin tool that has no live grant, so `revoke` takes effect
-  on the very next call with no restart. Six tests drive the real gate, including
-  "revoke stops the very next call" and "an expired grant is refused at the gate".
+  on the very next call with no restart. Seven tests drive the real gate, including
+  "revoke stops the very next call" and "an expired grant is refused at the gate". The gate is also
+  composed with the interactive approval gate (`core/connector/CloudToolAgent.kt`,
+  `PluginExecutionGate.withDelegate`), because the interactive gate allows read-only tools by
+  default and a read-only plugin tool would otherwise run with no grant.
 - **Automatic reconnection** (`core/remote/ReconnectionCoordinator.kt`): "the owner wants this
   connection" is persisted while "we are connected right now" is not, so a cold start reconnects a
   desired target after an app restart or a phone reboot, and a dropped heartbeat retries on a

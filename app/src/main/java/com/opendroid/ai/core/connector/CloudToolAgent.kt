@@ -10,6 +10,7 @@ import com.opendroid.ai.core.browser.CloudServerClient
 import com.opendroid.ai.core.security.CredentialStoreResult
 import com.opendroid.ai.core.security.ProviderCredentialId
 import com.opendroid.ai.core.security.ProviderCredentialStore
+import com.opendroid.ai.core.plugin.PluginExecutionGate
 import com.opendroid.ai.data.models.ChatMessage
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.withTimeout
@@ -65,8 +66,18 @@ class UnifiedAgentLoop @Inject constructor(
     private val cloudServerClient: CloudServerClient,
     private val openSwarmConnector: OpenSwarmConnector,
     private val approvalCoordinator: ConnectorApprovalCoordinator,
+    private val pluginExecutionGate: PluginExecutionGate,
 ) {
     private val gson = Gson()
+
+    /**
+     * The plugin gate is composed with the interactive approval gate: a plugin tool is refused
+     * before the prompt when it lacks a live unattended grant, and everything else still asks the
+     * owner through [UserApprovalGate]. Without this composition a read-only plugin tool would run
+     * with no grant, because the interactive gate allows read-only tools by default.
+     */
+    private val connectorApprovalGate: ConnectorApprovalGate =
+        pluginExecutionGate.withDelegate(UserApprovalGate(approvalCoordinator))
 
     init {
         // Read-only discovery is available without configuring an external service.
@@ -230,7 +241,7 @@ class UnifiedAgentLoop @Inject constructor(
                 events += UniversalAgentEvent("dispatch", "${tool.qualifiedName} args=$argumentSummary status=running", invocation.invocationId, tool.connectorId, tool.name)
                 val remainingMs = budget.remainingTimeMs(System.nanoTime())
                 val result = try {
-                    withTimeout(remainingMs) { registry.execute(invocation, credentials, UserApprovalGate(approvalCoordinator), executionLog) }
+                    withTimeout(remainingMs) { registry.execute(invocation, credentials, connectorApprovalGate, executionLog) }
                 } catch (timeout: TimeoutCancellationException) {
                     events += UniversalAgentEvent("stopped", "Time limit reached (10 minutes).")
                     return UniversalAgentResult(false, events, lastOutput)

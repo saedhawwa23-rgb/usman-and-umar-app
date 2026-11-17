@@ -131,4 +131,26 @@ class PluginExecutionGateAuthorizationTest {
         assertEquals(ApprovalDecision.ALLOW, gate.decide(direct))
         assertNull(gate.refusalReason(direct))
     }
+
+    @Test
+    fun withDelegateRoutesNonPluginToolsToTheInteractiveGate() = runBlocking {
+        val registry = registryWithApprovedPlugin("sync")
+        val store = PersistentAuthorizationStore(pluginRegistry = registry, clock = { 0L })
+        val denyEverything = object : ConnectorApprovalGate {
+            override suspend fun decide(invocation: ConnectorInvocation): ApprovalDecision = ApprovalDecision.DENY
+        }
+        val gate = PluginExecutionGate(registry, store, alwaysAllow).withDelegate(denyEverything)
+
+        // A non-plugin tool is decided by the composed delegate, not by the plugin gate's default.
+        val direct = ConnectorInvocation(
+            tool = ConnectorTool("builtin_time", "now", "now", """{"type":"object"}"""),
+            argumentsJson = "{}",
+        )
+        assertEquals(ApprovalDecision.DENY, gate.decide(direct))
+
+        // A plugin tool still cannot bypass its grant, and then defers to the delegate.
+        assertEquals(ApprovalDecision.DENY, gate.decide(invocationFor("sync")))
+        store.grant("sync", setOf(PluginCapability.NETWORK_FETCH), scope = GrantScope.UNATTENDED)
+        assertEquals(ApprovalDecision.DENY, gate.decide(invocationFor("sync")))
+    }
 }
