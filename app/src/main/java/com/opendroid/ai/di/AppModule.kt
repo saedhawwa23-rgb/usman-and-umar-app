@@ -30,6 +30,14 @@ import com.opendroid.ai.core.remote.PersistentDeviceKeyStore
 import com.opendroid.ai.core.remote.RemoteControlCoordinator
 import com.opendroid.ai.core.remote.RemoteControlService
 import com.opendroid.ai.core.remote.RemoteSessionManager
+import com.opendroid.ai.core.remote.FileReconnectStateStore
+import com.opendroid.ai.core.remote.ReconnectStateStore
+import com.opendroid.ai.core.remote.ReconnectionCoordinator
+import com.opendroid.ai.core.remote.RemoteReconnectSupervisor
+import com.opendroid.ai.core.plugin.FilePluginGrantStore
+import com.opendroid.ai.core.plugin.PersistentAuthorizationStore
+import com.opendroid.ai.core.plugin.PluginExecutionGate
+import com.opendroid.ai.core.plugin.PluginRegistry
 import com.opendroid.ai.core.security.KeystoreSecretBytesStore
 import com.opendroid.ai.core.security.KeystoreSecretRecords
 import com.opendroid.ai.core.security.SharedPreferencesSecretRecordStorage
@@ -40,6 +48,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import okhttp3.OkHttpClient
+import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
 
@@ -147,6 +156,58 @@ object AppModule {
     @Provides
     @Singleton
     fun provideRemoteSessionManager(): RemoteSessionManager = RemoteSessionManager()
+
+    @Provides
+    @Singleton
+    fun provideReconnectStateStore(@ApplicationContext context: Context): ReconnectStateStore =
+        FileReconnectStateStore(File(context.filesDir, "remote/reconnect.json"))
+
+    @Provides
+    @Singleton
+    fun provideReconnectionCoordinator(store: ReconnectStateStore): ReconnectionCoordinator =
+        ReconnectionCoordinator(store)
+
+    @Provides
+    @Singleton
+    fun provideRemoteReconnectSupervisor(
+        coordinator: ReconnectionCoordinator,
+        store: PairedDesktopStore,
+        client: RemoteDesktopClient,
+    ): RemoteReconnectSupervisor = RemoteReconnectSupervisor(
+        coordinator = coordinator,
+        paired = store,
+        connect = { desktop ->
+            client.connect(
+                host = desktop.host,
+                port = desktop.port,
+                pairingCode = null,
+                onState = { },
+                onScreenFrame = { },
+                onMessage = { },
+            ).isSuccess
+        },
+    )
+
+    @Provides
+    @Singleton
+    fun providePluginRegistry(): PluginRegistry = PluginRegistry()
+
+    @Provides
+    @Singleton
+    fun providePersistentAuthorizationStore(
+        @ApplicationContext context: Context,
+        pluginRegistry: PluginRegistry,
+    ): PersistentAuthorizationStore = PersistentAuthorizationStore(
+        grants = FilePluginGrantStore(File(context.filesDir, "plugins/grants.json")),
+        pluginRegistry = pluginRegistry,
+    )
+
+    @Provides
+    @Singleton
+    fun providePluginExecutionGate(
+        pluginRegistry: PluginRegistry,
+        authorizationStore: PersistentAuthorizationStore,
+    ): PluginExecutionGate = PluginExecutionGate(pluginRegistry, authorizationStore)
 
     @Provides
     @Singleton

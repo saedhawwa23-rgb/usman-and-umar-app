@@ -8,7 +8,7 @@ Unattended-operation groundwork on the Plugin and Remote features: a persistent,
 authorization grant that is enforced at the real execution boundary, automatic reconnection that
 survives an app or phone restart and a network drop, and three built-in integrations that are
 registered at startup so the workflow engine has real tools before any external plugin exists.
-All additions are covered by unit tests (868 total: 862 in `:app`, 26 in `:remote-protocol`, 23 in
+All additions are covered by unit tests (916 total: 867 in `:app`, 26 in `:remote-protocol`, 23 in
 `:desktop-agent`) and are not device-verified yet. The app version stays 3.10.1; this work is not
 released.
 
@@ -31,6 +31,12 @@ released.
   bounded, deterministic backoff instead of giving up. The connect function and the clock are
   injected, so the whole schedule is tested on the JVM: retry-then-succeed, give-up after the
   attempt cap, and "a target the owner disconnected stays disconnected".
+- **Reconnection wired into the app** (`core/remote/RemoteReconnectSupervisor.kt`, `di/AppModule.kt`,
+  `OpenDroidApp.kt`): the coordinator is bound to the real paired-desktop store, so on every cold
+  start the app reconnects the computers the owner had left connected, and a computer the owner
+  forgot stops being wanted instead of retrying forever. The stores are file-backed
+  (`files/remote/reconnect.json`, `files/plugins/grants.json`) so the desire and the grants survive
+  a process death. Five tests drive the supervisor over the real coordinator and a real file store.
 - **Built-in integrations** (`core/connector/BuiltInIntegrations.kt`): date/time, text transform,
   and an HTTP status integration, each a real connector that validates its arguments and returns a
   real result. They are registered at startup by `UnifiedAgentLoop`, so the workflow engine has

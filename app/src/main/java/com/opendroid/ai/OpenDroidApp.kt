@@ -5,6 +5,7 @@ import android.util.Log
 import com.opendroid.ai.core.crash.CrashLogRecorder
 import com.opendroid.ai.core.crash.DeviceMetadata
 import com.opendroid.ai.core.crash.OpenDroidCrashHandler
+import com.opendroid.ai.core.remote.RemoteReconnectSupervisor
 import com.opendroid.ai.core.memory.MemoryManager
 import com.opendroid.ai.core.security.LegacyPreferenceMigration
 import com.opendroid.ai.data.crash.CrashLogRepository
@@ -31,6 +32,9 @@ class OpenDroidApp : Application() {
     @Inject
     lateinit var workspaceTaskRepository: WorkspaceTaskRepository
 
+    @Inject
+    lateinit var remoteReconnectSupervisor: RemoteReconnectSupervisor
+
     private val appScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun onCreate() {
@@ -56,6 +60,17 @@ class OpenDroidApp : Application() {
 
         appScope.launch {
             runCatching { workspaceTaskRepository.recoverAfterRestart() }
+        }
+
+        // Reconnect any desktop the owner had left connected before the app was killed or the phone
+        // rebooted. The desire is persisted, so this survives a restart; a failed attempt backs off
+        // and gives up after a bounded schedule rather than retrying forever.
+        appScope.launch {
+            runCatching {
+                remoteReconnectSupervisor.reconnectAll(
+                    reason = com.opendroid.ai.core.remote.ReconnectReason.APP_START
+                )
+            }
         }
     }
 
