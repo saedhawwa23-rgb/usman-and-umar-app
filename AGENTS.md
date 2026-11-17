@@ -34,8 +34,10 @@ Two separate apps live side by side in `/workspace/project`. Do not confuse them
 
 Build: `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ANDROID_HOME=/tmp/tools/sdk \
 ANDROID_SDK_ROOT=/tmp/tools/sdk ./gradlew :app:assembleDebug` (and `:app:testDebugUnitTest`).
-Build tools 36.0.0. Unit suite: 917 tests (868 `:app`, 26 `:remote-protocol`, 23
-`:desktop-agent`), all green as of 3.10.1.
+Build tools 36.0.0. Unit suite: 937 tests (888 `:app`, 26 `:remote-protocol`, 23
+`:desktop-agent`), all green. Requirement 5 is implemented: `McpToolDiscovery`
+(`tools/list` discovery -> `McpConnector` execution) and `OpenApiToolRegistrar`
+(imported operations -> generic `HttpConnector` execution).
 
 Push to this repo currently fails with HTTP 403: `GITHUB_TOKEN` is a GitHub App
 installation token (read-only; API write returns "Resource not accessible by
