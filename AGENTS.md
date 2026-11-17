@@ -25,11 +25,11 @@ Two separate apps live side by side in `/workspace/project`. Do not confuse them
 
 - **This repo (`uu-app`)** — `saedhawwa23-rgb/usman-and-umar-app`, package
   `com.usmanandumar.app`, branch `feature/hybrid-task-orchestrator`, version 3.10.4
-  (versionCode 34) on the working tree and commit `b87b561`. Plugin and Remote are
-  both redesigned as working dashboards (`core/plugin/*`, `ui/screens/PluginPlatformScreen.kt`,
-  `ui/screens/RemoteControlScreen.kt`). Last published release: `v3.10.2`
-  (`USMAN-AND-UMAR-v3.10.2.apk`, debug-signed, ABIs arm64-v8a, armeabi-v7a, x86, x86_64).
-  3.10.4 is committed locally but not pushed (see the push note below).
+  (versionCode 34) at commit `43c35d7`. Plugin and Remote are both redesigned as
+  working dashboards (`core/plugin/*`, `ui/screens/PluginPlatformScreen.kt`,
+  `ui/screens/RemoteControlScreen.kt`). Published as the `v3.10.4` GitHub Release
+  (`USMAN-AND-UMAR-v3.10.4.apk`, debug-signed, ABIs arm64-v8a, armeabi-v7a, x86,
+  x86_64) by the `android-release.yml` workflow.
 - **`../umar-work` (Mobile-Harness)** — package `com.jarves.mh`, version 1.0.15, remote
   `saedhawwa23-rgb/UMAR-and-Usman-ASHEBIR.git`. This is the app with the PRoot / DeepSeek
   Harness / Claude Code / Antigravity behaviors. It is a separate workstream; never copy
