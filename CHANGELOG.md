@@ -4,6 +4,58 @@ All notable changes to USMAN AND UMAR are recorded here.
 
 ## [Unreleased]
 
+Unattended-operation groundwork on the Plugin and Remote features: a persistent, revocable
+authorization grant that is enforced at the real execution boundary, automatic reconnection that
+survives an app or phone restart and a network drop, and three built-in integrations that are
+registered at startup so the workflow engine has real tools before any external plugin exists.
+All additions are covered by unit tests (868 total: 862 in `:app`, 26 in `:remote-protocol`, 23 in
+`:desktop-agent`) and are not device-verified yet. The app version stays 3.10.1; this work is not
+released.
+
+### Added
+
+- **Persistent unattended authorization** (`core/plugin/PersistentAuthorizationStore.kt`): a grant
+  records its capabilities, an optional expiry, an optional maximum number of uses, and a
+  revocation timestamp, and every mutation is persisted before it is reported as done. `isAuthorized`
+  returns a decision with a specific reason (not granted, revoked, expired, out of scope, budget
+  exhausted) so an unattended run can explain a refusal instead of stopping silently. A grant can
+  never widen beyond the capabilities the plugin declares, and `check` answers a status query
+  without spending the use budget.
+- **The grant is enforced where tools actually run** (`core/plugin/PluginInstaller.kt`):
+  `PluginExecutionGate` now refuses a plugin tool that has no live grant, so `revoke` takes effect
+  on the very next call with no restart. Six tests drive the real gate, including
+  "revoke stops the very next call" and "an expired grant is refused at the gate".
+- **Automatic reconnection** (`core/remote/ReconnectionCoordinator.kt`): "the owner wants this
+  connection" is persisted while "we are connected right now" is not, so a cold start reconnects a
+  desired target after an app restart or a phone reboot, and a dropped heartbeat retries on a
+  bounded, deterministic backoff instead of giving up. The connect function and the clock are
+  injected, so the whole schedule is tested on the JVM: retry-then-succeed, give-up after the
+  attempt cap, and "a target the owner disconnected stays disconnected".
+- **Built-in integrations** (`core/connector/BuiltInIntegrations.kt`): date/time, text transform,
+  and an HTTP status integration, each a real connector that validates its arguments and returns a
+  real result. They are registered at startup by `UnifiedAgentLoop`, so the workflow engine has
+  tools before any external plugin is installed.
+- **Workflow engine output mapping** (`core/workflow/WorkflowEngine.kt`): an input mapping may now
+  pass a literal with the `literal:` prefix and substitute an earlier step's output with a
+  `{stepId.field}` placeholder, so a step can build a value (such as a URL) from two upstream steps.
+  `MultiPluginWorkflowDemoTest` runs one workflow across three real registered integrations in
+  sequence and asserts the exact order and that the HTTP integration fetched the URL the text
+  integration produced.
+
+### Fixed
+
+- **A workflow that fails leaves no step stuck PENDING** (`core/workflow/WorkflowEngine.kt`): skip
+  propagation is now transitive, so a step downstream of a skipped step is itself marked SKIPPED
+  rather than remaining PENDING and tripping the deadlock guard.
+- **A cancel from another thread is no longer overwritten** (`core/workflow/WorkflowEngine.kt`): the
+  loop re-reads the persisted run after a step completes, so a cancel that landed while the step ran
+  is honoured instead of being clobbered by the in-memory copy.
+- **Re-arming a failed step gives it a fresh attempt budget** (`core/workflow/WorkflowEngine.kt`):
+  `retryStep` resets the step's attempt counter, so a step that already used its retries on the first
+  pass can actually be retried on resume.
+
+### Plugin and Remote standards-alignment pass (same release)
+
 Standards-alignment pass on the Plugin and Remote features: a real session lifecycle for remote
 control, a documented plugin manifest with interoperability and version compatibility, plugin
 health/execution history, and a real desktop companion agent for remote control. All additions are

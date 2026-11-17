@@ -150,9 +150,14 @@ class PluginInstaller(
  * A tool that belongs to a registered plugin is refused unless that plugin is approved and enabled;
  * every other connector keeps the default read-only/reversible rule, so direct tool execution that
  * does not go through a plugin is unaffected.
+ *
+ * When an [authorizationStore] is supplied, a plugin tool also has to hold a live unattended grant.
+ * That is what makes revocation immediate: [PersistentAuthorizationStore.revoke] persists the
+ * revoked record, and the very next call is refused here without any restart.
  */
 class PluginExecutionGate(
     private val pluginRegistry: PluginRegistry,
+    private val authorizationStore: PersistentAuthorizationStore? = null,
     private val delegate: ConnectorApprovalGate = com.opendroid.ai.core.connector.DefaultConnectorApprovalGate,
 ) : ConnectorApprovalGate {
 
@@ -161,7 +166,11 @@ class PluginExecutionGate(
         if (plugin != null) {
             return when (val authorization = pluginRegistry.authorize(plugin.id)) {
                 is PluginAuthorization.Denied -> ApprovalDecision.DENY
-                is PluginAuthorization.Allowed -> delegate.decide(invocation)
+                is PluginAuthorization.Allowed -> {
+                    val store = authorizationStore
+                    if (store != null && !store.isAuthorized(plugin.id).authorized) ApprovalDecision.DENY
+                    else delegate.decide(invocation)
+                }
             }
         }
         return delegate.decide(invocation)
@@ -170,7 +179,10 @@ class PluginExecutionGate(
     /** The specific refusal reason, for a UI or a log line. Null when the call may proceed. */
     fun refusalReason(invocation: ConnectorInvocation): String? {
         val plugin = pluginRegistry.get(invocation.tool.connectorId) ?: return null
-        return (pluginRegistry.authorize(plugin.id) as? PluginAuthorization.Denied)?.reason
+        (pluginRegistry.authorize(plugin.id) as? PluginAuthorization.Denied)?.let { return it.reason }
+        val decision = authorizationStore?.check(plugin.id)
+        if (decision != null && !decision.authorized) return decision.reason.message
+        return null
     }
 }
 

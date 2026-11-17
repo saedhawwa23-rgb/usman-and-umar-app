@@ -76,6 +76,16 @@ class UnifiedAgentLoop @Inject constructor(
         registry.register(LocalActionConnector(context, actionDispatcher))
         registry.register(DeviceControlConnector(context))
         registry.register(openSwarmConnector)
+        // Integrations that work with no external service configured, so the workflow engine has
+        // real tools to run out of the box instead of an empty registry.
+        registerBuiltInIntegrations(registry)
+    }
+
+    /** Register the shipped integrations. Idempotent so a re-created loop does not duplicate tools. */
+    private fun registerBuiltInIntegrations(registry: UniversalToolRegistry) {
+        builtInIntegrations().forEach { connector ->
+            if (registry.connectorFor(connector.id) == null) registry.register(connector)
+        }
     }
 
     suspend fun run(goal: String, maxSteps: Int = MAX_STEPS, imageBase64: String? = null, stopRequested: AtomicBoolean = AtomicBoolean(false)): UniversalAgentResult {
