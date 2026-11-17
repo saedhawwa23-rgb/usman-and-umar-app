@@ -30,15 +30,20 @@ import com.opendroid.ai.core.remote.PersistentDeviceKeyStore
 import com.opendroid.ai.core.remote.RemoteControlCoordinator
 import com.opendroid.ai.core.remote.RemoteControlService
 import com.opendroid.ai.core.remote.RemoteSessionManager
-import com.opendroid.ai.core.remote.FileReconnectStateStore
+import com.opendroid.ai.core.remote.EncryptedReconnectStateStore
 import com.opendroid.ai.core.remote.ReconnectStateStore
 import com.opendroid.ai.core.remote.ReconnectionCoordinator
 import com.opendroid.ai.core.remote.RemoteReconnectSupervisor
-import com.opendroid.ai.core.plugin.FilePluginGrantStore
+import com.opendroid.ai.core.plugin.EncryptedPluginGrantStore
 import com.opendroid.ai.core.plugin.PersistentAuthorizationStore
 import com.opendroid.ai.core.plugin.PluginExecutionGate
 import com.opendroid.ai.core.plugin.PluginRegistry
 import com.opendroid.ai.core.security.KeystoreSecretBytesStore
+import com.opendroid.ai.core.security.SecretBytesStore
+import com.usmanandumar.workspace.core.workflow.ExecutionReceiptStore
+import com.usmanandumar.workspace.core.workflow.FileExecutionReceiptStore
+import com.usmanandumar.workspace.core.workflow.FileWorkflowRunStore
+import com.usmanandumar.workspace.core.workflow.WorkflowRunStore
 import com.opendroid.ai.core.security.KeystoreSecretRecords
 import com.opendroid.ai.core.security.SharedPreferencesSecretRecordStorage
 import com.opendroid.ai.core.security.AndroidKeyStoreAeadCipher
@@ -157,10 +162,27 @@ object AppModule {
     @Singleton
     fun provideRemoteSessionManager(): RemoteSessionManager = RemoteSessionManager()
 
+    /**
+     * Keystore-backed storage for authorization and reconnect records. A separate alias and
+     * preferences file from the pairing stores, so the three features cannot overwrite each other's
+     * records. No plaintext fallback: a value that cannot be decrypted reads as absent.
+     */
     @Provides
     @Singleton
-    fun provideReconnectStateStore(@ApplicationContext context: Context): ReconnectStateStore =
-        FileReconnectStateStore(File(context.filesDir, "remote/reconnect.json"))
+    fun provideAuthorizationSecretStore(@ApplicationContext context: Context): SecretBytesStore =
+        KeystoreSecretBytesStore(
+            KeystoreSecretRecords(
+                storage = SharedPreferencesSecretRecordStorage(
+                    context.applicationContext.getSharedPreferences(AUTH_PREFERENCES, Context.MODE_PRIVATE)
+                ),
+                cipher = AndroidKeyStoreAeadCipher(AUTH_KEY_ALIAS),
+            )
+        )
+
+    @Provides
+    @Singleton
+    fun provideReconnectStateStore(secrets: SecretBytesStore): ReconnectStateStore =
+        EncryptedReconnectStateStore(secrets)
 
     @Provides
     @Singleton
@@ -195,10 +217,10 @@ object AppModule {
     @Provides
     @Singleton
     fun providePersistentAuthorizationStore(
-        @ApplicationContext context: Context,
+        secrets: SecretBytesStore,
         pluginRegistry: PluginRegistry,
     ): PersistentAuthorizationStore = PersistentAuthorizationStore(
-        grants = FilePluginGrantStore(File(context.filesDir, "plugins/grants.json")),
+        grants = EncryptedPluginGrantStore(secrets),
         pluginRegistry = pluginRegistry,
     )
 
@@ -208,6 +230,21 @@ object AppModule {
         pluginRegistry: PluginRegistry,
         authorizationStore: PersistentAuthorizationStore,
     ): PluginExecutionGate = PluginExecutionGate(pluginRegistry, authorizationStore)
+
+    /**
+     * Durable workflow state, so an interrupted multi-plugin workflow resumes after an application
+     * or process restart. The receipt store is separate: it records that an external effect has
+     * already been requested, so a resume never repeats it.
+     */
+    @Provides
+    @Singleton
+    fun provideWorkflowRunStore(@ApplicationContext context: Context): WorkflowRunStore =
+        FileWorkflowRunStore(File(context.filesDir, "workflows/runs.json"))
+
+    @Provides
+    @Singleton
+    fun provideExecutionReceiptStore(@ApplicationContext context: Context): ExecutionReceiptStore =
+        FileExecutionReceiptStore(File(context.filesDir, "workflows/receipts.json"))
 
     @Provides
     @Singleton
@@ -271,4 +308,6 @@ object AppModule {
     private const val REMOTE_KEY_ALIAS = "opendroid_remote_control_key"
     private const val DESKTOP_PREFERENCES = "remote_desktop_secure"
     private const val DESKTOP_KEY_ALIAS = "opendroid_remote_desktop_key"
+    private const val AUTH_PREFERENCES = "authorization_secure"
+    private const val AUTH_KEY_ALIAS = "opendroid_authorization_key"
 }

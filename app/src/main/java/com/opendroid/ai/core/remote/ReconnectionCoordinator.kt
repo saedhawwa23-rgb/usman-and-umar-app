@@ -3,6 +3,8 @@ package com.opendroid.ai.core.remote
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import com.opendroid.ai.core.security.EncryptedJsonListStore
+import com.opendroid.ai.core.security.SecretBytesStore
 import java.io.File
 
 /**
@@ -127,6 +129,44 @@ class FileReconnectStateStore(
             file.writeText(payload)
             temp.delete()
         }
+    }
+}
+
+/**
+ * The same contract as [FileReconnectStateStore], but the bytes on disk are Keystore-encrypted.
+ *
+ * The reconnect record says which computers the owner wants connected and carries the pairing
+ * fingerprint, so it is stored the way other secrets are: through [SecretBytesStore], with no
+ * plaintext fallback. A record that cannot be decrypted is treated as absent, so a restored process
+ * never resumes a connection it cannot prove the owner wanted.
+ */
+class EncryptedReconnectStateStore(
+    secrets: SecretBytesStore,
+    key: String = "remote-reconnect",
+) : ReconnectStateStore {
+
+    private val delegate = EncryptedJsonListStore(
+        secrets = secrets,
+        key = key,
+        serializer = ReconnectState.serializer(),
+    )
+
+    @Synchronized
+    override fun load(): List<ReconnectState> = delegate.load()
+
+    @Synchronized
+    override fun save(state: ReconnectState) {
+        val merged = delegate.load().filterNot { it.targetId == state.targetId } + state
+        delegate.save(merged)
+    }
+
+    @Synchronized
+    override fun remove(targetId: String): Boolean {
+        val current = delegate.load()
+        val next = current.filterNot { it.targetId == targetId }
+        if (next.size == current.size) return false
+        delegate.save(next)
+        return true
     }
 }
 

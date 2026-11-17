@@ -183,6 +183,7 @@ class WorkflowEngine(
     private val store: WorkflowRunStore = InMemoryWorkflowRunStore(),
     private val approval: WorkflowApprovalGate = AllowSafeWorkflowSteps,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val receipts: ExecutionReceiptStore = InMemoryExecutionReceiptStore(),
 ) {
 
     companion object {
@@ -193,6 +194,9 @@ class WorkflowEngine(
         const val EXECUTION_ERROR = "EXECUTION_ERROR"
         const val APPROVAL_DENIED = "APPROVAL_DENIED"
         const val DEPENDENCY_FAILED = "DEPENDENCY_FAILED"
+
+        /** Error code for a step whose external effect is known to have failed and must not repeat. */
+        const val RECEIPT_FAILED = "RECEIPT_FAILED"
 
         /** Prefix in an input mapping that passes a literal value instead of an upstream output. */
         const val LITERAL_PREFIX = "literal:"
@@ -248,6 +252,11 @@ class WorkflowEngine(
      */
     fun retryStep(runId: String, stepId: String): WorkflowRun {
         val run = store.load(runId) ?: throw IllegalArgumentException("Unknown workflow run: $runId")
+        // An explicit retry is the owner's decision to re-run, so the step's idempotency receipt is
+        // cleared for this step only; automatic resume still refuses to repeat a recorded effect.
+        run.workflow.steps.firstOrNull { it.id == stepId }?.let { step ->
+            receipts.remove("$runId:${step.effectiveReceiptKey()}")
+        }
         val updated = run.copy(
             state = WorkflowRunState.RUNNING,
             errorCode = null,
@@ -402,6 +411,37 @@ class WorkflowEngine(
             WorkflowApprovalDecision.ALLOW -> Unit
         }
 
+        val receiptKey = "${run.runId}:${definition.effectiveReceiptKey()}"
+        val prior = receipts.find(receiptKey)
+        if (prior != null) {
+            // The external effect was already requested for this step. Never request it again; reuse
+            // the recorded outcome so a resume after a crash or a phone restart is idempotent.
+            val settled = record.copy(
+                state = if (prior.success) WorkflowStepRunState.SUCCEEDED else WorkflowStepRunState.FAILED,
+                output = prior.output,
+                errorCode = if (prior.success) null else RECEIPT_FAILED,
+                errorMessage = if (prior.success) null
+                else "A previous attempt already ran and did not succeed; it will not be repeated.",
+                startedAtMs = record.startedAtMs ?: now,
+                finishedAtMs = now,
+            )
+            val next = run.withStep(settled).copy(updatedAtMs = now)
+            return if (prior.success) {
+                next
+            } else {
+                next.copy(
+                    state = WorkflowRunState.FAILED,
+                    errorCode = RECEIPT_FAILED,
+                    errorMessage = "Step ${definition.id} was already attempted and must not repeat",
+                )
+            }
+        }
+        // Claim the effect before requesting it, so a crash between the request and the response
+        // leaves a receipt that stops a later resume from repeating the action.
+        receipts.record(
+            ExecutionReceipt(receiptKey, run.runId, definition.id, definition.toolId, now, success = false)
+        )
+
         val input = resolveInputs(definition, run)
         var attempts = record.attempts
         var last: WorkflowToolResult? = null
@@ -421,6 +461,18 @@ class WorkflowEngine(
         }
         val outcome = last ?: WorkflowToolResult(false, errorCode = EXECUTION_ERROR, errorMessage = "Workflow tool returned no result")
         val finished = clock()
+        // Record the real outcome so a later resume reuses it instead of repeating the effect.
+        receipts.record(
+            ExecutionReceipt(
+                receiptKey = receiptKey,
+                runId = run.runId,
+                stepId = definition.id,
+                toolId = definition.toolId,
+                recordedAtMs = finished,
+                success = outcome.success,
+                output = outcome.output,
+            )
+        )
         val updated = record.copy(
             state = if (outcome.success) WorkflowStepRunState.SUCCEEDED else WorkflowStepRunState.FAILED,
             attempts = attempts,

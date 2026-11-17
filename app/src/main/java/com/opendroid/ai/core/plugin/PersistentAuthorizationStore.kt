@@ -4,6 +4,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import com.opendroid.ai.core.security.EncryptedJsonListStore
+import com.opendroid.ai.core.security.SecretBytesStore
 import java.io.File
 
 /**
@@ -65,6 +67,30 @@ data class PluginGrant(
     /** Whole seconds until expiry, or null when the grant never expires. Floored at zero. */
     fun secondsUntilExpiry(atMs: Long): Long? =
         expiresAtMs?.let { ((it - atMs).coerceAtLeast(0L)) / 1000L }
+}
+
+/**
+ * The expiry choices the owner can pick from when granting unattended access. [NEVER] is a
+ * deliberate "until I revoke it" option; [DAYS_30] and [DAYS_90] are the common cases; [CUSTOM] is
+ * any other period. The preset is turned into a ttl at the moment of the grant.
+ */
+enum class GrantExpiry(val ttlMs: Long?) {
+    NEVER(null),
+    DAYS_30(30L * 24 * 60 * 60 * 1000),
+    DAYS_90(90L * 24 * 60 * 60 * 1000),
+    CUSTOM(null);
+
+    companion object {
+        const val DAY_MS = 24L * 60 * 60 * 1000
+
+        /** A custom period in whole days, or null for "until revoked". */
+        fun customDays(days: Long?): GrantExpiry = if (days == null) NEVER else CUSTOM
+
+        fun ttlForCustomDays(days: Long): Long {
+            require(days > 0) { "A custom expiry must be at least one day" }
+            return days * DAY_MS
+        }
+    }
 }
 
 /** Where grants live. The file store makes a grant survive a restart. */
@@ -142,7 +168,47 @@ class FilePluginGrantStore(
     }
 }
 
-/** The outcome of an authorization check, with a specific reason so a refusal is never silent. */
+/**
+ * The same contract as [FilePluginGrantStore], but the bytes on disk are Keystore-encrypted.
+ *
+ * A grant records the authority to run a plugin unattended, so it is stored the way pairing secrets
+ * are: through [SecretBytesStore], which has no plaintext fallback. A grant that cannot be decrypted
+ * is treated as absent, so a restored process never resumes with authority it cannot prove, and a
+ * revoked grant stays revoked because the revoked record is what was persisted.
+ */
+class EncryptedPluginGrantStore(
+    secrets: SecretBytesStore,
+    key: String = "plugin-grants",
+) : PluginGrantStore {
+
+    private val delegate = EncryptedJsonListStore(
+        secrets = secrets,
+        key = key,
+        serializer = PluginGrant.serializer(),
+    )
+
+    @Synchronized
+    override fun load(pluginId: String): PluginGrant? = delegate.load().firstOrNull { it.pluginId == pluginId }
+
+    @Synchronized
+    override fun save(grant: PluginGrant) {
+        val merged = delegate.load().filterNot { it.pluginId == grant.pluginId } + grant
+        delegate.save(merged)
+    }
+
+    @Synchronized
+    override fun all(): List<PluginGrant> = delegate.load()
+
+    @Synchronized
+    override fun remove(pluginId: String): Boolean {
+        val current = delegate.load()
+        val next = current.filterNot { it.pluginId == pluginId }
+        if (next.size == current.size) return false
+        delegate.save(next)
+        return true
+    }
+}
+
 data class GrantDecision(
     val authorized: Boolean,
     val reason: GrantRefusal,
@@ -198,6 +264,32 @@ class PersistentAuthorizationStore(
         grants.save(grant)
         audit("granted $pluginId scope=$scope capabilities=${effective.map { it.name }.sorted()} expiresAt=${grant.expiresAtMs}")
         return grant
+    }
+
+    /**
+     * Grant with one of the owner's expiry presets, so the UI's 30-day, 90-day, custom and "until
+     * revoked" choices all funnel through the same, already-audited [grant] path.
+     */
+    @Synchronized
+    fun grantWithExpiry(
+        pluginId: String,
+        capabilities: Set<PluginCapability>,
+        expiry: GrantExpiry,
+        scope: GrantScope = GrantScope.UNATTENDED,
+        customDays: Long? = null,
+        maxUses: Int? = null,
+    ): PluginGrant {
+        val ttl = when (expiry) {
+            GrantExpiry.NEVER -> null
+            GrantExpiry.DAYS_30, GrantExpiry.DAYS_90 -> expiry.ttlMs
+            GrantExpiry.CUSTOM -> ttlForCustom(customDays)
+        }
+        return grant(pluginId, capabilities, scope, ttlMs = ttl, maxUses = maxUses)
+    }
+
+    private fun ttlForCustom(days: Long?): Long {
+        require(days != null) { "A custom expiry needs a number of days" }
+        return GrantExpiry.ttlForCustomDays(days)
     }
 
     /** Extend or shorten an existing grant's expiry without changing its capabilities. */
