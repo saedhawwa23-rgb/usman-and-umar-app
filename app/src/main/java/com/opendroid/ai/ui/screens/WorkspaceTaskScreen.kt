@@ -26,12 +26,11 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -40,6 +39,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -49,7 +49,19 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material.icons.filled.Assignment
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.opendroid.ai.ui.components.BrandHeader
+import com.opendroid.ai.ui.components.MetricTile
+import com.opendroid.ai.ui.components.PlatformStatus
+import com.opendroid.ai.ui.components.PlatformTab
+import com.opendroid.ai.ui.components.SegmentedTabs
+import com.opendroid.ai.ui.components.StatusPill
+import com.opendroid.ai.ui.screens.taskbar.TaskAction
+import com.opendroid.ai.ui.screens.taskbar.TaskBarModel
+import com.opendroid.ai.ui.screens.taskbar.TaskProgress
+import com.opendroid.ai.ui.screens.taskbar.TaskStatusKind
 import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
 import com.opendroid.ai.core.agent.InstalledAiAppPreferences
 import com.opendroid.ai.core.agent.SmartLocalAiRouter
@@ -131,22 +143,43 @@ fun WorkspaceTaskScreen(
         uploadTaskOutput(task)
     }
 
+    val summary = remember(tasks) { TaskBarModel.summary(tasks) }
+    val tabCounts = mapOf(
+        TaskuaryPage.INBOX to tasks.count { TaskBarModel.bucketOf(TaskBarModel.parseState(it.state)) in setOf(com.opendroid.ai.ui.screens.taskbar.TaskBucket.QUEUED, com.opendroid.ai.ui.screens.taskbar.TaskBucket.WAITING, com.opendroid.ai.ui.screens.taskbar.TaskBucket.FAILED) },
+        TaskuaryPage.DASHBOARD to tasks.count { it.deadlineAt != null },
+        TaskuaryPage.BOARD to tasks.count { TaskBarModel.parseState(it.state) == TaskState.RUNNING },
+    )
+
     Scaffold(
         modifier = modifier,
-        topBar = { TopAppBar(title = { Text("TASK ORCHESTRATOR") }) },
+        topBar = {
+            BrandHeader(
+                title = "Task Bar",
+                subtitle = "Plan, run and track your automations",
+                icon = Icons.Default.Assignment,
+            )
+        },
         containerColor = AppTheme.colors.background,
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp),
             contentPadding = PaddingValues(bottom = 28.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    TaskuaryPage.entries.forEach { candidate ->
-                        FilterChip(selected = page == candidate, onClick = { page = candidate }, label = { Text(candidate.label) })
-                    }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MetricTile(value = summary.active.toString(), label = "Running", accent = AppTheme.colors.electricBlue, modifier = Modifier.weight(1f))
+                    MetricTile(value = summary.queued.toString(), label = "Queued", accent = AppTheme.colors.textSecondary, modifier = Modifier.weight(1f))
+                    MetricTile(value = summary.waiting.toString(), label = "Waiting", accent = AppTheme.colors.accentOrange, modifier = Modifier.weight(1f))
+                    MetricTile(value = summary.done.toString(), label = "Done", accent = AppTheme.colors.emerald, modifier = Modifier.weight(1f))
                 }
+            }
+            item {
+                SegmentedTabs(
+                    tabs = TaskuaryPage.entries.map { PlatformTab(it.label, tabCounts[it]) },
+                    selectedIndex = page.ordinal,
+                    onSelect = { page = TaskuaryPage.entries[it] },
+                )
             }
             item {
                 OutlinedTextField(
@@ -482,6 +515,7 @@ private fun TaskCard(
     onDrag: ((Offset) -> Unit)? = null,
     onDragEnd: (() -> Unit)? = null,
 ) {
+    val item = remember(task) { TaskBarModel.itemOf(task) }
     Card(
         modifier = modifier.pointerInput(task.id) {
             if (onDragStart != null && onDrag != null && onDragEnd != null) {
@@ -493,66 +527,70 @@ private fun TaskCard(
                 )
             }
         },
-        colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface),
+        colors = CardDefaults.cardColors(containerColor = AppTheme.colors.cardBackground),
     ) {
-        Column(Modifier.fillMaxWidth().padding(14.dp)) {
-            Text(task.title, color = AppTheme.colors.textPrimary, fontSize = 16.sp)
-            Spacer(Modifier.height(4.dp))
-            Text("${task.state} · ${modeLabel(task.toolId)}", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
-            if (task.deadlineAt != null) {
-                val formatted = remember(task.deadlineAt) {
-                    Instant.ofEpochMilli(task.deadlineAt).atZone(ZoneId.systemDefault())
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(item.title, color = AppTheme.colors.textPrimary, fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
+                    Text(item.modeLabel, color = AppTheme.colors.textSecondary, fontSize = 11.sp)
+                }
+                StatusPill(text = item.statusLabel, status = item.statusKind.toPlatformStatus())
+            }
+            when (item.progress) {
+                TaskProgress.Indeterminate -> LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = AppTheme.colors.electricBlue,
+                    trackColor = AppTheme.colors.electricBlue.copy(alpha = 0.15f),
+                )
+                TaskProgress.Complete -> LinearProgressIndicator(
+                    progress = { 1f },
+                    modifier = Modifier.fillMaxWidth(),
+                    color = AppTheme.colors.emerald,
+                    trackColor = AppTheme.colors.emerald.copy(alpha = 0.15f),
+                )
+                TaskProgress.None -> Unit
+            }
+            if (item.dueAtMs != null) {
+                val formatted = remember(item.dueAtMs) {
+                    Instant.ofEpochMilli(item.dueAtMs).atZone(ZoneId.systemDefault())
                         .format(DateTimeFormatter.ofPattern("EEE, MMM d · h:mm a"))
                 }
                 Text("Due $formatted", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
             }
-            if (task.state == TaskState.WAITING_FOR_NETWORK.name) {
-                Text("Offline — this task will wait. No AI app or server was contacted.", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+            if (item.note.isNotBlank()) {
+                Text(item.note, color = AppTheme.colors.textSecondary, fontSize = 12.sp)
             }
-            if (task.state == TaskState.PAUSED.name && task.toolId?.startsWith("hybrid:CLOUD_OPENSWARM") == true) {
-                Text("Pause requested. The current specialist may finish; completed steps are saved and will not be repeated.", color = AccentCyan, fontSize = 12.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { onRun(task) }) { Text("Resume") }
-                    Button(onClick = { onCancel(task) }) { Text("Cancel") }
+            if (item.output.isNotBlank()) {
+                Text(item.output.take(1_000), color = AppTheme.colors.textSecondary, fontSize = 11.sp)
+            }
+            if (item.actions.isNotEmpty()) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item.actions.forEach { action ->
+                        when (action) {
+                            TaskAction.RUN, TaskAction.RETRY -> Button(onClick = { onRun(task) }) {
+                                androidx.compose.material3.Icon(Icons.Default.PlayArrow, contentDescription = null)
+                                Text(if (action == TaskAction.RETRY) " Retry" else " Run")
+                            }
+                            TaskAction.RESUME -> Button(onClick = { onRun(task) }) { Text("Resume") }
+                            TaskAction.APPROVE -> Button(onClick = { onRun(task) }) { Text("Approve & resume") }
+                            TaskAction.PAUSE -> OutlinedButton(onClick = { onPause(task) }) { Text("Pause") }
+                            TaskAction.CANCEL -> OutlinedButton(onClick = { onCancel(task) }) { Text("Cancel") }
+                            TaskAction.SAVE_OUTPUT -> OutlinedButton(onClick = { onSaveOutput(task) }) { Text("Save to Drive") }
+                        }
+                    }
                 }
             }
-            if (task.state == TaskState.RUNNING.name && task.toolId?.startsWith("hybrid:CLOUD_OPENSWARM") == true) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { onPause(task) }) { Text("Pause") }
-                    Button(onClick = { onCancel(task) }) { Text("Cancel") }
-                }
-            }
-            if (task.state == TaskState.WAITING_APPROVAL.name) {
-                Text("OpenSwarm is paused before a high-impact action. Review the requested steps before resuming.", color = AccentCyan, fontSize = 12.sp)
-                Text(
-                    task.notes.removePrefix("OpenSwarm approval request:\n").take(1_200),
-                    color = AppTheme.colors.textSecondary,
-                    fontSize = 10.sp,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { onRun(task) }) { Text("Approve & Resume") }
-                    Button(onClick = { onCancel(task) }) { Text("Cancel") }
-                }
-            }
-            if (task.state == TaskState.WAITING_USER.name && task.notes.contains("AI code blocks were NOT executed")) {
-                Text("Code awaits review. Nothing from the model response was executed.", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
-            }
-            if (task.notes.startsWith("Execution output:")) {
-                Spacer(Modifier.height(6.dp))
-                Text(task.notes.take(1_000), color = AppTheme.colors.textSecondary, fontSize = 11.sp)
-            }
-            if (task.state in setOf(TaskState.DRAFT.name, TaskState.WAITING_FOR_NETWORK.name, TaskState.FAILED.name)) {
-                Button(onClick = { onRun(task) }) {
-                    androidx.compose.material3.Icon(Icons.Default.PlayArrow, contentDescription = null)
-                    Text(if (task.state == TaskState.WAITING_FOR_NETWORK.name) " Retry when online" else " Run")
-                }
-            }
-            Button(
-                onClick = { onSaveOutput(task) },
-                enabled = taskOutput(task).isNotBlank(),
-            ) { Text("Save to Drive") }
         }
     }
+}
+
+private fun TaskStatusKind.toPlatformStatus(): PlatformStatus = when (this) {
+    TaskStatusKind.ACTIVE -> PlatformStatus.ACTIVE
+    TaskStatusKind.WARNING -> PlatformStatus.WARNING
+    TaskStatusKind.SUCCESS -> PlatformStatus.HEALTHY
+    TaskStatusKind.ERROR -> PlatformStatus.ERROR
+    TaskStatusKind.IDLE -> PlatformStatus.IDLE
 }
 
 @Composable
@@ -604,12 +642,6 @@ private fun SectionTitle(text: String) {
     Text(text, color = AppTheme.colors.textSecondary, fontSize = 12.sp, letterSpacing = 1.sp)
 }
 
-private fun modeLabel(toolId: String?): String = when {
-    toolId?.startsWith("hybrid:LOCAL_AI_APP:") == true -> "Local AI · ${toolId.substringAfterLast(':')}"
-    toolId?.startsWith("hybrid:CLOUD_OPENSWARM") == true -> "Cloud OpenSwarm"
-    toolId?.startsWith("hybrid:TERMUX_SCRIPT") == true -> "Local Termux · ${toolId.substringAfterLast(':')}"
-    else -> "No execution mode"
-}
 
 private fun startOfToday(): Long = java.time.LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
 private fun startOfTomorrow(): Long = java.time.LocalDate.now().plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()

@@ -177,7 +177,7 @@ private fun CatalogGroup(
 ) {
     if (records.isEmpty()) return
     val colors = AppTheme.colors
-    SectionHeading(title, subtitle)
+    SectionHeading(title, subtitle = subtitle)
     records.forEach { record ->
         PlatformCard(
             title = record.displayName,

@@ -321,7 +321,7 @@ private fun RemoteTransferTab(state: RemoteControlViewModel.UiState, viewModel: 
         if (state.remoteEntries.isEmpty()) {
             EmptyState(Icons.Filled.Computer, "No folder listed", "Browse a folder on a connected computer.")
         } else {
-            SectionHeading("In ${state.remotePath}", "${state.remoteEntries.size} item(s)")
+            SectionHeading("In ${state.remotePath}", subtitle = "${state.remoteEntries.size} item(s)")
             LazyColumn(Modifier.fillMaxWidth().height(220.dp)) {
                 items(state.remoteEntries) { entry ->
                     Row(

@@ -2,6 +2,49 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.10.5] - 2026-11-17
+
+The Task Bar and the Tool Bar are redesigned as two professional 2026 dashboards on the shared
+navy · emerald · electric-blue identity introduced in 3.10.4. The Task Bar gains a live summary
+strip, a status pill and progress on every task card, and clearer grouping; the Tool Bar is
+restructured into three clearly labelled sections — AI providers and web-based agents, GitHub
+project management, and Termux and the Linux environment. Both screens keep every existing feature,
+navigation target, integration and execution workflow: this is a presentation and information
+architecture upgrade, not a rewrite. No capability is claimed that the code does not perform, and
+nothing is labelled "connected" until the real integration reports it is. The app version moves to
+3.10.5 (versionCode 35).
+
+### Added
+
+- **Task Bar summary model** (`ui/screens/taskbar/TaskBarModel.kt`): a pure, unit-testable view of
+  the task list — active, queued, waiting, succeeded and failed counts, the derived state for every
+  task, and the exact action set the current state allows. No Compose or Android dependency, so it
+  is asserted directly in JVM tests.
+- **Tool Bar section model** (`ui/screens/toolbar/ToolBarModel.kt`): the three tool sections and
+  their entries as data, each carrying an honest availability status and the real destination it
+  opens. The UI renders whatever the model reports, so a section cannot silently claim more than
+  the app provides.
+
+### Changed
+
+- **Task Bar redesign** (`ui/screens/WorkspaceTaskScreen.kt`): a brand header, a segmented
+  Inbox / Dashboard / Kanban control with live counts, a metric summary strip, and restyled task
+  cards that show a status pill, the execution mode and a progress/state line. Every existing
+  action (Add to inbox, Run, Resume, Pause, Cancel, Approve & resume, Save to Drive, drag-and-drop
+  on the Kanban board) is preserved, and the OpenSwarm roster, cloud-server settings, remote Browser
+  Use and auto-run code settings cards remain reachable.
+- **Tool Bar redesign** (`ui/screens/CapabilitiesScreen.kt`): the flat list of cards becomes three
+  segmented sections, each with a heading, an honest status pill and its cards. The AI section
+  routes to the provider/model discovery screen, the GitHub section routes to repository search,
+  lookup and clone, and the Termux section routes to the real Termux RUN_COMMAND integration and
+  the cloud tool-agent screen. The integration platform screen stays reachable from the header.
+- Version bumped to 3.10.5 (versionCode 35).
+
+### Not changed
+
+- No PRoot, rootfs or execution logic was touched. No API key, token or credential is stored or
+  logged. Android 9 / API 28 and the ARM32 (armeabi-v7a) build are preserved.
+
 ## [3.10.4] - 2026-11-12
 
 The Plugin and Remote features are professionally redesigned as two dashboards on a shared navy ·

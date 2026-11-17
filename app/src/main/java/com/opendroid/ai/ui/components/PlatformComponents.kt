@@ -140,9 +140,9 @@ fun MetricTile(
 fun BrandHeader(
     title: String,
     subtitle: String,
+    modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     trailing: (@Composable () -> Unit)? = null,
-    modifier: Modifier = Modifier,
 ) {
     val c = AppTheme.colors
     val accent = c.electricBlue
@@ -342,7 +342,7 @@ fun SegmentedTabs(
 
 /** A section heading with an optional trailing count, for grouping cards under a title. */
 @Composable
-fun SectionHeading(title: String, subtitle: String? = null, modifier: Modifier = Modifier) {
+fun SectionHeading(title: String, modifier: Modifier = Modifier, subtitle: String? = null) {
     val c = AppTheme.colors
     Column(modifier.fillMaxWidth()) {
         Text(title, color = c.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
