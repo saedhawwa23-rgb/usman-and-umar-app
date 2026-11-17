@@ -36,7 +36,8 @@ fun CapabilitiesScreen(
     onSearchAI: () -> Unit,
     onSearchGitHub: () -> Unit,
     onTermux: () -> Unit,
-    onUniversalAgent: () -> Unit
+    onUniversalAgent: () -> Unit,
+    onOpenPluginPlatform: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier.fillMaxSize().padding(20.dp),
@@ -54,6 +55,12 @@ fun CapabilitiesScreen(
             fontSize = 13.sp
         )
         Spacer(Modifier.height(4.dp))
+        CapabilityCard(
+            title = "INTEGRATION PLATFORM",
+            description = "Discover and connect AI platforms, MCP servers and OpenAPI services; manage grants, chain them into automations, and reach the developer tools.",
+            icon = Icons.Default.Extension,
+            onClick = onOpenPluginPlatform
+        )
         CapabilityCard(
             title = "SEARCH AI PROVIDERS",
             description = "Query configured AI provider model-list endpoints; results are not misrepresented as verified chat/tool capability.",

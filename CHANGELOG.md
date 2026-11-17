@@ -2,6 +2,69 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.10.4] - 2026-11-12
+
+The Plugin and Remote features are professionally redesigned as two dashboards on a shared navy ·
+emerald · electric-blue brand identity, and both are upgraded from static screens into working
+platforms: the Plugin screen discovers, connects and revokes real integrations and preflights an
+agent against its provider's protocol, and the Remote screen gains file transfer, an authorized
+terminal and a gateway view over the existing signed desktop session. The app version moves to
+3.10.4 (versionCode 34). No security rule was relaxed: every new action routes through the existing
+approval gate, kill switch and persistent grant store.
+
+### Added
+
+- **Shared premium component library** (`ui/components/PlatformComponents.kt`): a brand header,
+  dashboard card, status pill, metric tile, segmented tabs, live dot, section heading, empty state
+  and brand buttons, built on the existing design tokens so every new screen is consistent and keeps
+  the 48 dp minimum touch target.
+- **Brand identity** (`ui/theme/Color.kt`): a navy page surface, emerald primary and electric-blue
+  accent added to both the light and dark schemes, with contrast chosen so text and marks stay
+  legible on each surface. The addition is purely additive; existing color names are unchanged.
+- **Built-in integration catalog** (`core/plugin/PluginCatalog.kt`): AI platforms, MCP servers and
+  OpenAPI/OIDC services seeded into the registry as DISCOVERED and UNAPPROVED records. The catalog
+  makes no network call and declares only the capabilities each protocol actually needs.
+- **Plugin platform service** (`core/plugin/PluginPlatformService.kt`): the one place a Plugin-screen
+  gesture becomes an enforced change - seed the catalog, connect an entry, import an OpenAPI
+  document, discover an MCP server over `tools/list`, approve capabilities with an expiry, and
+  revoke. It reuses the existing `PluginRegistry`, `PluginInstaller`, `McpToolDiscovery` and
+  `PersistentAuthorizationStore`, so no security rule is re-implemented. A server that fails
+  discovery is removed rather than left registered as if it worked.
+- **Agent and provider preflight** (`core/plugin/PluginPreflight.kt`): each agent is mapped to the
+  protocol it requires (Claude Code → Anthropic Messages, Antigravity → Gemini, DeepSeek Harness →
+  OpenAI-compatible), and an incompatible pairing is refused with a specific message before any
+  download or task start. The preflight checks the key, the pairing, and whether the agent is
+  installed and verified, and reports the first blocker by name.
+- **Secret masking** (`core/plugin/PluginPreflight.kt`): a key is shown only as a short prefix and
+  suffix, and `redact` scrubs bearer tokens and `api_key`/`token` shapes from any log or error line.
+  No key value enters view-model state, a log, or a message.
+- **Multi-plugin workflow bridge** (`core/plugin/PluginWorkflowBridge.kt`): every registered
+  connector tool is projected into the workspace `ToolRegistry` as `plugin_<tool>`, and a workflow
+  step is executed back through `UniversalToolRegistry.execute`, so the kill switch, the argument
+  limit, the approval gate and the execution log apply to a workflow exactly as they do to a direct
+  tool call.
+- **Plugin dashboard** (`ui/screens/PluginPlatformScreen.kt`, `ui/viewmodel/PluginViewModel.kt`):
+  four tabs - Discover (AI platforms, MCP servers, OpenAPI services), Manage (grants, disable,
+  revoke), Automate (the live plugin tools available to a workflow) and Developer (agent/provider
+  wiring with a runnable preflight, and an OpenAPI 3.1 import).
+- **Remote dashboard** (`ui/screens/RemoteControlScreen.kt`): five tabs - Overview (pairing, active
+  sessions, signed actions), Devices (paired phones and transfer codes), Transfer (browse and
+  download files from the paired computer), Terminal (send one authorized command), and Gateway
+  (LAN listener, desktop agent, screen view, kill switch). File listing, download and the remote
+  terminal are backed by new actions on `RemoteControlViewModel` over the existing signed desktop
+  session.
+
+### Changed
+
+- `ui/viewmodel/RemoteControlViewModel.kt` gains the desktop file-list, file-download, remote
+  terminal and VPN/gateway-status actions; `forgetDesktops()` now also clears the message state.
+- `di/AppModule.kt` provides `UniversalToolRegistry`, `McpToolDiscovery`, `OAuthTokenVault`,
+  `PluginInstaller` and `PluginPlatformService` as singletons, so the Plugin screen and the agent
+  loop share one registry and one set of security primitives.
+- `ui/Navigation.kt` adds the `plugin_platform` route and passes the plugin entry point to both the
+  chat composer and the Tools screen; `ui/screens/CapabilitiesScreen.kt` adds the Integration
+  Platform card.
+
 ## [3.10.2] - 2026-11-12
 
 Encrypted persistence for the unattended-operation groundwork, durable workflow execution, and a

@@ -37,7 +37,11 @@ import com.opendroid.ai.core.remote.RemoteReconnectSupervisor
 import com.opendroid.ai.core.plugin.EncryptedPluginGrantStore
 import com.opendroid.ai.core.plugin.PersistentAuthorizationStore
 import com.opendroid.ai.core.plugin.PluginExecutionGate
+import com.opendroid.ai.core.plugin.PluginInstaller
 import com.opendroid.ai.core.plugin.PluginRegistry
+import com.opendroid.ai.core.connector.McpToolDiscovery
+import com.opendroid.ai.core.connector.UniversalToolRegistry
+import com.opendroid.ai.core.oauth.OAuthTokenVault
 import com.opendroid.ai.core.security.KeystoreSecretBytesStore
 import com.opendroid.ai.core.security.SecretBytesStore
 import com.usmanandumar.workspace.core.workflow.ExecutionReceiptStore
@@ -214,6 +218,34 @@ object AppModule {
     @Singleton
     fun providePluginRegistry(): PluginRegistry = PluginRegistry()
 
+    /**
+     * The one tool registry the agent loop uses. Providing it here means the Plugin platform and the
+     * agent share a single registry: a plugin that is approved in the Plugin screen is visible to
+     * the agent, and a revoked plugin's tools stop resolving immediately.
+     */
+    @Provides
+    @Singleton
+    fun provideUniversalToolRegistry(): UniversalToolRegistry = UniversalToolRegistry()
+
+    @Provides
+    @Singleton
+    fun provideMcpToolDiscovery(): McpToolDiscovery = McpToolDiscovery()
+
+    @Provides
+    @Singleton
+    fun provideOAuthTokenVault(secrets: SecretBytesStore): OAuthTokenVault = OAuthTokenVault(secrets)
+
+    @Provides
+    @Singleton
+    fun providePluginInstaller(
+        pluginRegistry: PluginRegistry,
+        toolRegistry: UniversalToolRegistry,
+    ): PluginInstaller = PluginInstaller(
+        pluginRegistry = pluginRegistry,
+        toolRegistry = toolRegistry,
+        appVersion = com.opendroid.ai.BuildConfig.VERSION_NAME,
+    )
+
     @Provides
     @Singleton
     fun providePersistentAuthorizationStore(
@@ -223,6 +255,24 @@ object AppModule {
         grants = EncryptedPluginGrantStore(secrets),
         pluginRegistry = pluginRegistry,
     )
+
+    @Provides
+    @Singleton
+    fun providePluginPlatformService(
+        pluginRegistry: PluginRegistry,
+        installer: PluginInstaller,
+        toolRegistry: UniversalToolRegistry,
+        authorizationStore: PersistentAuthorizationStore,
+        mcpDiscovery: McpToolDiscovery,
+    ): com.opendroid.ai.core.plugin.PluginPlatformService =
+        com.opendroid.ai.core.plugin.PluginPlatformService(
+            registry = pluginRegistry,
+            installer = installer,
+            toolRegistry = toolRegistry,
+            authorizationStore = authorizationStore,
+            mcpDiscovery = mcpDiscovery,
+            appVersion = com.opendroid.ai.BuildConfig.VERSION_NAME,
+        )
 
     @Provides
     @Singleton

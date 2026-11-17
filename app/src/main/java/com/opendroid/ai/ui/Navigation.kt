@@ -63,6 +63,7 @@ object OpenDroidRoutes {
     const val GOOGLE_DRIVE = "google_drive"
     const val UNIVERSAL_AGENT = "universal_agent"
     const val REMOTE_CONTROL = "remote_control"
+    const val PLUGIN_PLATFORM = "plugin_platform"
 }
 
 /**
@@ -195,6 +196,9 @@ fun OpenDroidNavigation(
                 },
                 onNavigateToRemoteControl = {
                     navController.navigate(OpenDroidRoutes.REMOTE_CONTROL)
+                },
+                onNavigateToPluginPlatform = {
+                    navController.navigate(OpenDroidRoutes.PLUGIN_PLATFORM)
                 }
             )
         }
@@ -338,6 +342,10 @@ fun OpenDroidNavigation(
         composable(OpenDroidRoutes.REMOTE_CONTROL) {
             RemoteControlScreen(viewModel = hiltViewModel())
         }
+
+        composable(OpenDroidRoutes.PLUGIN_PLATFORM) {
+            PluginPlatformScreen(viewModel = hiltViewModel())
+        }
     }
 }
 
@@ -372,6 +380,7 @@ fun MainDashboard(
     onNavigateToUniversalAgent: () -> Unit = {},
     onNavigateToGoogleDrive: () -> Unit = {},
     onNavigateToRemoteControl: () -> Unit = {},
+    onNavigateToPluginPlatform: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -495,7 +504,7 @@ fun MainDashboard(
                         onOpenProjects = { currentTab = Screen.TaskManager },
                         onOpenRemote = onNavigateToRemoteControl,
                         onOpenScheduled = onNavigateToRoutines,
-                        onOpenPlugins = {},
+                        onOpenPlugins = onNavigateToPluginPlatform,
                     )
                     Screen.TaskManager -> WorkspaceTaskScreen(
                         viewModel = workspaceTaskViewModel,
@@ -508,7 +517,8 @@ fun MainDashboard(
                         onSearchAI = onNavigateToDiscovery,
                         onSearchGitHub = onNavigateToGitHubDiscovery,
                         onTermux = onNavigateToTermux,
-                        onUniversalAgent = onNavigateToUniversalAgent
+                        onUniversalAgent = onNavigateToUniversalAgent,
+                        onOpenPluginPlatform = onNavigateToPluginPlatform
                     )
                     Screen.Macros -> MacrosScreen(
                         viewModel = macroViewModel,

@@ -16,6 +16,8 @@ import com.opendroid.ai.core.remote.RemoteTransportController
 import com.opendroid.ai.remote.protocol.AppEntry
 import com.opendroid.ai.remote.protocol.AppLaunchResult
 import com.opendroid.ai.remote.protocol.AppList
+import com.opendroid.ai.remote.protocol.FileEntry
+import com.opendroid.ai.remote.protocol.FileList
 import com.opendroid.ai.remote.protocol.InputEvent
 import com.opendroid.ai.remote.protocol.ProtocolError
 import com.opendroid.ai.remote.protocol.RemoteMessage
@@ -62,6 +64,11 @@ class RemoteControlViewModel @Inject constructor(
         val desktopStreaming: Boolean = false,
         val lastScreenFrame: ScreenFrameCodec.ScreenFrame? = null,
         val desktopApplications: List<AppEntry> = emptyList(),
+        // Secure file transfer (desktop agent)
+        val remotePath: String = ".",
+        val remoteEntries: List<FileEntry> = emptyList(),
+        // Remote terminal (executed as an authorized remote action on this phone)
+        val terminalOutput: String? = null,
     )
 
     private val mutableState = MutableStateFlow(
@@ -340,6 +347,64 @@ class RemoteControlViewModel @Inject constructor(
         )
     }
 
+    /** Browse a folder on the paired computer. Empty path lists the agent's shared folder root. */
+    fun listRemoteFiles(path: String) {
+        if (!desktopConnected) {
+            setMessage("Connect to the computer first.", isError = true)
+            return
+        }
+        val target = path.trim().ifBlank { "." }
+        desktopClient.listFiles(target)
+        mutableState.value = mutableState.value.copy(remotePath = target)
+    }
+
+    /**
+     * Download a file from the paired computer into this phone's app storage. The bytes travel over
+     * the already-authenticated desktop session; nothing is uploaded to a third party.
+     */
+    fun downloadRemoteFile(path: String) {
+        if (!desktopConnected) {
+            setMessage("Connect to the computer first.", isError = true)
+            return
+        }
+        desktopClient.downloadFile(path)
+        setMessage("Requested '$path' from the computer.", isError = false)
+    }
+
+    /**
+     * Run an authorized remote terminal command on THIS phone, sent from a paired controller.
+     * It uses the same signed-action path as every other remote request: the owner is asked to
+     * approve, the kill switch and approval gate apply, and nothing runs before approval.
+     */
+    fun runRemoteTerminal(command: String) {
+        val trimmed = command.trim()
+        if (trimmed.isEmpty()) {
+            setMessage("Enter a command to send.", isError = true)
+            return
+        }
+        val keyId = mutableState.value.pairedDevices.firstOrNull()
+        if (keyId == null) {
+            setMessage("Pair a device first; there is no key to sign with.", isError = true)
+            return
+        }
+        viewModelScope.launch {
+            val signed = runCatching {
+                coordinator.sign(keyId, "shell", """{"command":${jsonString(trimmed)}}""", RemoteRisk.HIGH)
+            }.getOrElse {
+                setMessage("Could not sign the request: ${it.message ?: "unknown error"}", isError = true)
+                return@launch
+            }
+            val reply = client.send(host = "127.0.0.1", request = signed)
+            reply.fold(
+                onSuccess = { mutableState.value = mutableState.value.copy(terminalOutput = it.detail) },
+                onFailure = { setMessage("Remote terminal failed: ${it.message ?: "unknown error"}", isError = true) },
+            )
+        }
+    }
+
+    private fun jsonString(value: String): String =
+        com.google.gson.JsonPrimitive(value).toString()
+
     private fun onDesktopState(newState: DesktopSessionState) {
         val current = mutableState.value
         mutableState.value = when (newState) {
@@ -388,6 +453,13 @@ class RemoteControlViewModel @Inject constructor(
                 message = if (message.accepted) "The desktop started the application."
                 else "The desktop refused to start it: ${message.reason ?: "no reason given"}",
                 messageIsError = !message.accepted,
+            )
+            is FileList -> mutableState.value = current.copy(
+                remotePath = message.path,
+                remoteEntries = message.entries,
+                message = if (message.entries.isEmpty()) "No files in ${message.path}."
+                else "${message.entries.size} item(s) in ${message.path}.",
+                messageIsError = false,
             )
             is ProtocolError -> mutableState.value = current.copy(
                 message = "The desktop reported ${message.code}: ${message.message}",

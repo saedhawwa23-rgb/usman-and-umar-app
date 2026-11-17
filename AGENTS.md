@@ -24,10 +24,12 @@ Single-context: `CONTEXT.md` at the root, ADRs in `docs/adr/`. See `docs/agents/
 Two separate apps live side by side in `/workspace/project`. Do not confuse them.
 
 - **This repo (`uu-app`)** — `saedhawwa23-rgb/usman-and-umar-app`, package
-  `com.usmanandumar.app`, branch `feature/hybrid-task-orchestrator`, version 3.10.1
-  (versionCode 33). Remote/plugin development. APK deliverable:
-  `USMAN-AND-UMAR-v3.10.2.apk` (debug-signed, ABIs arm64-v8a, armeabi-v7a, x86, x86_64),
-  published as the `v3.10.2` GitHub Release.
+  `com.usmanandumar.app`, branch `feature/hybrid-task-orchestrator`, version 3.10.4
+  (versionCode 34) on the working tree and commit `b87b561`. Plugin and Remote are
+  both redesigned as working dashboards (`core/plugin/*`, `ui/screens/PluginPlatformScreen.kt`,
+  `ui/screens/RemoteControlScreen.kt`). Last published release: `v3.10.2`
+  (`USMAN-AND-UMAR-v3.10.2.apk`, debug-signed, ABIs arm64-v8a, armeabi-v7a, x86, x86_64).
+  3.10.4 is committed locally but not pushed (see the push note below).
 - **`../umar-work` (Mobile-Harness)** — package `com.jarves.mh`, version 1.0.15, remote
   `saedhawwa23-rgb/UMAR-and-Usman-ASHEBIR.git`. This is the app with the PRoot / DeepSeek
   Harness / Claude Code / Antigravity behaviors. It is a separate workstream; never copy
@@ -35,7 +37,7 @@ Two separate apps live side by side in `/workspace/project`. Do not confuse them
 
 Build: `JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ANDROID_HOME=/tmp/tools/sdk \
 ANDROID_SDK_ROOT=/tmp/tools/sdk ./gradlew :app:assembleDebug` (and `:app:testDebugUnitTest`).
-Build tools 36.0.0. Unit suite: 937 tests (888 `:app`, 26 `:remote-protocol`, 23
+Build tools 36.0.0. Unit suite: 956 tests (907 `:app`, 26 `:remote-protocol`, 23
 `:desktop-agent`), all green. Requirement 5 is implemented: `McpToolDiscovery`
 (`tools/list` discovery -> `McpConnector` execution) and `OpenApiToolRegistrar`
 (imported operations -> generic `HttpConnector` execution).

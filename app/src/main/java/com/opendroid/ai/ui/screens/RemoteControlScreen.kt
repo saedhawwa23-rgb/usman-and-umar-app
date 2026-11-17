@@ -1,18 +1,20 @@
 package com.opendroid.ai.ui.screens
 
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Computer
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -20,6 +22,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -29,6 +32,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.opendroid.ai.core.remote.RemoteSessionState
+import com.opendroid.ai.remote.protocol.FileEntry
+import com.opendroid.ai.ui.components.BrandOutlineButton
+import com.opendroid.ai.ui.components.EmptyState
+import com.opendroid.ai.ui.components.LiveDot
+import com.opendroid.ai.ui.components.MetricTile
+import com.opendroid.ai.ui.components.PlatformCard
+import com.opendroid.ai.ui.components.PlatformStatus
+import com.opendroid.ai.ui.components.SectionHeading
+import com.opendroid.ai.ui.components.SegmentedTabs
+import com.opendroid.ai.ui.components.StatusPill
+import com.opendroid.ai.ui.components.PlatformTab
 import com.opendroid.ai.ui.theme.AppTheme
 import com.opendroid.ai.ui.viewmodel.RemoteControlViewModel
 
@@ -51,323 +66,401 @@ fun RemoteControlScreen(viewModel: RemoteControlViewModel = hiltViewModel()) {
     var codeEntry by remember { mutableStateOf("") }
     var transferCode by remember { mutableStateOf("") }
     var host by remember { mutableStateOf("") }
+    var tab by remember { mutableIntStateOf(0) }
     val colors = AppTheme.colors
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text("REMOTE DEVICE CONTROL", color = colors.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text(
-            "Pair a device you own, then approve each action it asks this phone to perform. " +
-                "The default answer to every request is Deny.",
-            color = colors.textSecondary,
-            fontSize = 13.sp
-        )
+    val activeSessions = state.sessions.count { it.isLive }
+    val gatewayStatus = when {
+        state.killSwitchActive -> "Off" to PlatformStatus.ERROR
+        state.listening -> "On" to PlatformStatus.HEALTHY
+        else -> "Off" to PlatformStatus.IDLE
+    }
+    val deviceStatus = if (state.desktopConnected) "Connected" to PlatformStatus.HEALTHY
+    else "Offline" to PlatformStatus.IDLE
 
-        state.pendingApproval?.let { pending ->
-            SectionCard(title = "Remote action needs your approval") {
-                Text(pending.summary, color = colors.textPrimary, fontSize = 13.sp)
-                Text("Risk: ${pending.risk.name}", color = colors.textSecondary, fontSize = 12.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(onClick = { viewModel.approvePending() }) { Text("APPROVE") }
-                    OutlinedButton(onClick = { viewModel.denyPending() }) { Text("DENY") }
-                }
-            }
-        }
-
-        SectionCard(title = "Connection (LAN)") {
-            Text(
-                if (state.listening)
-                    "Listening on port ${state.listenPort ?: "?"}. A paired device on this network can reach this phone."
-                else "Not listening. Turn this on so a paired device on this network can reach this phone.",
-                color = if (state.listening) colors.accentGreenButton else colors.textSecondary,
-                fontSize = 12.sp
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(
-                    onClick = { viewModel.startListening() },
-                    enabled = !state.listening && !state.killSwitchActive
-                ) { Text("START LISTENING") }
-                OutlinedButton(
-                    onClick = { viewModel.stopListening() },
-                    enabled = state.listening
-                ) { Text("STOP") }
-            }
-            Text(
-                "Use this only on a trusted network. The request is signed, but the connection " +
-                    "itself is not encrypted. No public relay is used.",
-                color = colors.textSecondary,
-                fontSize = 11.sp
-            )
-        }
-
-        SectionCard(title = "Pair this device") {
-            Text(
-                "Start pairing and read the code out to the controlling device. The code is " +
-                    "single-use and expires after about 5 minutes.",
-                color = colors.textSecondary,
-                fontSize = 12.sp
-            )
-            Text(
-                "The pairing code is short-lived for safety. It is not a session limit: once a " +
-                    "device is paired and connected, the session stays up until you disconnect it, " +
-                    "revoke it, or it goes idle past the inactivity policy.",
-                color = colors.textSecondary,
-                fontSize = 11.sp
-            )
-            Button(
-                onClick = { viewModel.startPairing() },
-                enabled = !state.killSwitchActive
-            ) { Text("START PAIRING") }
-
-            state.pairingCode?.let { code ->
-                Text("Pairing code", color = colors.textSecondary, fontSize = 12.sp)
-                Text(code, color = colors.accentCyan, fontSize = 34.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    "Pairing code expires in about 5 minutes. This does not limit a connected session.",
-                    color = colors.textSecondary,
-                    fontSize = 11.sp
-                )
+    Column(Modifier.fillMaxSize()) {
+        BrandedRemoteHeader(activeSessions = activeSessions)
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            // Overview metrics: the real, live numbers behind the dashboard.
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                MetricTile(activeSessions.toString(), "Live sessions", colors.electricBlue, Modifier.weight(1f))
+                MetricTile(state.pairedDevices.size.toString(), "Paired phones", colors.emerald, Modifier.weight(1f))
+                MetricTile(state.pairedDesktops.size.toString(), "Computers", colors.accentCyan, Modifier.weight(1f))
             }
 
-            Text(
-                "Have a code from another device? Enter it here to pair with that device.",
-                color = colors.textSecondary,
-                fontSize = 12.sp
+            SegmentedTabs(
+                tabs = listOf(
+                    PlatformTab("Overview"),
+                    PlatformTab("Devices", activeSessions),
+                    PlatformTab("Transfer"),
+                    PlatformTab("Terminal"),
+                    PlatformTab("Gateway"),
+                ),
+                selectedIndex = tab,
+                onSelect = { tab = it },
             )
-            OutlinedTextField(
-                value = codeEntry,
-                onValueChange = { codeEntry = it.filter(Char::isDigit).take(6) },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Pairing code") },
-                singleLine = true
-            )
-            Button(
-                onClick = { viewModel.completePairing(codeEntry); codeEntry = "" },
-                enabled = codeEntry.length == 6 && !state.killSwitchActive
-            ) { Text("PAIR") }
-        }
 
-        SectionCard(title = "Active sessions") {
-            if (state.sessions.isEmpty()) {
-                Text(
-                    "No sessions yet. A session starts when a device is paired and connected, and " +
-                        "stays up until you disconnect it or policy ends it.",
-                    color = colors.textSecondary,
-                    fontSize = 12.sp
-                )
-            } else {
-                state.sessions.forEach { session ->
-                    val statusColor = when (session.state) {
-                        com.opendroid.ai.core.remote.RemoteSessionState.CONNECTED -> colors.accentGreenButton
-                        com.opendroid.ai.core.remote.RemoteSessionState.RECONNECTING -> colors.accentCyan
-                        com.opendroid.ai.core.remote.RemoteSessionState.PAIRING -> colors.textSecondary
-                        else -> colors.accentRed
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(session.deviceId, color = colors.textPrimary, fontSize = 13.sp)
-                            Text(
-                                session.state.name + " - " + session.endReason.message,
-                                color = statusColor,
-                                fontSize = 12.sp
-                            )
-                        }
-                        if (session.isLive) {
-                            TextButton(onClick = { viewModel.disconnectSession(session.deviceId) }) {
-                                Text("DISCONNECT")
-                            }
-                        }
-                    }
-                }
+            when (tab) {
+                0 -> RemoteOverviewTab(state, viewModel, codeEntry, { codeEntry = it }, host, { host = it })
+                1 -> RemoteDevicesTab(state, viewModel, transferCode, { transferCode = it })
+                2 -> RemoteTransferTab(state, viewModel)
+                3 -> RemoteTerminalTab(state, viewModel)
+                else -> RemoteGatewayTab(state, viewModel, gatewayStatus, deviceStatus)
             }
-        }
 
-        SectionCard(title = "Paired devices") {
-            if (state.pairedDevices.isEmpty()) {
-                Text("No devices are paired yet.", color = colors.textSecondary, fontSize = 12.sp)
-            } else {
-                state.pairedDevices.forEach { keyId ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(keyId, color = colors.textPrimary, fontSize = 13.sp)
-                        Row {
-                            TextButton(onClick = { viewModel.exportTransferCode(keyId) }) { Text("EXPORT") }
-                            TextButton(onClick = { viewModel.unpair(keyId) }) { Text("UNPAIR") }
-                        }
-                    }
-                }
-                Text(
-                    "To control another phone, copy its transfer code here (the other phone shows " +
-                        "it from its own Remote screen).",
-                    color = colors.textSecondary,
-                    fontSize = 12.sp
-                )
-                OutlinedTextField(
-                    value = transferCode,
-                    onValueChange = { transferCode = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Transfer code from the other device") }
-                )
-                Button(
-                    onClick = { viewModel.importTransferCode(transferCode); transferCode = "" },
-                    enabled = transferCode.isNotBlank()
-                ) { Text("IMPORT TRANSFER CODE") }
-            }
-        }
-
-        SectionCard(title = "Send an action to a paired device") {
-            Text(
-                "Enter the paired device's LAN address and the tool to run. The request is signed " +
-                    "with the shared key before it is sent.",
-                color = colors.textSecondary,
-                fontSize = 12.sp
-            )
-            OutlinedTextField(
-                value = host,
-                onValueChange = { host = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Device address (e.g. 192.168.1.20)") },
-                singleLine = true
-            )
-            OutlinedButton(
-                onClick = { viewModel.sendAction(host, "battery_status", "{}") },
-                enabled = host.isNotBlank() && state.pairedDevices.isNotEmpty()
-            ) { Text("SEND: BATTERY STATUS") }
-            OutlinedButton(
-                onClick = { viewModel.sendAction(host, "network_status", "{}") },
-                enabled = host.isNotBlank() && state.pairedDevices.isNotEmpty()
-            ) { Text("SEND: NETWORK STATUS") }
-            if (state.pairedDevices.isEmpty()) {
-                Text(
-                    "Pair a device, or import its transfer code, before sending.",
-                    color = colors.textSecondary,
-                    fontSize = 11.sp
+            state.message?.let { message ->
+                StatusPill(
+                    text = message,
+                    status = if (state.messageIsError) PlatformStatus.ERROR else PlatformStatus.HEALTHY,
                 )
             }
         }
-
-        SectionCard(title = "Kill switch") {
-            Text(
-                if (state.killSwitchActive) "Remote control is disabled. Open sessions are closed."
-                else "Engaging the kill switch disables remote control immediately and closes open sessions.",
-                color = if (state.killSwitchActive) colors.accentRed else colors.textSecondary,
-                fontSize = 12.sp
-            )
-            OutlinedButton(
-                onClick = { viewModel.engageKillSwitch() },
-                enabled = !state.killSwitchActive
-            ) { Text("ENGAGE KILL SWITCH") }
-        }
-
-        state.message?.let { message ->
-            Text(
-                message,
-                color = if (state.messageIsError) colors.accentRed else colors.accentGreenButton,
-                fontSize = 13.sp
-            )
-        }
-
-        DesktopAgentSection(state = state, viewModel = viewModel)
-
-        Text(
-            "What this does not do: reaching a computer needs the desktop agent running on it " +
-                "first, and both devices must be able to reach each other. The agent listens on " +
-                "your network; the app never opens an inbound port on the phone and uses no public " +
-                "relay. Use the agent's TLS option when the network is not trusted.",
-            color = colors.textSecondary,
-            fontSize = 11.sp
-        )
     }
 }
 
-/**
- * Pairs with, connects to, and drives the desktop companion agent. The pairing code is the one the
- * agent printed; the phone stores only the secret derived from it.
- */
+/** The premium navy gradient header with a live connection indicator. */
 @Composable
-private fun DesktopAgentSection(state: RemoteControlViewModel.UiState, viewModel: RemoteControlViewModel) {
+private fun BrandedRemoteHeader(activeSessions: Int) {
+    val colors = AppTheme.colors
+    com.opendroid.ai.ui.components.BrandHeader(
+        title = "Universal Remote",
+        subtitle = if (activeSessions > 0) "$activeSessions live session(s)" else "Pair, control and transfer",
+        icon = Icons.Filled.PhoneAndroid,
+        trailing = { LiveDot(if (activeSessions > 0) PlatformStatus.ACTIVE else PlatformStatus.IDLE) },
+    )
+}
+
+@Composable
+private fun RemoteOverviewTab(
+    state: RemoteControlViewModel.UiState,
+    viewModel: RemoteControlViewModel,
+    codeEntry: String,
+    onCodeEntry: (String) -> Unit,
+    host: String,
+    onHost: (String) -> Unit,
+) {
+    val colors = AppTheme.colors
+
+    state.pendingApproval?.let { pending ->
+        PlatformCard(
+            title = "Remote action needs approval",
+            subtitle = "The default answer to every request is Deny.",
+            status = "Action" to PlatformStatus.WARNING,
+        ) {
+            Text(pending.summary, color = colors.textPrimary, fontSize = 13.sp)
+            Text("Risk: ${pending.risk.name}", color = colors.textSecondary, fontSize = 12.sp)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(onClick = { viewModel.approvePending() }) { Text("APPROVE") }
+                OutlinedButton(onClick = { viewModel.denyPending() }) { Text("DENY") }
+            }
+        }
+    }
+
+    PlatformCard(
+        title = "Pair this phone",
+        subtitle = "Read the code out to the controlling device",
+        status = if (state.pairingCode != null) "Code live" to PlatformStatus.ACTIVE else "Idle" to PlatformStatus.IDLE,
+    ) {
+        Button(onClick = { viewModel.startPairing() }, enabled = !state.killSwitchActive) { Text("START PAIRING") }
+        state.pairingCode?.let { code ->
+            Text("Pairing code", color = colors.textSecondary, fontSize = 12.sp)
+            Text(code, color = colors.accentCyan, fontSize = 34.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "Single-use, expires after about 5 minutes.",
+                color = colors.textSecondary, fontSize = 11.sp,
+            )
+        }
+        OutlinedTextField(
+            value = codeEntry,
+            onValueChange = { onCodeEntry(it.filter(Char::isDigit).take(6)) },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Enter a code from another device") },
+            singleLine = true,
+        )
+        Button(
+            onClick = { viewModel.completePairing(codeEntry); onCodeEntry("") },
+            enabled = codeEntry.length == 6 && !state.killSwitchActive,
+        ) { Text("PAIR") }
+    }
+
+    PlatformCard(
+        title = "Active sessions",
+        status = "${state.sessions.count { it.isLive }} live" to
+            if (state.sessions.any { it.isLive }) PlatformStatus.HEALTHY else PlatformStatus.IDLE,
+    ) {
+        if (state.sessions.isEmpty()) {
+            EmptyState(
+                Icons.Filled.PhoneAndroid,
+                "No sessions yet",
+                "A session starts when a device is paired and connected.",
+            )
+        } else {
+            state.sessions.forEach { session ->
+                val status = when (session.state) {
+                    RemoteSessionState.CONNECTED -> PlatformStatus.HEALTHY
+                    RemoteSessionState.RECONNECTING -> PlatformStatus.ACTIVE
+                    RemoteSessionState.PAIRING -> PlatformStatus.INFO
+                    else -> PlatformStatus.ERROR
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(session.deviceId, color = colors.textPrimary, fontSize = 13.sp)
+                        StatusPill(session.state.name, status)
+                    }
+                    if (session.isLive) {
+                        TextButton(onClick = { viewModel.disconnectSession(session.deviceId) }) { Text("DISCONNECT") }
+                    }
+                }
+            }
+        }
+    }
+
+    PlatformCard(title = "Send an action", subtitle = "Signed with the shared key before it is sent") {
+        OutlinedTextField(
+            value = host,
+            onValueChange = onHost,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Device address (e.g. 192.168.1.20)") },
+            singleLine = true,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BrandOutlineButton(
+                text = "Battery",
+                onClick = { viewModel.sendAction(host, "battery_status", "{}") },
+                enabled = host.isNotBlank() && state.pairedDevices.isNotEmpty(),
+                modifier = Modifier.weight(1f),
+            )
+            BrandOutlineButton(
+                text = "Network",
+                onClick = { viewModel.sendAction(host, "network_status", "{}") },
+                enabled = host.isNotBlank() && state.pairedDevices.isNotEmpty(),
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RemoteDevicesTab(
+    state: RemoteControlViewModel.UiState,
+    viewModel: RemoteControlViewModel,
+    transferCode: String,
+    onTransferCode: (String) -> Unit,
+) {
+    val colors = AppTheme.colors
+    PlatformCard(title = "Paired phones", subtitle = "Keys this phone can sign for") {
+        if (state.pairedDevices.isEmpty()) {
+            EmptyState(Icons.Filled.PhoneAndroid, "No devices paired", "Pair a device or import a transfer code.")
+        } else {
+            state.pairedDevices.forEach { keyId ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(keyId, color = colors.textPrimary, fontSize = 13.sp)
+                    Row {
+                        TextButton(onClick = { viewModel.exportTransferCode(keyId) }) { Text("EXPORT") }
+                        TextButton(onClick = { viewModel.unpair(keyId) }) { Text("UNPAIR") }
+                    }
+                }
+            }
+        }
+        OutlinedTextField(
+            value = transferCode,
+            onValueChange = onTransferCode,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Transfer code from the other device") },
+        )
+        Button(
+            onClick = { viewModel.importTransferCode(transferCode); onTransferCode("") },
+            enabled = transferCode.isNotBlank(),
+        ) { Text("IMPORT TRANSFER CODE") }
+    }
+}
+
+@Composable
+private fun RemoteTransferTab(state: RemoteControlViewModel.UiState, viewModel: RemoteControlViewModel) {
+    val colors = AppTheme.colors
+    PlatformCard(
+        title = "Secure file transfer",
+        subtitle = "Files travel over the authenticated desktop session",
+        status = if (state.desktopConnected) "Connected" to PlatformStatus.HEALTHY else "Offline" to PlatformStatus.IDLE,
+    ) {
+        Text(
+            "Connect a computer in the Gateway tab, then browse its shared folder here. Downloads " +
+                "land in this app's storage; nothing is sent to a third party.",
+            color = colors.textSecondary, fontSize = 12.sp,
+        )
+        var path by remember { mutableStateOf(state.remotePath) }
+        OutlinedTextField(
+            value = path,
+            onValueChange = { path = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Folder on the computer (blank = root)") },
+            singleLine = true,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BrandOutlineButton(
+                text = "Browse",
+                onClick = { viewModel.listRemoteFiles(path) },
+                enabled = state.desktopConnected,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (state.remoteEntries.isEmpty()) {
+            EmptyState(Icons.Filled.Computer, "No folder listed", "Browse a folder on a connected computer.")
+        } else {
+            SectionHeading("In ${state.remotePath}", "${state.remoteEntries.size} item(s)")
+            LazyColumn(Modifier.fillMaxWidth().height(220.dp)) {
+                items(state.remoteEntries) { entry ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                (if (entry.directory) "📁 " else "📄 ") + entry.name,
+                                color = colors.textPrimary, fontSize = 13.sp,
+                            )
+                            if (!entry.directory) {
+                                Text("${entry.size / 1024} KB", color = colors.textSecondary, fontSize = 11.sp)
+                            }
+                        }
+                        if (entry.directory) {
+                            TextButton(onClick = { viewModel.listRemoteFiles(entry.name) }) { Text("OPEN") }
+                        } else {
+                            TextButton(onClick = { viewModel.downloadRemoteFile(entry.name) }) { Text("DOWNLOAD") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RemoteTerminalTab(state: RemoteControlViewModel.UiState, viewModel: RemoteControlViewModel) {
+    val colors = AppTheme.colors
+    var command by remember { mutableStateOf("") }
+    PlatformCard(
+        title = "Authorized remote terminal",
+        subtitle = "Runs on this phone only after your approval",
+        status = if (state.pairedDevices.isNotEmpty()) "Ready" to PlatformStatus.ACTIVE else "No device" to PlatformStatus.WARNING,
+    ) {
+        Text(
+            "Send a single Linux command to this phone as a signed remote action. The approval " +
+                "prompt appears first; chaining and redirection are blocked by the tool policy.",
+            color = colors.textSecondary, fontSize = 12.sp,
+        )
+        OutlinedTextField(
+            value = command,
+            onValueChange = { command = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Command (e.g. uname -a)") },
+            singleLine = true,
+        )
+        BrandOutlineButton(
+            text = "Run",
+            onClick = { viewModel.runRemoteTerminal(command) },
+            enabled = command.isNotBlank() && state.pairedDevices.isNotEmpty(),
+        )
+        state.terminalOutput?.let { output ->
+            SectionHeading("Output")
+            Text(output, color = colors.textPrimary, fontSize = 12.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+        }
+    }
+}
+
+@Composable
+private fun RemoteGatewayTab(
+    state: RemoteControlViewModel.UiState,
+    viewModel: RemoteControlViewModel,
+    gatewayStatus: Pair<String, PlatformStatus>,
+    deviceStatus: Pair<String, PlatformStatus>,
+) {
     val colors = AppTheme.colors
     var host by remember { mutableStateOf("") }
     var port by remember { mutableStateOf("8777") }
     var code by remember { mutableStateOf("") }
     var width by remember { mutableStateOf("1280") }
 
-    SectionCard(title = "Computer (desktop agent)") {
+    PlatformCard(
+        title = "Remote gateway (LAN listener)",
+        subtitle = "No public relay; signed payloads only",
+        status = gatewayStatus,
+    ) {
         Text(
-            "Start the desktop agent on the computer, then enter its address and the pairing code " +
-                "it printed. The code is valid for five minutes.",
-            color = colors.textSecondary,
-            fontSize = 12.sp
-        )
-
-        OutlinedTextField(
-            value = host,
-            onValueChange = { host = it },
-            label = { Text("Computer address (for example 192.168.1.20)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = port,
-            onValueChange = { port = it.filter(Char::isDigit) },
-            label = { Text("Port") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        OutlinedTextField(
-            value = code,
-            onValueChange = { code = it.uppercase() },
-            label = { Text("Pairing code") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
+            if (state.listening)
+                "Listening on port ${state.listenPort ?: "?"}. A paired device on this network can reach this phone."
+            else "Not listening. Turn this on so a paired device on this network can reach this phone.",
+            color = if (state.listening) colors.emerald else colors.textSecondary,
+            fontSize = 12.sp,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
+                onClick = { viewModel.startListening() },
+                enabled = !state.listening && !state.killSwitchActive,
+            ) { Text("START LISTENING") }
+            OutlinedButton(onClick = { viewModel.stopListening() }, enabled = state.listening) { Text("STOP") }
+        }
+        Text(
+            "The request is signed, but the LAN connection itself is not encrypted. Use only on a trusted network.",
+            color = colors.textSecondary, fontSize = 11.sp,
+        )
+    }
+
+    PlatformCard(title = "Computer (desktop agent)", status = deviceStatus) {
+        OutlinedTextField(
+            value = host, onValueChange = { host = it },
+            label = { Text("Computer address (e.g. 192.168.1.20)") },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = port, onValueChange = { port = it.filter(Char::isDigit) },
+                label = { Text("Port") }, singleLine = true, modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = code, onValueChange = { code = it.uppercase() },
+                label = { Text("Pairing code") }, singleLine = true, modifier = Modifier.weight(1f),
+            )
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
                 onClick = { viewModel.pairWithDesktop(host, port.toIntOrNull() ?: 8777, code) },
-                enabled = host.isNotBlank() && code.isNotBlank() && !state.desktopConnected
+                enabled = host.isNotBlank() && code.isNotBlank() && !state.desktopConnected,
             ) { Text("PAIR") }
             OutlinedButton(
                 onClick = { viewModel.connectToDesktop(host, port.toIntOrNull() ?: 8777) },
-                enabled = host.isNotBlank() && !state.desktopConnected
+                enabled = host.isNotBlank() && !state.desktopConnected,
             ) { Text("CONNECT") }
-            OutlinedButton(
-                onClick = { viewModel.disconnectDesktop() },
-                enabled = state.desktopConnected
-            ) { Text("DISCONNECT") }
+            OutlinedButton(onClick = { viewModel.disconnectDesktop() }, enabled = state.desktopConnected) {
+                Text("DISCONNECT")
+            }
         }
-
         if (state.pairedDesktops.isNotEmpty()) {
             Text(
                 "Paired: " + state.pairedDesktops.joinToString { "${it.serverName} (${it.host}:${it.port})" },
-                color = colors.textSecondary,
-                fontSize = 12.sp
+                color = colors.textSecondary, fontSize = 12.sp,
             )
         }
-
         if (state.desktopConnected) {
-            Text(
-                "Connected to ${state.desktopName ?: "the desktop"}.",
-                color = colors.accentGreenButton,
-                fontSize = 12.sp
-            )
+            Text("Connected to ${state.desktopName ?: "the desktop"}.", color = colors.emerald, fontSize = 12.sp)
             OutlinedTextField(
-                value = width,
-                onValueChange = { width = it.filter(Char::isDigit) },
-                label = { Text("Screen width in pixels") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                value = width, onValueChange = { width = it.filter(Char::isDigit) },
+                label = { Text("Screen width in pixels") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (state.desktopStreaming) {
@@ -379,61 +472,36 @@ private fun DesktopAgentSection(state: RemoteControlViewModel.UiState, viewModel
                 }
                 OutlinedButton(onClick = { viewModel.listDesktopApplications() }) { Text("LIST APPS") }
             }
-
             state.lastScreenFrame?.let { frame ->
                 Text(
-                    "Last frame: ${frame.width}x${frame.height} ${frame.format}, " +
-                        "${frame.data.size / 1024} KB",
-                    color = colors.textSecondary,
-                    fontSize = 12.sp
+                    "Last frame: ${frame.width}x${frame.height} ${frame.format}, ${frame.data.size / 1024} KB",
+                    color = colors.textSecondary, fontSize = 12.sp,
                 )
             }
-
-            if (state.desktopApplications.isNotEmpty()) {
-                state.desktopApplications.take(10).forEach { app ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(app.name, color = colors.textPrimary, fontSize = 12.sp)
-                        TextButton(onClick = { viewModel.launchDesktopApplication(app.id) }) { Text("START") }
-                    }
+            state.desktopApplications.take(10).forEach { app ->
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(app.name, color = colors.textPrimary, fontSize = 12.sp)
+                    TextButton(onClick = { viewModel.launchDesktopApplication(app.id) }) { Text("START") }
                 }
             }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = {
-                    viewModel.sendDesktopInput(
-                        com.opendroid.ai.remote.protocol.InputEvent(
-                            com.opendroid.ai.remote.protocol.InputEvent.MOUSE_MOVE, x = 10, y = 10,
-                        )
-                    )
-                }) { Text("MOVE CURSOR") }
-            }
         }
-
         if (state.pairedDesktops.isNotEmpty()) {
             OutlinedButton(onClick = { viewModel.forgetDesktops() }) { Text("FORGET PAIRED COMPUTERS") }
         }
     }
-}
 
-@Composable
-private fun SectionCard(title: String, content: @Composable () -> Unit) {
-    val colors = AppTheme.colors
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .border(1.dp, colors.borderColor, RoundedCornerShape(12.dp)),
-        colors = CardDefaults.cardColors(containerColor = colors.cardBackground)
+    PlatformCard(
+        title = "Kill switch",
+        subtitle = "Disables remote control immediately and closes open sessions",
+        status = if (state.killSwitchActive) "Engaged" to PlatformStatus.ERROR else "Ready" to PlatformStatus.HEALTHY,
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(title, color = colors.textPrimary, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            content()
-        }
+        OutlinedButton(
+            onClick = { viewModel.engageKillSwitch() },
+            enabled = !state.killSwitchActive,
+        ) { Text("ENGAGE KILL SWITCH") }
     }
 }
