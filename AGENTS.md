@@ -25,8 +25,9 @@ Two separate apps live side by side in `/workspace/project`. Do not confuse them
 
 - **This repo (`uu-app`)** — `saedhawwa23-rgb/usman-and-umar-app`, package
   `com.usmanandumar.app`, branch `feature/hybrid-task-orchestrator`, version 3.10.1
-  (versionCode 32). Remote/plugin development. APK deliverable:
-  `USMAN-AND-UMAR-v3.10.1.apk` (debug-signed, ABIs arm64-v8a, armeabi-v7a, x86, x86_64).
+  (versionCode 33). Remote/plugin development. APK deliverable:
+  `USMAN-AND-UMAR-v3.10.2.apk` (debug-signed, ABIs arm64-v8a, armeabi-v7a, x86, x86_64),
+  published as the `v3.10.2` GitHub Release.
 - **`../umar-work` (Mobile-Harness)** — package `com.jarves.mh`, version 1.0.15, remote
   `saedhawwa23-rgb/UMAR-and-Usman-ASHEBIR.git`. This is the app with the PRoot / DeepSeek
   Harness / Claude Code / Antigravity behaviors. It is a separate workstream; never copy
@@ -39,9 +40,11 @@ Build tools 36.0.0. Unit suite: 937 tests (888 `:app`, 26 `:remote-protocol`, 23
 (`tools/list` discovery -> `McpConnector` execution) and `OpenApiToolRegistrar`
 (imported operations -> generic `HttpConnector` execution).
 
-Push to this repo currently fails with HTTP 403: `GITHUB_TOKEN` is a GitHub App
-installation token (read-only; API write returns "Resource not accessible by
-integration"). Commits stay local until push access is granted.
+Push requires a user PAT with `repo`+`workflow`. The ambient `GITHUB_TOKEN` is a
+GitHub App installation token whose writes return "Resource not accessible by
+integration", so it cannot push. When a user PAT is supplied, push it transiently
+via `git -c http.extraheader="Authorization: Basic $(printf 'x-access-token:%s' "$TOK" | base64 -w0)"`
+so the token never lands in `.git/config`.
 
 The `AGENTS.md` content above this section (issue tracker `JMAN730/opendroid`) is inherited
 from an upstream fork and does not describe this repository.
