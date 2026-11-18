@@ -76,8 +76,8 @@ jobs:
             ./gradlew :app:connectedDebugAndroidTest -PinstrumentedTestAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" --no-configuration-cache --stacktrace 2>&1 | tee artifacts/test-logs/v3106-after.log
             adb shell pm list packages | tr -d '\r' > artifacts/test-logs/v3106-packages.txt
             cat artifacts/test-logs/v3106-packages.txt
-            app_package=$(grep -E 'usman|opendroid' artifacts/test-logs/v3106-packages.txt | head -1 | sed 's/^package://')
-            test -n "$app_package"
+            app_package="$PACKAGE_NAME"
+            grep -Fx "package:$app_package" artifacts/test-logs/v3106-packages.txt
             echo "Installed application package: $app_package"
             adb exec-out run-as "$app_package" cat files/visual-evidence/v3.10.6-task-bar.png > artifacts/after/v3.10.6-task-bar.png
             adb exec-out run-as "$app_package" cat files/visual-evidence/v3.10.6-tool-bar.png > artifacts/after/v3.10.6-tool-bar.png
@@ -120,8 +120,8 @@ jobs:
             ./gradlew :app:connectedDebugAndroidTest -PinstrumentedTestAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" --no-configuration-cache --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/artifacts/test-logs/v3105-before.log"
             adb shell pm list packages | tr -d '\r' > "$GITHUB_WORKSPACE/artifacts/test-logs/v3105-packages.txt"
             cat "$GITHUB_WORKSPACE/artifacts/test-logs/v3105-packages.txt"
-            app_package=$(grep -E 'usman|opendroid' "$GITHUB_WORKSPACE/artifacts/test-logs/v3105-packages.txt" | head -1 | sed 's/^package://')
-            test -n "$app_package"
+            app_package="$PACKAGE_NAME"
+            grep -Fx "package:$app_package" "$GITHUB_WORKSPACE/artifacts/test-logs/v3105-packages.txt"
             echo "Installed application package: $app_package"
             adb exec-out run-as "$app_package" cat files/visual-evidence/v3.10.5-task-bar.png > "$GITHUB_WORKSPACE/artifacts/before/v3.10.5-task-bar.png"
             adb exec-out run-as "$app_package" cat files/visual-evidence/v3.10.5-tool-bar.png > "$GITHUB_WORKSPACE/artifacts/before/v3.10.5-tool-bar.png"
