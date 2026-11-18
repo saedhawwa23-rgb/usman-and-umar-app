@@ -72,25 +72,7 @@ jobs:
           disable-spellchecker: true
           disable-animations: true
           script: |
-            set -eu
-            gradle_log=artifacts/test-logs/v3106-after.log
-            ./gradlew :app:connectedDebugAndroidTest -PinstrumentedTestAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" --no-configuration-cache --stacktrace >"$gradle_log" 2>&1 &
-            gradle_pid=$!
-            for _ in $(seq 1 900); do
-              for name in task-bar tool-bar ai-providers github termux-linux plugin-platform remote-platform; do
-                target="artifacts/after/v3.10.6-$name.png"
-                if [ ! -s "$target" ]; then
-                  adb exec-out run-as "$PACKAGE_NAME" cat "files/visual-evidence/v3.10.6-$name.png" > "$target" 2>/dev/null || rm -f "$target"
-                fi
-              done
-              if kill -0 "$gradle_pid" 2>/dev/null; then sleep 1; else break; fi
-            done
-            set +e
-            wait "$gradle_pid"
-            gradle_status=$?
-            set -e
-            cat "$gradle_log"
-            test "$gradle_status" -eq 0
+            sh "$GITHUB_WORKSPACE/.github/scripts/capture-emulator-screens.sh" v3.10.6 "$GITHUB_WORKSPACE/artifacts/after" "$GITHUB_WORKSPACE/artifacts/test-logs/v3106-after.log" "$GITHUB_WORKSPACE"
 
       - name: Prepare pinned v3.10.5 baseline checkout
         run: |
@@ -120,26 +102,7 @@ jobs:
           disable-spellchecker: true
           disable-animations: true
           script: |
-            set -eu
-            cd "$BASELINE_DIR"
-            gradle_log="$GITHUB_WORKSPACE/artifacts/test-logs/v3105-before.log"
-            ./gradlew :app:connectedDebugAndroidTest -PinstrumentedTestAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" --no-configuration-cache --stacktrace >"$gradle_log" 2>&1 &
-            gradle_pid=$!
-            for _ in $(seq 1 900); do
-              for name in task-bar tool-bar ai-providers github termux-linux plugin-platform remote-platform; do
-                target="$GITHUB_WORKSPACE/artifacts/before/v3.10.5-$name.png"
-                if [ ! -s "$target" ]; then
-                  adb exec-out run-as "$PACKAGE_NAME" cat "files/visual-evidence/v3.10.5-$name.png" > "$target" 2>/dev/null || rm -f "$target"
-                fi
-              done
-              if kill -0 "$gradle_pid" 2>/dev/null; then sleep 1; else break; fi
-            done
-            set +e
-            wait "$gradle_pid"
-            gradle_status=$?
-            set -e
-            cat "$gradle_log"
-            test "$gradle_status" -eq 0
+            sh "$GITHUB_WORKSPACE/.github/scripts/capture-emulator-screens.sh" v3.10.5 "$GITHUB_WORKSPACE/artifacts/before" "$GITHUB_WORKSPACE/artifacts/test-logs/v3105-before.log" "$BASELINE_DIR"
 
       - name: Verify fourteen genuine emulator screenshots
         run: |
