@@ -60,6 +60,7 @@ import com.opendroid.ai.ui.components.SegmentedTabs
 import com.opendroid.ai.ui.components.StatusPill
 import com.opendroid.ai.ui.screens.taskbar.TaskAction
 import com.opendroid.ai.ui.screens.taskbar.TaskBarModel
+import com.opendroid.ai.ui.screens.taskbar.TaskBarSummary
 import com.opendroid.ai.ui.screens.taskbar.TaskProgress
 import com.opendroid.ai.ui.screens.taskbar.TaskStatusKind
 import com.opendroid.ai.core.agent.InstalledAiAppDiscovery
@@ -166,14 +167,7 @@ fun WorkspaceTaskScreen(
             contentPadding = PaddingValues(bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            item {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MetricTile(value = summary.active.toString(), label = "Running", accent = AppTheme.colors.electricBlue, modifier = Modifier.weight(1f))
-                    MetricTile(value = summary.queued.toString(), label = "Queued", accent = AppTheme.colors.textSecondary, modifier = Modifier.weight(1f))
-                    MetricTile(value = summary.waiting.toString(), label = "Waiting", accent = AppTheme.colors.accentOrange, modifier = Modifier.weight(1f))
-                    MetricTile(value = summary.done.toString(), label = "Done", accent = AppTheme.colors.emerald, modifier = Modifier.weight(1f))
-                }
-            }
+            item { TaskBarSummaryRow(summary) }
             item {
                 SegmentedTabs(
                     tabs = TaskuaryPage.entries.map { PlatformTab(it.label, tabCounts[it]) },
@@ -409,6 +403,16 @@ fun WorkspaceTaskScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+internal fun TaskBarSummaryRow(summary: TaskBarSummary, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        MetricTile(value = summary.active.toString(), label = "Running", accent = AppTheme.colors.electricBlue, modifier = Modifier.weight(1f))
+        MetricTile(value = summary.queued.toString(), label = "Queued", accent = AppTheme.colors.textSecondary, modifier = Modifier.weight(1f))
+        MetricTile(value = summary.waiting.toString(), label = "Waiting", accent = AppTheme.colors.accentOrange, modifier = Modifier.weight(1f))
+        MetricTile(value = summary.done.toString(), label = "Done", accent = AppTheme.colors.emerald, modifier = Modifier.weight(1f))
     }
 }
 

@@ -39,6 +39,13 @@ nothing is labelled "connected" until the real integration reports it is. The ap
   lookup and clone, and the Termux section routes to the real Termux RUN_COMMAND integration and
   the cloud tool-agent screen. The integration platform screen stays reachable from the header.
 - Version bumped to 3.10.5 (versionCode 35).
+- **Render and routing coverage** (`src/test/.../ToolBarRenderTest.kt`, `TaskBarRenderTest.kt`):
+  the real Tool Bar and Task Bar presentation now compose under Robolectric on the JVM, so CI asserts
+  that each section and entry is displayed, that availability pills match the runtime context, and
+  that every entry invokes the correct navigation callback — with no device required.
+- **Release workflow version** (`.github/workflows/android-release.yml`): the dispatch `tag` input
+  default and the built-APK version assertions move from 3.10.4 / versionCode 34 to 3.10.5 /
+  versionCode 35 to match the app.
 
 ### Not changed
 

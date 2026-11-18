@@ -300,6 +300,11 @@ dependencies {
     // Robolectric runs the Room migration tests on the JVM - no emulator, so
     // they live in src/test and run under the existing testDebugUnitTest.
     testImplementation 'org.robolectric:robolectric:4.16.1'
+    // Compose UI tests under Robolectric: renders the real Tool Bar and Task Bar screens on the
+    // JVM so their composition, navigation routing and availability labels are asserted in CI.
+    testImplementation platform('androidx.compose:compose-bom:2026.06.01')
+    testImplementation 'androidx.compose.ui:ui-test-junit4'
+    testImplementation 'androidx.compose.ui:ui-test-manifest'
     // Network-stack tests: MockWebServer (mockwebserver3 packages, JUnit-free core)
     // and okhttp-tls for building the throwaway certificates used by the TLS tests.
     testImplementation platform('com.squareup.okhttp3:okhttp-bom:5.4.0')

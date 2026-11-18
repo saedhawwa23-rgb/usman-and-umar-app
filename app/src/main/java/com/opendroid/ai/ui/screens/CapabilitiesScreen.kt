@@ -76,6 +76,30 @@ fun CapabilitiesScreen(
             githubTokenConnected = false,
         )
     }
+    CapabilitiesScreenContent(
+        context = context,
+        onSearchAI = onSearchAI,
+        onSearchGitHub = onSearchGitHub,
+        onTermux = onTermux,
+        onUniversalAgent = onUniversalAgent,
+        onOpenPluginPlatform = onOpenPluginPlatform,
+    )
+}
+
+/**
+ * The Tool Bar's presentation, split out from [CapabilitiesScreen] so it can be rendered directly
+ * with a fixed [context] and asserted in a Robolectric Compose test — the navigation callbacks are
+ * plain lambdas, so a test can prove each entry routes to the right screen without a device.
+ */
+@Composable
+internal fun CapabilitiesScreenContent(
+    context: ToolBarContext,
+    onSearchAI: () -> Unit,
+    onSearchGitHub: () -> Unit,
+    onTermux: () -> Unit,
+    onUniversalAgent: () -> Unit,
+    onOpenPluginPlatform: () -> Unit,
+) {
     val sections = remember(context) { ToolBarModel.resolvedSections(context) }
     var selected by remember { mutableIntStateOf(0) }
 
