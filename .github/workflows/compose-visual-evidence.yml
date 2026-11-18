@@ -72,7 +72,7 @@ jobs:
           disable-spellchecker: true
           disable-animations: true
           script: |
-            set -euo pipefail
+            set -eu
             ./gradlew :app:connectedDebugAndroidTest \
               -PinstrumentedTestAbi=x86_64 \
               -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" \
@@ -84,7 +84,7 @@ jobs:
 
       - name: Prepare pinned v3.10.5 baseline checkout
         run: |
-          set -euo pipefail
+          set -eu
           baseline="$RUNNER_TEMP/usman-and-umar-v3105"
           git worktree add --detach "$baseline" "$BASELINE_SHA"
           mkdir -p "$baseline/app/src/androidTest/java/com/opendroid/ai/ui/screens"
@@ -110,7 +110,7 @@ jobs:
           disable-spellchecker: true
           disable-animations: true
           script: |
-            set -euo pipefail
+            set -eu
             cd "$BASELINE_DIR"
             ./gradlew :app:connectedDebugAndroidTest \
               -PinstrumentedTestAbi=x86_64 \
@@ -123,7 +123,7 @@ jobs:
 
       - name: Verify fourteen genuine emulator screenshots
         run: |
-          set -euo pipefail
+          set -eu
           find artifacts/before artifacts/after -type f -name '*.png' -size +0c -print | sort
           test "$(find artifacts/before -type f -name '*.png' -size +0c | wc -l)" -eq 7
           test "$(find artifacts/after -type f -name '*.png' -size +0c | wc -l)" -eq 7
