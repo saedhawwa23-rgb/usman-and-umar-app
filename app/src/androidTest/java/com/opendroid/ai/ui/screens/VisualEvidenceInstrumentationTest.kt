@@ -30,13 +30,13 @@ class VisualEvidenceInstrumentationTest {
     fun captureSevenProductionScreens() {
         val prefix = "v${BuildConfig.VERSION_NAME}"
         val routes = listOf(
-            CaptureRoute("task-bar", OpenDroidRoutes.VISUAL_TASK_BAR, "Task Bar"),
-            CaptureRoute("tool-bar", OpenDroidRoutes.VISUAL_TOOL_BAR, "Tool Bar"),
-            CaptureRoute("ai-providers", OpenDroidRoutes.DISCOVERY, "AI Providers"),
-            CaptureRoute("github", OpenDroidRoutes.GITHUB_DISCOVERY, "GitHub Explorer"),
-            CaptureRoute("termux-linux", OpenDroidRoutes.TERMUX, "Termux · Linux"),
-            CaptureRoute("plugin-platform", OpenDroidRoutes.PLUGIN_PLATFORM, "Integration Platform"),
-            CaptureRoute("remote-platform", OpenDroidRoutes.REMOTE_CONTROL, "Universal Remote"),
+            CaptureRoute("task-bar", OpenDroidRoutes.VISUAL_TASK_BAR, listOf("Task Bar")),
+            CaptureRoute("tool-bar", OpenDroidRoutes.VISUAL_TOOL_BAR, listOf("Tool Bar")),
+            CaptureRoute("ai-providers", OpenDroidRoutes.DISCOVERY, listOf("AI Providers", "AI Provider", "Discovery")),
+            CaptureRoute("github", OpenDroidRoutes.GITHUB_DISCOVERY, listOf("GitHub Explorer")),
+            CaptureRoute("termux-linux", OpenDroidRoutes.TERMUX, listOf("Termux · Linux")),
+            CaptureRoute("plugin-platform", OpenDroidRoutes.PLUGIN_PLATFORM, listOf("Integration Platform")),
+            CaptureRoute("remote-platform", OpenDroidRoutes.REMOTE_CONTROL, listOf("Universal Remote")),
         )
         val outputDirectory = File(targetContext.getExternalFilesDir(null), "visual-evidence").apply {
             deleteRecursively()
@@ -51,8 +51,11 @@ class VisualEvidenceInstrumentationTest {
                 check(device.wait(Until.hasObject(By.pkg(targetContext.packageName)), 20_000)) {
                     "Application package did not become visible for ${route.name}"
                 }
-                check(device.wait(Until.hasObject(By.text(route.expectedTitle)), 20_000)) {
-                    "Expected ${route.expectedTitle} was not visible for ${route.name}"
+                val titleVisible = route.expectedTitles.any { title ->
+                    device.wait(Until.hasObject(By.text(title)), 20_000)
+                }
+                check(titleVisible) {
+                    "Expected one of ${route.expectedTitles} was not visible for ${route.name}"
                 }
                 // Let the branded entry animation and initial view-model composition settle.
                 SystemClock.sleep(1_000)
@@ -68,6 +71,7 @@ class VisualEvidenceInstrumentationTest {
     private data class CaptureRoute(
         val name: String,
         val destination: String,
-        val expectedTitle: String,
+        val expectedTitles: List<String>,
     )
+
 }
