@@ -64,6 +64,8 @@ object OpenDroidRoutes {
     const val UNIVERSAL_AGENT = "universal_agent"
     const val REMOTE_CONTROL = "remote_control"
     const val PLUGIN_PLATFORM = "plugin_platform"
+    const val VISUAL_TASK_BAR = "visual_task_bar"
+    const val VISUAL_TOOL_BAR = "visual_tool_bar"
 }
 
 /**
@@ -86,11 +88,12 @@ fun NavHostController.navigateAfterOnboarding() {
 
 @Composable
 fun OpenDroidNavigation(
-    navController: NavHostController = rememberNavController()
+    navController: NavHostController = rememberNavController(),
+    startDestination: String? = null,
 ) {
     NavHost(
         navController = navController,
-        startDestination = OpenDroidRoutes.SPLASH,
+        startDestination = startDestination ?: OpenDroidRoutes.SPLASH,
         modifier = Modifier.fillMaxSize().background(AppTheme.colors.background),
         enterTransition = {
             fadeIn(animationSpec = tween(300)) + slideIntoContainer(
@@ -345,6 +348,26 @@ fun OpenDroidNavigation(
 
         composable(OpenDroidRoutes.PLUGIN_PLATFORM) {
             PluginPlatformScreen(viewModel = hiltViewModel())
+        }
+
+        // These routes are reachable only through MainActivity's debug-only visual-evidence
+        // intent extra. They compose the same production screens and view models, but bypass
+        // splash/onboarding so emulator evidence is deterministic and repeatable.
+        composable(OpenDroidRoutes.VISUAL_TASK_BAR) {
+            WorkspaceTaskScreen(
+                viewModel = hiltViewModel(),
+                onOpenDriveSettings = {},
+            )
+        }
+
+        composable(OpenDroidRoutes.VISUAL_TOOL_BAR) {
+            CapabilitiesScreen(
+                onSearchAI = {},
+                onSearchGitHub = {},
+                onTermux = {},
+                onUniversalAgent = {},
+                onOpenPluginPlatform = {},
+            )
         }
     }
 }

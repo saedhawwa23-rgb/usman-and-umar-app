@@ -1,4 +1,4 @@
-name: v3.10.5 baseline visual evidence
+name: v3.10.6 emulator visual evidence
 
 on:
   workflow_dispatch:
@@ -7,36 +7,33 @@ on:
       - feature/hybrid-task-orchestrator
     paths:
       - .github/workflows/compose-visual-evidence.yml
-      - app/src/test/java/com/opendroid/ai/ui/screens/VisualEvidenceRenderTest.kt
-
+      - app/src/androidTest/java/com/opendroid/ai/ui/screens/VisualEvidenceInstrumentationTest.kt
+      - app/src/main/java/com/opendroid/ai/MainActivity.kt
+      - app/src/main/java/com/opendroid/ai/ui/Navigation.kt
+      - app/src/main/java/com/opendroid/ai/ui/screens/**
+      - app/src/main/java/com/opendroid/ai/ui/components/**
 permissions:
   contents: read
 
 concurrency:
-  group: compose-v3105-baseline-evidence-${{ github.ref }}
+  group: android-visual-evidence-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   capture:
-    if: github.event_name != 'push' || contains(github.event.head_commit.message, '[run-v3105-evidence]')
-    name: Capture genuine v3.10.5 Compose screens
+    if: github.event_name != 'push' || contains(github.event.head_commit.message, '[run-visual-evidence]')
+    name: Capture emulator before-and-after screens
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
+      PACKAGE_NAME: com.usmanandumar.app
+      SCREENSHOT_TEST: com.opendroid.ai.ui.screens.VisualEvidenceInstrumentationTest
       BASELINE_SHA: 21e5076116585a65e8ef09996299456666caa03c
-      SCREENSHOT_TEST: com.opendroid.ai.ui.screens.VisualEvidenceRenderTest
     steps:
-      - name: Check out full history for pinned baseline
+      - name: Check out feature branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Verify x86_64 runner and v3.10.5 baseline
-        run: |
-          set -euo pipefail
-          test "$(uname -m)" = x86_64
-          git show "$BASELINE_SHA:app/build.gradle" | grep -F 'versionName "3.10.5"'
-          mkdir -p artifacts/screenshots/v3.10.5 artifacts/test-logs artifacts/test-results
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -47,60 +44,96 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platforms;android-36 build-tools;36.0.0'
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
 
-      - name: Restore Gradle dependency and task caches
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Prepare isolated v3.10.5 baseline worktree
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Prepare evidence directories
+        run: mkdir -p artifacts/after artifacts/before artifacts/test-logs artifacts/test-reports
+
+      - name: Capture v3.10.6 screens on API 36 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          cores: 4
+          ram-size: 4096M
+          emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          emulator-boot-timeout: 1200
+          disable-spellchecker: true
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            ./gradlew :app:connectedDebugAndroidTest \
+              -PinstrumentedTestAbi=x86_64 \
+              -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" \
+              --stacktrace 2>&1 | tee artifacts/test-logs/v3106-after.log
+            for remote in $(adb shell run-as "$PACKAGE_NAME" find files/visual-evidence -type f | tr -d '\r'); do
+              name=$(basename "$remote")
+              adb exec-out run-as "$PACKAGE_NAME" cat "$remote" > "artifacts/after/$name"
+            done
+
+      - name: Prepare pinned v3.10.5 baseline checkout
         run: |
           set -euo pipefail
           baseline="$RUNNER_TEMP/usman-and-umar-v3105"
           git worktree add --detach "$baseline" "$BASELINE_SHA"
-          mkdir -p "$baseline/app/src/test/java/com/opendroid/ai/ui/screens"
-          cp app/src/test/java/com/opendroid/ai/ui/screens/VisualEvidenceRenderTest.kt \
-            "$baseline/app/src/test/java/com/opendroid/ai/ui/screens/VisualEvidenceRenderTest.kt"
+          mkdir -p "$baseline/app/src/androidTest/java/com/opendroid/ai/ui/screens"
+          cp app/src/androidTest/java/com/opendroid/ai/ui/screens/VisualEvidenceInstrumentationTest.kt \
+            "$baseline/app/src/androidTest/java/com/opendroid/ai/ui/screens/VisualEvidenceInstrumentationTest.kt"
+          cp app/src/main/java/com/opendroid/ai/MainActivity.kt "$baseline/app/src/main/java/com/opendroid/ai/MainActivity.kt"
+          cp app/src/main/java/com/opendroid/ai/ui/Navigation.kt "$baseline/app/src/main/java/com/opendroid/ai/ui/Navigation.kt"
+          sed -i "/androidTestImplementation 'androidx.test.espresso:espresso-core/a\\    androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.3.0'" \
+            "$baseline/app/build.gradle"
           echo "BASELINE_DIR=$baseline" >> "$GITHUB_ENV"
 
-      - name: Render v3.10.5 Task Bar baseline
+      - name: Capture v3.10.5 screens on API 36 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          cores: 4
+          ram-size: 4096M
+          emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          emulator-boot-timeout: 1200
+          disable-spellchecker: true
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            cd "$BASELINE_DIR"
+            ./gradlew :app:connectedDebugAndroidTest \
+              -PinstrumentedTestAbi=x86_64 \
+              -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" \
+              --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/artifacts/test-logs/v3105-before.log"
+            for remote in $(adb shell run-as "$PACKAGE_NAME" find files/visual-evidence -type f | tr -d '\r'); do
+              name=$(basename "$remote")
+              adb exec-out run-as "$PACKAGE_NAME" cat "$remote" > "$GITHUB_WORKSPACE/artifacts/before/$name"
+            done
+
+      - name: Verify fourteen genuine emulator screenshots
         run: |
           set -euo pipefail
-          (cd "$BASELINE_DIR" && ./gradlew :app:testDebugUnitTest \
-            --tests "$SCREENSHOT_TEST.captureTaskBarSummaryAtPhoneSize" \
-            --max-workers=1 --no-configuration-cache --no-daemon --console=plain \
-            -Pkotlin.compiler.execution.strategy=in-process \
-            -Dorg.gradle.jvmargs='-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8') \
-            2>&1 | tee artifacts/test-logs/v3105-taskbar.log
-          cp "$BASELINE_DIR/app/build/visual-evidence/taskbar-summary.png" artifacts/screenshots/v3.10.5/taskbar-summary.png
-          cp "$BASELINE_DIR/app/build/test-results/testDebugUnitTest/TEST-com.opendroid.ai.ui.screens.VisualEvidenceRenderTest.xml" artifacts/test-results/v3105-taskbar.xml
+          find artifacts/before artifacts/after -type f -name '*.png' -size +0c -print | sort
+          test "$(find artifacts/before -type f -name '*.png' -size +0c | wc -l)" -eq 7
+          test "$(find artifacts/after -type f -name '*.png' -size +0c | wc -l)" -eq 7
+          file artifacts/before/*.png artifacts/after/*.png
 
-      - name: Render v3.10.5 Tool Bar baseline
-        run: |
-          set -euo pipefail
-          (cd "$BASELINE_DIR" && ./gradlew :app:testDebugUnitTest \
-            --tests "$SCREENSHOT_TEST.captureToolBarAtPhoneSize" \
-            --max-workers=1 --no-configuration-cache --no-daemon --console=plain \
-            -Pkotlin.compiler.execution.strategy=in-process \
-            -Dorg.gradle.jvmargs='-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8') \
-            2>&1 | tee artifacts/test-logs/v3105-toolbar.log
-          cp "$BASELINE_DIR/app/build/visual-evidence/toolbar.png" artifacts/screenshots/v3.10.5/toolbar.png
-          cp "$BASELINE_DIR/app/build/test-results/testDebugUnitTest/TEST-com.opendroid.ai.ui.screens.VisualEvidenceRenderTest.xml" artifacts/test-results/v3105-toolbar.xml
-
-      - name: Verify genuine baseline screenshots exist
-        run: |
-          set -euo pipefail
-          for image in \
-            artifacts/screenshots/v3.10.5/taskbar-summary.png \
-            artifacts/screenshots/v3.10.5/toolbar.png; do
-            test -s "$image"
-            file "$image"
-          done
-
-      - name: Upload v3.10.5 screenshots and test evidence
+      - name: Upload screenshots, reports, and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: usman-and-umar-v3.10.5-visual-baseline-${{ github.run_number }}
+          name: usman-and-umar-v3.10.6-emulator-visual-evidence-${{ github.run_number }}
           path: artifacts/
           if-no-files-found: warn
           retention-days: 14

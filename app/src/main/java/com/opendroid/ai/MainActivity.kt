@@ -23,6 +23,10 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        const val EXTRA_VISUAL_ROUTE = "com.opendroid.ai.extra.VISUAL_ROUTE"
+    }
+
     @Inject lateinit var settingsRepository: SettingsRepository
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,7 +48,13 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = AppTheme.colors.background
                 ) {
-                    OpenDroidNavigation()
+                    OpenDroidNavigation(
+                        startDestination = if (BuildConfig.DEBUG) {
+                            intent.getStringExtra(EXTRA_VISUAL_ROUTE)
+                        } else {
+                            null
+                        }
+                    )
                 }
             }
         }
@@ -57,4 +67,3 @@ class MainActivity : ComponentActivity() {
         // For production autonomous helper, we keep the service running in background.
     }
 }
-
