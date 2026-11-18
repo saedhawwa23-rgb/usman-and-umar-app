@@ -62,3 +62,5 @@ class VisualEvidenceRenderTest {
         }
     }
 }
+
+// CI baseline rerun marker: capture the pinned v3.10.5 reference on x86_64.
