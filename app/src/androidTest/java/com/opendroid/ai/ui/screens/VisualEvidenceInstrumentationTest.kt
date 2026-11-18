@@ -59,6 +59,10 @@ class VisualEvidenceInstrumentationTest {
                 val output = File(outputDirectory, "$prefix-${route.name}.png")
                 check(device.takeScreenshot(output)) { "Screenshot failed for ${route.name}" }
                 check(output.isFile && output.length() > 0) { "Empty screenshot for ${route.name}" }
+                val sharedOutput = "/sdcard/Download/$prefix-${route.name}.png"
+                device.executeShellCommand(
+                    "run-as ${targetContext.packageName} cp '${output.absolutePath}' '$sharedOutput'",
+                )
                 instrumentation.getUiAutomation().performGlobalAction(2) // HOME
                 SystemClock.sleep(300)
             }
