@@ -89,14 +89,6 @@ object ToolBarModel {
                     destination = ToolDestination.CLOUD_AGENT,
                 ),
                 ToolEntry(
-                    id = "ai.browser-use",
-                    title = "Remote browser automation",
-                    description = "Send a Browser Use task to a configured cloud executor and read the " +
-                        "real result back. Configure a server in the Task Bar first.",
-                    availability = ToolAvailability.NEEDS_SETUP,
-                    destination = ToolDestination.CLOUD_AGENT,
-                ),
-                ToolEntry(
                     id = "ai.integrations",
                     title = "Integrations, MCP & OpenAPI",
                     description = "Discover and connect AI platforms, MCP servers and OpenAPI services; " +
@@ -192,10 +184,8 @@ object ToolBarModel {
         ToolAvailability.NEEDS_TERMUX ->
             if (context.termuxInstalled) ToolAvailability.READY else ToolAvailability.NEEDS_TERMUX
         ToolAvailability.NEEDS_SETUP -> when (entry.id) {
-            "ai.cloud-agent", "ai.browser-use" ->
+            "ai.cloud-agent" ->
                 if (context.cloudServerConfigured) ToolAvailability.READY else ToolAvailability.NEEDS_SETUP
-            "github.create" ->
-                if (context.githubTokenConnected) ToolAvailability.READY else ToolAvailability.NEEDS_SETUP
             else -> ToolAvailability.NEEDS_SETUP
         }
         else -> entry.availability
