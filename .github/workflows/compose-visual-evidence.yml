@@ -73,10 +73,7 @@ jobs:
           disable-animations: true
           script: |
             set -eu
-            ./gradlew :app:connectedDebugAndroidTest \
-              -PinstrumentedTestAbi=x86_64 \
-              -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" \
-              --stacktrace 2>&1 | tee artifacts/test-logs/v3106-after.log
+            ./gradlew :app:connectedDebugAndroidTest -PinstrumentedTestAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" --stacktrace 2>&1 | tee artifacts/test-logs/v3106-after.log
             for remote in $(adb shell run-as "$PACKAGE_NAME" find files/visual-evidence -type f | tr -d '\r'); do
               name=$(basename "$remote")
               adb exec-out run-as "$PACKAGE_NAME" cat "$remote" > "artifacts/after/$name"
@@ -112,10 +109,7 @@ jobs:
           script: |
             set -eu
             cd "$BASELINE_DIR"
-            ./gradlew :app:connectedDebugAndroidTest \
-              -PinstrumentedTestAbi=x86_64 \
-              -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" \
-              --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/artifacts/test-logs/v3105-before.log"
+            ./gradlew :app:connectedDebugAndroidTest -PinstrumentedTestAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/artifacts/test-logs/v3105-before.log"
             for remote in $(adb shell run-as "$PACKAGE_NAME" find files/visual-evidence -type f | tr -d '\r'); do
               name=$(basename "$remote")
               adb exec-out run-as "$PACKAGE_NAME" cat "$remote" > "$GITHUB_WORKSPACE/artifacts/before/$name"
