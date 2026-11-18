@@ -74,8 +74,13 @@ jobs:
           script: |
             set -eu
             ./gradlew :app:connectedDebugAndroidTest -PinstrumentedTestAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" --no-configuration-cache --stacktrace 2>&1 | tee artifacts/test-logs/v3106-after.log
-            adb exec-out run-as "$PACKAGE_NAME" tar -C files/visual-evidence -cf - . > artifacts/after.tar
-            tar -xf artifacts/after.tar -C artifacts/after
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.6-task-bar.png > artifacts/after/v3.10.6-task-bar.png
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.6-tool-bar.png > artifacts/after/v3.10.6-tool-bar.png
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.6-ai-providers.png > artifacts/after/v3.10.6-ai-providers.png
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.6-github.png > artifacts/after/v3.10.6-github.png
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.6-termux-linux.png > artifacts/after/v3.10.6-termux-linux.png
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.6-plugin-platform.png > artifacts/after/v3.10.6-plugin-platform.png
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.6-remote-platform.png > artifacts/after/v3.10.6-remote-platform.png
 
       - name: Prepare pinned v3.10.5 baseline checkout
         run: |
@@ -108,8 +113,13 @@ jobs:
             set -eu
             cd "$BASELINE_DIR"
             ./gradlew :app:connectedDebugAndroidTest -PinstrumentedTestAbi=x86_64 -Pandroid.testInstrumentationRunnerArguments.class="$SCREENSHOT_TEST" --no-configuration-cache --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/artifacts/test-logs/v3105-before.log"
-            adb exec-out run-as "$PACKAGE_NAME" tar -C files/visual-evidence -cf - . > "$GITHUB_WORKSPACE/artifacts/before.tar"
-            tar -xf "$GITHUB_WORKSPACE/artifacts/before.tar" -C "$GITHUB_WORKSPACE/artifacts/before"
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.5-task-bar.png > "$GITHUB_WORKSPACE/artifacts/before/v3.10.5-task-bar.png"
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.5-tool-bar.png > "$GITHUB_WORKSPACE/artifacts/before/v3.10.5-tool-bar.png"
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.5-ai-providers.png > "$GITHUB_WORKSPACE/artifacts/before/v3.10.5-ai-providers.png"
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.5-github.png > "$GITHUB_WORKSPACE/artifacts/before/v3.10.5-github.png"
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.5-termux-linux.png > "$GITHUB_WORKSPACE/artifacts/before/v3.10.5-termux-linux.png"
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.5-plugin-platform.png > "$GITHUB_WORKSPACE/artifacts/before/v3.10.5-plugin-platform.png"
+            adb exec-out run-as "$PACKAGE_NAME" cat files/visual-evidence/v3.10.5-remote-platform.png > "$GITHUB_WORKSPACE/artifacts/before/v3.10.5-remote-platform.png"
 
       - name: Verify fourteen genuine emulator screenshots
         run: |
