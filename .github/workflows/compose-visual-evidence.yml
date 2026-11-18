@@ -2,6 +2,12 @@ name: v3.10.5 baseline visual evidence
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feature/hybrid-task-orchestrator
+    paths:
+      - .github/workflows/compose-visual-evidence.yml
+      - app/src/test/java/com/opendroid/ai/ui/screens/VisualEvidenceRenderTest.kt
 
 permissions:
   contents: read
@@ -12,6 +18,7 @@ concurrency:
 
 jobs:
   capture:
+    if: github.event_name != 'push' || contains(github.event.head_commit.message, '[run-v3105-evidence]')
     name: Capture genuine v3.10.5 Compose screens
     runs-on: ubuntu-24.04
     timeout-minutes: 20
