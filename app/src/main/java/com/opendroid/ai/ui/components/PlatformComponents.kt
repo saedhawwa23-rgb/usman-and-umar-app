@@ -23,8 +23,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -34,6 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.contentDescription
@@ -125,8 +129,8 @@ fun MetricTile(
     Surface(
         modifier = modifier,
         shape = RoundedCornerShape(DesignTokens.RADIUS_MD.dp),
-        color = c.navySurface.copy(alpha = if (c.isDark) 0.55f else 0.06f),
-        border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
+        color = c.navySurface.copy(alpha = if (c.isDark) 0.72f else 0.06f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, accent.copy(alpha = 0.44f)),
     ) {
         Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
             Text(value, color = c.textPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1)
@@ -155,11 +159,20 @@ fun BrandHeader(
             Modifier
                 .fillMaxWidth()
                 .background(
-                    androidx.compose.ui.graphics.Brush.horizontalGradient(
-                        listOf(c.navyDeep, c.navySurface, accent.copy(alpha = 0.30f))
+                    androidx.compose.ui.graphics.Brush.linearGradient(
+                        colors = listOf(c.navyDeep, c.navySurface.copy(alpha = 0.98f), accent.copy(alpha = 0.24f)),
+                        start = androidx.compose.ui.geometry.Offset.Zero,
+                        end = androidx.compose.ui.geometry.Offset(900f, 420f),
                     )
                 )
-                .padding(horizontal = 20.dp, vertical = 20.dp)
+                .border(
+                    1.dp,
+                    androidx.compose.ui.graphics.Brush.horizontalGradient(
+                        listOf(accent.copy(alpha = 0.16f), accent.copy(alpha = 0.58f), c.emerald.copy(alpha = 0.22f))
+                    ),
+                    RoundedCornerShape(bottomStart = DesignTokens.RADIUS_LG.dp, bottomEnd = DesignTokens.RADIUS_LG.dp),
+                )
+                .padding(horizontal = 20.dp, vertical = 22.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (icon != null) {
@@ -186,6 +199,47 @@ fun BrandHeader(
     }
 }
 
+/** Full-width premium header for nested feature screens, retaining the real back action. */
+@Composable
+fun BrandedBackHeader(
+    title: String,
+    subtitle: String,
+    onBack: () -> Unit,
+    icon: ImageVector,
+    modifier: Modifier = Modifier,
+) {
+    val c = AppTheme.colors
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = c.navyDeep,
+        shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .background(androidx.compose.ui.graphics.Brush.linearGradient(listOf(c.navyDeep, c.navySurface, c.electricBlue.copy(alpha = 0.22f))))
+                .border(
+                    1.dp,
+                    androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(c.electricBlue.copy(alpha = 0.2f), c.electricBlue.copy(alpha = 0.52f), c.emerald.copy(alpha = 0.22f))),
+                    RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
+                )
+                .padding(start = 8.dp, end = 20.dp, top = 12.dp, bottom = 18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Default.ArrowBack, contentDescription = "Back", tint = c.electricBlueSoft)
+            }
+            Surface(shape = RoundedCornerShape(14.dp), color = c.electricBlue.copy(alpha = 0.16f)) {
+                Icon(icon, contentDescription = null, tint = c.electricBlueSoft, modifier = Modifier.padding(10.dp).size(22.dp))
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, color = c.onBrand, fontSize = 19.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(subtitle, color = c.onBrand.copy(alpha = 0.72f), fontSize = 11.sp, maxLines = 2)
+            }
+        }
+    }
+}
+
 /** A dashboard card shell with an optional icon, title, subtitle, status pill and body. */
 @Composable
 fun PlatformCard(
@@ -198,19 +252,36 @@ fun PlatformCard(
 ) {
     val c = AppTheme.colors
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().shadow(8.dp, RoundedCornerShape(DesignTokens.RADIUS_MD.dp), clip = false),
         shape = RoundedCornerShape(DesignTokens.RADIUS_MD.dp),
         color = c.cardBackground,
-        border = androidx.compose.foundation.BorderStroke(1.dp, c.borderColor),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            androidx.compose.ui.graphics.Brush.linearGradient(
+                listOf(c.electricBlue.copy(alpha = 0.24f), c.borderColor.copy(alpha = 0.92f), c.emerald.copy(alpha = 0.14f))
+            ),
+        ),
         tonalElevation = 1.dp,
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .background(
+                    androidx.compose.ui.graphics.Brush.linearGradient(
+                        listOf(c.navySurface.copy(alpha = 0.52f), c.cardBackground, c.navyDeep.copy(alpha = 0.18f))
+                    )
+                )
+                .padding(17.dp),
+            verticalArrangement = Arrangement.spacedBy(11.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (icon != null) {
-                    Icon(icon, contentDescription = null, tint = c.electricBlue, modifier = Modifier.size(20.dp))
+                    Surface(
+                        shape = RoundedCornerShape(11.dp),
+                        color = c.electricBlue.copy(alpha = 0.13f),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, c.electricBlue.copy(alpha = 0.22f)),
+                    ) {
+                        Icon(icon, contentDescription = null, tint = c.electricBlueSoft, modifier = Modifier.padding(8.dp).size(20.dp))
+                    }
                     Spacer(Modifier.width(10.dp))
                 }
                 Column(Modifier.weight(1f)) {

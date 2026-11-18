@@ -58,7 +58,7 @@ class VisualEvidenceRenderTest {
         val output = File(moduleDirectory, "build/visual-evidence/$name")
         output.parentFile?.mkdirs()
         FileOutputStream(output).use { stream ->
-            check(compose.onRoot().captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream))
+            check(compose.onRoot(useUnmergedTree = true).captureToImage().asAndroidBitmap().compress(android.graphics.Bitmap.CompressFormat.PNG, 100, stream))
         }
     }
 }

@@ -1,8 +1,8 @@
 package com.opendroid.ai.ui.screens
 
 import android.widget.Toast
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,9 +14,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddTask
 import androidx.compose.material.icons.filled.PlayArrow
@@ -176,76 +176,71 @@ fun WorkspaceTaskScreen(
                 )
             }
             item {
-                OutlinedTextField(
-                    value = rawText,
-                    onValueChange = { rawText = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = {
-                        Text(if (mode == TaskExecutionMode.TERMUX_SCRIPT) "Script source — paste bash or Python code" else "Quick Add — e.g. Fix bug tomorrow at 5pm")
-                    },
-                    minLines = 2,
-                )
-            }
-            item {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ModeMenu(mode = mode, onSelect = { mode = it }, modifier = Modifier.weight(1f), enableNonOpenSwarmRoutes = OpenSwarmRouteConfig.ENABLE_NON_OPENSWARM_ROUTES)
-                    if (mode == TaskExecutionMode.LOCAL_AI_APP) {
-                        Column(Modifier.weight(1f)) {
-                            ProviderMenu(
-                                providerPackage = providerPackage,
-                                installedApps = installedAiApps,
-                                onSelect = {
-                                    providerPackage = it
-                                    if (it != SmartLocalAiRouter.AUTO_TARGET) {
-                                        InstalledAiAppPreferences.setSelectedPackage(context, it)
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                                Switch(
-                                    checked = providerPackage == SmartLocalAiRouter.AUTO_TARGET,
-                                    onCheckedChange = { enabled ->
-                                        providerPackage = if (enabled) SmartLocalAiRouter.AUTO_TARGET
-                                        else installedAiApps.firstOrNull()?.packageName.orEmpty()
+                com.opendroid.ai.ui.components.PlatformCard(
+                    title = "Create a task",
+                    subtitle = "Choose a route, then add work to your inbox",
+                    icon = Icons.Default.AddTask,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            value = rawText,
+                            onValueChange = { rawText = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = {
+                                Text(if (mode == TaskExecutionMode.TERMUX_SCRIPT) "Script source — paste bash or Python code" else "Describe a task · e.g. Fix bug tomorrow at 5pm")
+                            },
+                            minLines = 2,
+                        )
+                        ModeMenu(mode = mode, onSelect = { mode = it }, modifier = Modifier.fillMaxWidth(), enableNonOpenSwarmRoutes = OpenSwarmRouteConfig.ENABLE_NON_OPENSWARM_ROUTES)
+                        when (mode) {
+                            TaskExecutionMode.LOCAL_AI_APP -> Column {
+                                ProviderMenu(
+                                    providerPackage = providerPackage,
+                                    installedApps = installedAiApps,
+                                    onSelect = {
+                                        providerPackage = it
+                                        if (it != SmartLocalAiRouter.AUTO_TARGET) InstalledAiAppPreferences.setSelectedPackage(context, it)
                                     },
+                                    modifier = Modifier.fillMaxWidth(),
                                 )
-                                Text("Smart AI Selection", fontSize = 12.sp)
+                                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                    Switch(
+                                        checked = providerPackage == SmartLocalAiRouter.AUTO_TARGET,
+                                        onCheckedChange = { enabled ->
+                                            providerPackage = if (enabled) SmartLocalAiRouter.AUTO_TARGET
+                                            else installedAiApps.firstOrNull()?.packageName.orEmpty()
+                                        },
+                                    )
+                                    Text("Smart AI Selection", fontSize = 12.sp)
+                                }
                             }
+                            TaskExecutionMode.CLOUD_OPENSWARM -> CloudTargetMenu(target = cloudTarget, servers = cloudServers, onSelect = { cloudTarget = it }, modifier = Modifier.fillMaxWidth())
+                            TaskExecutionMode.TERMUX_SCRIPT -> ScriptLanguageMenu(language = scriptLanguage, onSelect = { scriptLanguage = it }, modifier = Modifier.fillMaxWidth())
                         }
-                    } else if (mode == TaskExecutionMode.CLOUD_OPENSWARM) {
-                        CloudTargetMenu(target = cloudTarget, servers = cloudServers, onSelect = { cloudTarget = it }, modifier = Modifier.weight(1f))
-                    } else if (mode == TaskExecutionMode.TERMUX_SCRIPT) {
-                        ScriptLanguageMenu(language = scriptLanguage, onSelect = { scriptLanguage = it }, modifier = Modifier.weight(1f))
+                        Text(
+                            text = when (mode) {
+                                TaskExecutionMode.LOCAL_AI_APP -> if (installedAiApps.isEmpty()) {
+                                    "No launchable apps were found. Install an AI chat app, then refresh the screen."
+                                } else {
+                                    "${installedAiApps.size} launchable AI-app candidate(s). Smart selection ranks installed apps and falls back when needed."
+                                }
+                                TaskExecutionMode.CLOUD_OPENSWARM -> "Cloud Browser Use sends this task to the remote executor. Never include secrets or private data."
+                                TaskExecutionMode.TERMUX_SCRIPT -> "Only the explicit script you enter is sent to Termux; ordinary task prose is never interpreted as shell."
+                            },
+                            color = AppTheme.colors.textSecondary,
+                            fontSize = 11.sp,
+                        )
+                        com.opendroid.ai.ui.components.BrandButton(
+                            text = "Add to Inbox",
+                            icon = Icons.Default.AddTask,
+                            onClick = { viewModel.createTask(rawText, mode, providerPackage, scriptLanguage, cloudTarget) { rawText = "" } },
+                            enabled = rawText.isNotBlank() &&
+                                (mode != TaskExecutionMode.LOCAL_AI_APP ||
+                                    (installedAiApps.isNotEmpty() && (providerPackage == SmartLocalAiRouter.AUTO_TARGET || installedAiApps.any { it.packageName == providerPackage }))),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
-            }
-            item {
-                Button(
-                    onClick = { viewModel.createTask(rawText, mode, providerPackage, scriptLanguage, cloudTarget) { rawText = "" } },
-                    enabled = rawText.isNotBlank() &&
-                        (mode != TaskExecutionMode.LOCAL_AI_APP ||
-                            (installedAiApps.isNotEmpty() && (providerPackage == SmartLocalAiRouter.AUTO_TARGET || installedAiApps.any { it.packageName == providerPackage }))),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    androidx.compose.material3.Icon(Icons.Default.AddTask, contentDescription = null)
-                    Text("  Add to Inbox")
-                }
-            }
-            item {
-                Text(
-                    text = when (mode) {
-                        TaskExecutionMode.LOCAL_AI_APP -> if (installedAiApps.isEmpty()) {
-                            "No launchable apps were found. Install an AI chat app, then refresh the screen."
-                        } else {
-                            "PackageManager found ${installedAiApps.size} launchable AI-app candidate(s). Smart AI Selection ranks the installed apps for coding, research, and tool-specific tasks, then falls back when a preferred app is unavailable."
-                        }
-                        TaskExecutionMode.CLOUD_OPENSWARM -> "Cloud Browser Use sends the task to the remote executor. Use FMHY-first discovery or include a public URL; never include secrets or private data."
-                        TaskExecutionMode.TERMUX_SCRIPT -> "Only the explicit script text you enter is sent to Termux; ordinary task prose is never interpreted as shell."
-                    },
-                    color = AppTheme.colors.textSecondary,
-                    fontSize = 12.sp,
-                )
             }
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
@@ -408,11 +403,17 @@ fun WorkspaceTaskScreen(
 
 @Composable
 internal fun TaskBarSummaryRow(summary: TaskBarSummary, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    androidx.compose.foundation.layout.FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        maxItemsInEachRow = 3,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         MetricTile(value = summary.active.toString(), label = "Running", accent = AppTheme.colors.electricBlue, modifier = Modifier.weight(1f))
         MetricTile(value = summary.queued.toString(), label = "Queued", accent = AppTheme.colors.textSecondary, modifier = Modifier.weight(1f))
         MetricTile(value = summary.waiting.toString(), label = "Waiting", accent = AppTheme.colors.accentOrange, modifier = Modifier.weight(1f))
         MetricTile(value = summary.done.toString(), label = "Done", accent = AppTheme.colors.emerald, modifier = Modifier.weight(1f))
+        MetricTile(value = summary.failed.toString(), label = "Failed", accent = AppTheme.colors.accentRed, modifier = Modifier.weight(1f))
     }
 }
 
@@ -520,7 +521,9 @@ private fun TaskCard(
     onDragEnd: (() -> Unit)? = null,
 ) {
     val item = remember(task) { TaskBarModel.itemOf(task) }
-    Card(
+    com.opendroid.ai.ui.components.PlatformCard(
+        title = item.title,
+        subtitle = item.modeLabel,
         modifier = modifier.pointerInput(task.id) {
             if (onDragStart != null && onDrag != null && onDragEnd != null) {
                 detectDragGesturesAfterLongPress(
@@ -531,16 +534,9 @@ private fun TaskCard(
                 )
             }
         },
-        colors = CardDefaults.cardColors(containerColor = AppTheme.colors.cardBackground),
+        status = item.statusLabel to item.statusKind.toPlatformStatus(),
     ) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(item.title, color = AppTheme.colors.textPrimary, fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold)
-                    Text(item.modeLabel, color = AppTheme.colors.textSecondary, fontSize = 11.sp)
-                }
-                StatusPill(text = item.statusLabel, status = item.statusKind.toPlatformStatus())
-            }
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             when (item.progress) {
                 TaskProgress.Indeterminate -> LinearProgressIndicator(
                     modifier = Modifier.fillMaxWidth(),

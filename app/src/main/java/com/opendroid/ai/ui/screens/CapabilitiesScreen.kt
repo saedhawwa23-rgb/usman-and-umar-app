@@ -172,9 +172,12 @@ private fun ToolEntryCard(entry: ToolEntry, onOpen: () -> Unit) {
     ) {
         Text(entry.description, color = AppTheme.colors.textSecondary, fontSize = 12.sp)
         Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            BrandButton(text = entry.actionLabel(), onClick = onOpen, icon = entry.destination.icon())
-        }
+        BrandButton(
+            text = entry.actionLabel(),
+            onClick = onOpen,
+            modifier = Modifier.fillMaxWidth(),
+            icon = entry.destination.icon(),
+        )
     }
 }
 

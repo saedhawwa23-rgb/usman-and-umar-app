@@ -2,6 +2,27 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.10.6] - 2026-11-18
+
+The platform screens continue the shared navy · emerald · electric-blue design system with
+glass-style surfaces, branded headers, stronger hierarchy and responsive phone layouts. This
+release-prep change preserves the existing navigation, provider discovery, GitHub search,
+Termux/Linux execution, plugin platform and remote-control actions; it does not add placeholder
+capabilities or publish an APK or GitHub Release.
+
+### Changed
+- Restored the premium presentation across the Task Bar, Tool Bar, AI Providers, GitHub,
+  Termux/Linux, Plugin Platform and Remote Platform surfaces using the existing functional
+  destinations and view models.
+- Added/repaired real Compose visual-evidence capture for the v3.10.5 baseline on the x86_64
+  GitHub Actions runner; baseline evidence remains separate from the v3.10.6 production changes.
+- Bumped the app to version 3.10.6 (versionCode 36).
+
+### Verification status
+- Local Android compilation is unavailable in the current sandbox because no Android SDK is
+  installed; CI verification is required before release approval.
+- No GitHub Release or APK distribution is performed by this change.
+
 ## [3.10.5] - 2026-11-17
 
 The Task Bar and the Tool Bar are redesigned as two professional 2026 dashboards on the shared
