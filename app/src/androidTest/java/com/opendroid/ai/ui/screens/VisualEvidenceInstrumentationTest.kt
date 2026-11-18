@@ -30,17 +30,13 @@ class VisualEvidenceInstrumentationTest {
     fun captureSevenProductionScreens() {
         val prefix = "v${BuildConfig.VERSION_NAME}"
         val routes = listOf(
-            CaptureRoute("task-bar", OpenDroidRoutes.VISUAL_TASK_BAR, listOf("Task Bar")),
-            CaptureRoute("tool-bar", OpenDroidRoutes.VISUAL_TOOL_BAR, listOf("Tool Bar")),
-            CaptureRoute(
-                "ai-providers",
-                OpenDroidRoutes.DISCOVERY,
-                if (BuildConfig.VERSION_NAME == "3.10.5") emptyList() else listOf("AI Providers"),
-            ),
-            CaptureRoute("github", OpenDroidRoutes.GITHUB_DISCOVERY, listOf("GitHub Explorer")),
-            CaptureRoute("termux-linux", OpenDroidRoutes.TERMUX, listOf("Termux · Linux")),
-            CaptureRoute("plugin-platform", OpenDroidRoutes.PLUGIN_PLATFORM, listOf("Integration Platform")),
-            CaptureRoute("remote-platform", OpenDroidRoutes.REMOTE_CONTROL, listOf("Universal Remote")),
+            CaptureRoute("task-bar", OpenDroidRoutes.VISUAL_TASK_BAR, titles("Task Bar")),
+            CaptureRoute("tool-bar", OpenDroidRoutes.VISUAL_TOOL_BAR, titles("Tool Bar")),
+            CaptureRoute("ai-providers", OpenDroidRoutes.DISCOVERY, titles("AI Providers")),
+            CaptureRoute("github", OpenDroidRoutes.GITHUB_DISCOVERY, titles("GitHub Explorer")),
+            CaptureRoute("termux-linux", OpenDroidRoutes.TERMUX, titles("Termux · Linux")),
+            CaptureRoute("plugin-platform", OpenDroidRoutes.PLUGIN_PLATFORM, titles("Integration Platform")),
+            CaptureRoute("remote-platform", OpenDroidRoutes.REMOTE_CONTROL, titles("Universal Remote")),
         )
         val outputDirectory = File(targetContext.getExternalFilesDir(null), "visual-evidence").apply {
             deleteRecursively()
@@ -77,5 +73,8 @@ class VisualEvidenceInstrumentationTest {
         val destination: String,
         val expectedTitles: List<String>,
     )
+
+    private fun titles(vararg values: String): List<String> =
+        if (BuildConfig.VERSION_NAME == "3.10.5") emptyList() else values.toList()
 
 }
