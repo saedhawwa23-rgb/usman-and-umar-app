@@ -1,0 +1,99 @@
+name: v3.10.5 baseline visual evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compose-v3105-baseline-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    name: Capture genuine v3.10.5 Compose screens
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      BASELINE_SHA: 21e5076116585a65e8ef09996299456666caa03c
+      SCREENSHOT_TEST: com.opendroid.ai.ui.screens.VisualEvidenceRenderTest
+    steps:
+      - name: Check out full history for pinned baseline
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify x86_64 runner and v3.10.5 baseline
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          git show "$BASELINE_SHA:app/build.gradle" | grep -F 'versionName "3.10.5"'
+          mkdir -p artifacts/screenshots/v3.10.5 artifacts/test-logs artifacts/test-results
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0'
+
+      - name: Restore Gradle dependency and task caches
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare isolated v3.10.5 baseline worktree
+        run: |
+          set -euo pipefail
+          baseline="$RUNNER_TEMP/usman-and-umar-v3105"
+          git worktree add --detach "$baseline" "$BASELINE_SHA"
+          mkdir -p "$baseline/app/src/test/java/com/opendroid/ai/ui/screens"
+          cp app/src/test/java/com/opendroid/ai/ui/screens/VisualEvidenceRenderTest.kt \
+            "$baseline/app/src/test/java/com/opendroid/ai/ui/screens/VisualEvidenceRenderTest.kt"
+          echo "BASELINE_DIR=$baseline" >> "$GITHUB_ENV"
+
+      - name: Render v3.10.5 Task Bar baseline
+        run: |
+          set -euo pipefail
+          (cd "$BASELINE_DIR" && ./gradlew :app:testDebugUnitTest \
+            --tests "$SCREENSHOT_TEST.captureTaskBarSummaryAtPhoneSize" \
+            --max-workers=1 --no-configuration-cache --no-daemon --console=plain \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.jvmargs='-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8') \
+            2>&1 | tee artifacts/test-logs/v3105-taskbar.log
+          cp "$BASELINE_DIR/app/build/visual-evidence/taskbar-summary.png" artifacts/screenshots/v3.10.5/taskbar-summary.png
+          cp "$BASELINE_DIR/app/build/test-results/testDebugUnitTest/TEST-com.opendroid.ai.ui.screens.VisualEvidenceRenderTest.xml" artifacts/test-results/v3105-taskbar.xml
+
+      - name: Render v3.10.5 Tool Bar baseline
+        run: |
+          set -euo pipefail
+          (cd "$BASELINE_DIR" && ./gradlew :app:testDebugUnitTest \
+            --tests "$SCREENSHOT_TEST.captureToolBarAtPhoneSize" \
+            --max-workers=1 --no-configuration-cache --no-daemon --console=plain \
+            -Pkotlin.compiler.execution.strategy=in-process \
+            -Dorg.gradle.jvmargs='-Xmx1536m -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8') \
+            2>&1 | tee artifacts/test-logs/v3105-toolbar.log
+          cp "$BASELINE_DIR/app/build/visual-evidence/toolbar.png" artifacts/screenshots/v3.10.5/toolbar.png
+          cp "$BASELINE_DIR/app/build/test-results/testDebugUnitTest/TEST-com.opendroid.ai.ui.screens.VisualEvidenceRenderTest.xml" artifacts/test-results/v3105-toolbar.xml
+
+      - name: Verify genuine baseline screenshots exist
+        run: |
+          set -euo pipefail
+          for image in \
+            artifacts/screenshots/v3.10.5/taskbar-summary.png \
+            artifacts/screenshots/v3.10.5/toolbar.png; do
+            test -s "$image"
+            file "$image"
+          done
+
+      - name: Upload v3.10.5 screenshots and test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: usman-and-umar-v3.10.5-visual-baseline-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
