@@ -9,7 +9,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
-import java.io.File
 
 /**
  * End-to-end test against a genuinely running OpenHands agent server.
@@ -71,16 +70,17 @@ class OpenHandsLiveE2ETest {
 
         // 3. Submit: create a real conversation in a scratch workspace with a unique marker.
         val marker = "UU_E2E_${System.currentTimeMillis()}"
-        val workDir = File(System.getProperty("java.io.tmpdir"), "uu-e2e-$marker").apply { mkdirs() }
-        val inputPath = "${workDir.absolutePath}/input.txt"
+        // Use the server's existing /tmp directory: the test runner may be a different machine.
+        val workDir = "/tmp"
+        val inputPath = "$workDir/uu-e2e-$marker-input.txt"
         val uploaded = client.uploadFile(inputPath, "input.txt", marker.toByteArray())
         assertTrue("Uploading the real input file failed: $uploaded", uploaded is PlatformResult.Success)
-        val outputPath = "${workDir.absolutePath}/result.txt"
+        val outputPath = "$workDir/uu-e2e-$marker-result.txt"
         val prompt =
             "Read $inputPath. Create $outputPath containing exactly the text from that input file " +
                 "and nothing else. Then reply with the single word DONE."
 
-        val created = client.startConversation(prompt, workDir.absolutePath, settingsObject, run = true)
+        val created = client.startConversation(prompt, workDir, settingsObject, run = true)
         assertTrue("Conversation creation failed: $created", created is PlatformResult.Success)
         val conversation = (created as PlatformResult.Success).value
         assertTrue("Server returned no conversation id", conversation.id.isNotBlank())
@@ -101,14 +101,11 @@ class OpenHandsLiveE2ETest {
         assertEquals("Execution did not finish cleanly. Events: ${events.map { it.summary() }}", "finished", status)
         assertTrue("No events were recorded", events.isNotEmpty())
 
-        // 5. Retrieve: the final answer comes from the server, and the file exists on disk.
+        // 5. Retrieve the final answer and generated file through the real remote API.
         val finalResponse = client.finalResponse(conversation.id)
         assertTrue("Final response failed: $finalResponse", finalResponse is PlatformResult.Success)
         assertEquals("DONE", (finalResponse as PlatformResult.Success).value.trim())
 
-        val produced = File(workDir, "result.txt")
-        assertTrue("The agent did not create result.txt", produced.exists())
-        assertEquals(marker, produced.readText().trim())
         val downloaded = client.downloadFile(outputPath)
         assertTrue("Downloading the generated file failed: $downloaded", downloaded is PlatformResult.Success)
         assertEquals(marker, String((downloaded as PlatformResult.Success).value).trim())
@@ -142,9 +139,7 @@ class OpenHandsLiveE2ETest {
         val rawSettings = (client.fetchAgentSettings() as? PlatformResult.Success)?.value
         assertNotNull("Settings required to verify capabilities", rawSettings)
         val settings = withLlmOverride(rawSettings!!)
-        val dir = File(System.getProperty("java.io.tmpdir"), "uu-cap-${System.currentTimeMillis()}")
-            .apply { mkdirs() }
-        val created = client.startConversation("Reply with OK.", dir.absolutePath, settings, run = false)
+        val created = client.startConversation("Reply with OK.", "/tmp", settings, run = false)
         assertTrue("CREATE_SESSION advertised but failed: $created", created is PlatformResult.Success)
     }
 
