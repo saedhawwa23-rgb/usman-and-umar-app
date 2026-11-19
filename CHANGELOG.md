@@ -2,6 +2,50 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.11.0] - 2026-11-19
+
+Unified release candidate. v3.10.6 already contained all of v3.10.4 and v3.10.5 in one history
+(`git merge-base --is-ancestor` for both), so there were no competing implementations to merge:
+3.11.0 reconciles the two duplicated availability vocabularies into one registry and adds the
+verification evidence that 3.10.6 lacked.
+
+### Added
+
+- **Central capability registry** (`core/capability/CapabilityRegistry.kt`). One catalog that names
+  the owning module for every capability, the requirement it needs (Termux, credential, cloud
+  server, GitHub token, network) and the real navigation route it opens. Availability is derived
+  from a passed-in environment, never asserted, so a capability cannot report `READY` while a
+  dependency is missing. Includes `fromToolBar()` to map the Tool Bar vocabulary in, and
+  `duplicateIds()` to fail the build if two modules ever claim the same id.
+- 11 JVM tests (`CapabilityRegistryTest`) covering: unique ids, no false `READY`, Termux/cloud/
+  token gating, offline downgrade, label parity with the Tool Bar, and a guard that every Tool Bar
+  entry has a registry counterpart.
+
+### Changed
+
+- App version to 3.11.0 (versionCode 37). No feature, navigation target, setting, integration or
+  stored user data is removed by this change.
+- `release-candidate.yml` version assertions updated to 3.11.0/37 so the signed candidate can be
+  verified. The workflow still creates a throwaway signing key and does not publish.
+
+### Verification (performed locally in this change)
+
+- `:app:compileDebugKotlin` BUILD SUCCESSFUL.
+- `:app:testDebugUnitTest` 955 tests, 0 failures; `:remote-protocol` 26; `:desktop-agent` 23.
+- `:app:lintDebug` 0 errors, 0 warnings (9 pre-existing baseline suppressions remain; they are
+  icon-shape and modifier-ordering hints, none security-related).
+- `:app:assembleDebug` produced `com.usmanandumar.app` versionCode 37, versionName 3.11.0,
+  ABIs `arm64-v8a armeabi-v7a x86 x86_64`. The three `armeabi-v7a` native libraries were confirmed
+  ELF32 / `Machine: ARM` with `readelf -h`.
+
+### Still unverified
+
+- No physical 32-bit ARM device was available. ARM32 execution, Termux handshake, GitHub OAuth and
+  the private-clone credential path remain device-unverified. ARM32 compatibility is established
+  only at the packaging level (32-bit ARM ELF libraries present), not by running on hardware.
+- The v3.10.6 CHANGELOG stated the version had never been compiled locally. That is no longer true:
+  it compiles and its full test suite passes, as recorded above.
+
 ## [3.10.6] - 2026-11-18
 
 The platform screens continue the shared navy · emerald · electric-blue design system with
