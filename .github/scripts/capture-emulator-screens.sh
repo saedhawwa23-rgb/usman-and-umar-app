@@ -22,7 +22,16 @@ for _ in $(seq 1 900); do
   for name in task-bar tool-bar ai-providers github termux-linux plugin-platform remote-platform; do
     target="$output_dir/$version-$name.png"
     if [ ! -s "$target" ]; then
-      adb exec-out run-as "$package_name" cat "files/visual-evidence/$version-$name.png" >"$target" 2>/dev/null || rm -f "$target"
+      temp="$target.tmp"
+      rm -f "$temp"
+      if adb shell pm path "$package_name" >/dev/null 2>&1; then
+        adb exec-out run-as "$package_name" cat "files/visual-evidence/$version-$name.png" >"$temp" 2>/dev/null || true
+        if [ "$(head -c 8 "$temp" | od -An -tx1 | tr -d ' \n')" = "89504e470d0a1a0a" ]; then
+          mv "$temp" "$target"
+        else
+          rm -f "$temp"
+        fi
+      fi
     fi
   done
   if kill -0 "$gradle_pid" 2>/dev/null; then
@@ -40,5 +49,5 @@ cat "$gradle_log"
 test "$gradle_status" -eq 0
 
 for name in task-bar tool-bar ai-providers github termux-linux plugin-platform remote-platform; do
-  test -s "$output_dir/$version-$name.png"
+  test "$(head -c 8 "$output_dir/$version-$name.png" | od -An -tx1 | tr -d ' \n')" = "89504e470d0a1a0a"
 done
