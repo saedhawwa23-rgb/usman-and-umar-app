@@ -67,15 +67,17 @@ jobs:
         run: |
           set -euo pipefail
           apk=app/build/outputs/apk/release/app-release.apk
+          aapt2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           mkdir -p dist
           test -s "$apk"
-          aapt2 dump packagename "$apk" | tee dist/PACKAGE.txt
-          test "$(aapt2 dump packagename "$apk")" = "com.usmanandumar.app"
-          aapt2 dump badging "$apk" | tee dist/BADGING.txt
+          "$aapt2" dump packagename "$apk" | tee dist/PACKAGE.txt
+          test "$("$aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
+          "$aapt2" dump badging "$apk" | tee dist/BADGING.txt
           grep -F "versionName='3.10.6'" dist/BADGING.txt
           grep -F "versionCode='36'" dist/BADGING.txt
-          apksigner verify --verbose "$apk" | tee dist/SIGNING_STATUS.txt
-          apksigner verify --print-certs "$apk" | tee dist/SIGNING_CERTS.txt
+          "$apksigner" verify --verbose "$apk" | tee dist/SIGNING_STATUS.txt
+          "$apksigner" verify --print-certs "$apk" | tee dist/SIGNING_CERTS.txt
           keytool -list -v -keystore opendroid-release.keystore \
             -storepass "$ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD" \
             -alias "$ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS" \
