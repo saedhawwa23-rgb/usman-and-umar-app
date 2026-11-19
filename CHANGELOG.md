@@ -28,7 +28,7 @@ Real web AI agent platform integration: discover, connect, submit, monitor, retr
   workflow: search the catalog, validate and store a connection, submit instructions, poll live
   execution every 3 s, read the final answer, cancel, attach/download files, and reopen past tasks
   from history. Blocking API calls run on the IO dispatcher, not the UI thread.
-- **`AgentPlatformLiveE2ETest`** — three JVM tests that run against a real server when
+- **`OpenHandsLiveE2ETest`** — three JVM tests that run against a real server when
   `OH_E2E_BASE_URL`/`OH_E2E_SESSION_KEY` are supplied, and are skipped otherwise. The main test
   creates a real conversation, uploads an input file, waits for real execution, and asserts that the
   generated output can be downloaded with exact content.

@@ -422,7 +422,7 @@ private fun ConnectForm(
     onDismissError: () -> Unit,
 ) {
     val colors = AppTheme.colors
-    var url by remember { mutableStateOf("http://") }
+    var url by remember { mutableStateOf("https://") }
     var key by remember { mutableStateOf("") }
 
     PlatformCard(title = "Connect OpenHands", subtitle = "Point the app at your own agent server") {

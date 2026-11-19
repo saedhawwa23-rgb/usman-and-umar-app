@@ -39,7 +39,7 @@ class OpenHandsFileTransferTest {
     @Test
     fun `download uses path query and returns exact file bytes`() {
         val expected = byteArrayOf(0, 1, 2, 127, -1)
-        server.enqueue(MockResponse.Builder().code(200).body(okio.ByteString.of(*expected)).build())
+        server.enqueue(MockResponse.Builder().code(200).body(okio.Buffer().write(expected)).build())
         val client = OpenHandsClient(server.url("/").toString().trimEnd('/'), "test-session-key")
 
         val result = client.downloadFile("/workspace/result.bin")
