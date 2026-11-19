@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Text
@@ -63,6 +64,7 @@ fun CapabilitiesScreen(
     onTermux: () -> Unit,
     onUniversalAgent: () -> Unit,
     onOpenPluginPlatform: () -> Unit = {},
+    onOpenAgentPlatforms: () -> Unit = {},
 ) {
     val termuxViewModel: TermuxViewModel = hiltViewModel()
     val workspaceTaskViewModel: WorkspaceTaskViewModel = hiltViewModel()
@@ -83,6 +85,7 @@ fun CapabilitiesScreen(
         onTermux = onTermux,
         onUniversalAgent = onUniversalAgent,
         onOpenPluginPlatform = onOpenPluginPlatform,
+        onOpenAgentPlatforms = onOpenAgentPlatforms,
     )
 }
 
@@ -99,6 +102,7 @@ internal fun CapabilitiesScreenContent(
     onTermux: () -> Unit,
     onUniversalAgent: () -> Unit,
     onOpenPluginPlatform: () -> Unit,
+    onOpenAgentPlatforms: () -> Unit = {},
 ) {
     val sections = remember(context) { ToolBarModel.resolvedSections(context) }
     var selected by remember { mutableIntStateOf(0) }
@@ -156,6 +160,25 @@ internal fun CapabilitiesScreenContent(
                         text = "Open integrations",
                         onClick = onOpenPluginPlatform,
                         icon = Icons.Default.Extension,
+                    )
+                }
+            }
+            item {
+                PlatformCard(
+                    title = "Web agent platforms",
+                    subtitle = "Run tasks on a real remote agent server",
+                    icon = Icons.Default.Hub,
+                ) {
+                    Text(
+                        "Connect an OpenHands agent server, submit a task, watch it run and read the result.",
+                        color = AppTheme.colors.textSecondary,
+                        fontSize = 12.sp,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    BrandButton(
+                        text = "Open agent platforms",
+                        onClick = onOpenAgentPlatforms,
+                        icon = Icons.Default.Hub,
                     )
                 }
             }

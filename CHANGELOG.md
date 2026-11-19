@@ -2,6 +2,52 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.10.8] - 2026-11-19
+
+Real web AI agent platform integration: discover, connect, submit, monitor, retrieve.
+
+### Added
+
+- **`core/agentplatform/OpenHandsClient.kt`** — a real REST client for the OpenHands agent server,
+  written against the server's published OpenAPI document and verified against a live v1.60.1
+  server. Covers `GET /api/settings`, `POST /api/conversations`, `POST /api/conversations/{id}/events`,
+  `GET /api/conversations/{id}`, `GET /api/conversations/{id}/events/search`,
+  `GET /api/conversations/{id}/agent_final_response` and `POST /api/conversations/{id}/interrupt`.
+  The session key travels only in the `X-Session-API-Key` header; no credential is placed in a URL,
+  a log line, or an error string.
+- **`core/agentplatform/PlatformConnectionStore.kt`** — connection management backed by the existing
+  `KeystoreSecretRecords` AES-GCM stack. Only non-secret metadata (URL, model, timestamp, key hint)
+  is stored in plain preferences, so a prefs dump cannot leak the key.
+- **`core/agentplatform/AgentPlatformTaskRepository.kt`** — persistent task records in a dedicated
+  Room database (`agent_platform_database`), deliberately separate from `opendroid_database` so the
+  existing migration chain is untouched.
+- **`ui/viewmodel/AgentPlatformViewModel.kt`** and **`ui/screens/AgentPlatformScreen.kt`** — the
+  workflow: search the catalog, validate and store a connection, submit instructions, poll live
+  execution every 3 s, read the final answer, cancel, and reopen past tasks from history.
+- **`AgentPlatformLiveE2ETest`** — three JVM tests that run against a real server when
+  `OH_E2E_BASE_URL`/`OH_E2E_SESSION_KEY` are supplied, and are skipped otherwise. The main test
+  creates a real conversation, waits for real execution, and asserts that the file the agent was
+  asked to write exists on disk with the exact requested content.
+
+### Changed
+
+- `AgentPlatformCatalog.openHands` now advertises `CANCEL_TASK` and `OBSERVE_EVENTS` alongside
+  `CREATE_SESSION`/`SUBMIT_TASK`, because all four were exercised against the live server. The
+  capability set is no longer a guess.
+- The Tool Bar gains a "Web agent platforms" entry that navigates to the new screen. Existing
+  entries and their behaviour are unchanged.
+
+### Fixed
+
+- Event and error parsing no longer throws on non-string JSON. The previous `jsonPrimitive` accessor
+  raised `IllegalArgumentException` when a state value was an object; the client now reads fields
+  defensively and keeps every server event kind intact.
+
+### Notes
+
+- The server's own `agent_settings` is reused verbatim rather than the app inventing a model, so a
+  self-hosted deployment keeps whatever model its operator configured.
+
 ## [3.10.7] - 2026-11-12
 
 Production-readiness upgrade. Supersedes the local 3.11.0 release-candidate entry below, which was
@@ -18,6 +64,17 @@ capability registry and adapters described there are included here.
   `collisions()` and is not merged, so a plugin can never override a reviewed definition.
 - 9 JVM tests (`CapabilityAdaptersTest`) covering risk→mutating mapping, credential and cloud
   gating, catalog merging, shadow prevention, stable ordering and unique native-action ids.
+- **Agent-platform domain and adapter contract** (`core/agentplatform/`). `AgentPlatform`,
+  `IntegrationMode`, `PlatformCapability`, `PlatformAuthKind`, `TrustLevel`, `AgentTaskState`,
+  `AgentTaskEvent` and `AgentArtifact` model web agent platforms separately from the LLM provider
+  catalog. `AgentPlatformAdapter` defaults every operation to `PlatformResult.Unsupported`, so an
+  unimplemented method can never be mistaken for a working one, and `AgentPlatformCatalog.guard()`
+  refuses an operation a platform did not declare. 8 JVM tests cover the unsupported-by-default
+  contract, declared-capability parity, the browser-only-is-not-an-API rule, the guard, id
+  uniqueness, the artifacts-require-tasks invariant, and that limitations and a documentation URL
+  are always stated.
+- Spec documents added under `docs/agents/`: `WEB_AGENT_DISCOVERY_SPEC.md` and
+  `PRODUCTION_GAP_ANALYSIS.md`.
 - **Atomic cross-process task mutation** (`cloud-backend/redis_task_storage.py`). `mutate()` now
   performs its read/modify/write inside a single Redis `EVAL`, comparing the stored bytes against
   what it read. A losing writer retries a bounded number of times and then raises

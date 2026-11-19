@@ -64,6 +64,7 @@ object OpenDroidRoutes {
     const val UNIVERSAL_AGENT = "universal_agent"
     const val REMOTE_CONTROL = "remote_control"
     const val PLUGIN_PLATFORM = "plugin_platform"
+    const val AGENT_PLATFORMS = "agent_platforms"
     const val VISUAL_TASK_BAR = "visual_task_bar"
     const val VISUAL_TOOL_BAR = "visual_tool_bar"
 }
@@ -202,6 +203,9 @@ fun OpenDroidNavigation(
                 },
                 onNavigateToPluginPlatform = {
                     navController.navigate(OpenDroidRoutes.PLUGIN_PLATFORM)
+                },
+                onNavigateToAgentPlatforms = {
+                    navController.navigate(OpenDroidRoutes.AGENT_PLATFORMS)
                 }
             )
         }
@@ -350,6 +354,10 @@ fun OpenDroidNavigation(
             PluginPlatformScreen(viewModel = hiltViewModel())
         }
 
+        composable(OpenDroidRoutes.AGENT_PLATFORMS) {
+            AgentPlatformScreen(viewModel = hiltViewModel())
+        }
+
         // These routes are reachable only through MainActivity's debug-only visual-evidence
         // intent extra. They compose the same production screens and view models, but bypass
         // splash/onboarding so emulator evidence is deterministic and repeatable.
@@ -404,6 +412,7 @@ fun MainDashboard(
     onNavigateToGoogleDrive: () -> Unit = {},
     onNavigateToRemoteControl: () -> Unit = {},
     onNavigateToPluginPlatform: () -> Unit = {},
+    onNavigateToAgentPlatforms: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -541,7 +550,8 @@ fun MainDashboard(
                         onSearchGitHub = onNavigateToGitHubDiscovery,
                         onTermux = onNavigateToTermux,
                         onUniversalAgent = onNavigateToUniversalAgent,
-                        onOpenPluginPlatform = onNavigateToPluginPlatform
+                        onOpenPluginPlatform = onNavigateToPluginPlatform,
+                        onOpenAgentPlatforms = onNavigateToAgentPlatforms
                     )
                     Screen.Macros -> MacrosScreen(
                         viewModel = macroViewModel,
