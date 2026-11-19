@@ -34,6 +34,7 @@ enum class PlatformCapability {
     SUBMIT_TASK,
     OBSERVE_EVENTS,
     CANCEL_TASK,
+    UPLOAD_FILE,
     LIST_ARTIFACTS,
     DOWNLOAD_ARTIFACT,
 }

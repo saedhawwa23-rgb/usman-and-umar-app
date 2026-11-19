@@ -60,9 +60,11 @@ class AgentPlatformTest {
         val platform = AgentPlatformCatalog.openHands
         assertNull(AgentPlatformCatalog.guard(platform, PlatformCapability.SUBMIT_TASK))
         assertNull(AgentPlatformCatalog.guard(platform, PlatformCapability.CANCEL_TASK))
-        // Artifact retrieval is still unimplemented, so it stays blocked.
+        // File enumeration is not in the documented API, so it stays blocked.
         val blocked = AgentPlatformCatalog.guard(platform, PlatformCapability.LIST_ARTIFACTS)
         assertTrue(blocked is PlatformResult.Unsupported)
+        assertNull(AgentPlatformCatalog.guard(platform, PlatformCapability.UPLOAD_FILE))
+        assertNull(AgentPlatformCatalog.guard(platform, PlatformCapability.DOWNLOAD_ARTIFACT))
     }
 
     @Test

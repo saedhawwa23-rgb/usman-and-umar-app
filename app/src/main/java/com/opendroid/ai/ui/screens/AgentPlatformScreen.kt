@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Hub
@@ -65,6 +67,12 @@ import com.opendroid.ai.ui.viewmodel.AgentPlatformViewModel
 fun AgentPlatformScreen(viewModel: AgentPlatformViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsState()
     val colors = AppTheme.colors
+    val uploadPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(viewModel::uploadAttachment)
+    }
+    val downloadPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+        uri?.let { viewModel.downloadRemoteFile(state.fileDownloadPath, it) }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(colors.background),
@@ -168,6 +176,20 @@ fun AgentPlatformScreen(viewModel: AgentPlatformViewModel = hiltViewModel()) {
                         singleLine = true,
                         enabled = state.isConnected && !state.isRunning,
                     )
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        BrandOutlineButton(
+                            text = if (state.fileTransferBusy) "Transferring…" else "Attach file",
+                            onClick = { uploadPicker.launch(arrayOf("*/*")) },
+                            enabled = state.isConnected && !state.fileTransferBusy,
+                            modifier = Modifier.weight(1f),
+                        )
+                        state.attachmentRemotePath?.let { path ->
+                            Text("Uploaded: $path", fontSize = 11.sp, color = colors.textSecondary, modifier = Modifier.weight(2f))
+                        }
+                    }
+                    state.fileTransferMessage?.let { message ->
+                        Text(message, fontSize = 11.sp, color = colors.textSecondary)
+                    }
                     state.submitError?.let { message ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -206,6 +228,34 @@ fun AgentPlatformScreen(viewModel: AgentPlatformViewModel = hiltViewModel()) {
                             )
                         }
                     }
+                }
+            }
+        }
+
+        item {
+            PlatformCard(
+                title = "Download a workspace file",
+                subtitle = "Enter the exact absolute path on the OpenHands server; remote file listing is not exposed by its API.",
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = state.fileDownloadPath,
+                        onValueChange = viewModel::onFileDownloadPathChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Remote file path") },
+                        placeholder = { Text("/tmp/agent-workspace/result.txt") },
+                        singleLine = true,
+                        enabled = state.isConnected && !state.fileTransferBusy,
+                    )
+                    BrandOutlineButton(
+                        text = if (state.fileTransferBusy) "Downloading…" else "Save file to device",
+                        onClick = {
+                            val suggestedName = state.fileDownloadPath.substringAfterLast('/').ifBlank { "agent-file.bin" }
+                            downloadPicker.launch(suggestedName)
+                        },
+                        enabled = state.isConnected && !state.fileTransferBusy && state.fileDownloadPath.startsWith('/'),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
         }
@@ -382,7 +432,7 @@ private fun ConnectForm(
                 onValueChange = { url = it },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Server URL") },
-                placeholder = { Text("http://192.168.1.10:3000") },
+                placeholder = { Text("https://agent.example.com (or local http://127.0.0.1:8000)") },
                 singleLine = true,
             )
             OutlinedTextField(
@@ -428,6 +478,7 @@ private fun PlatformCapability.displayName(): String = when (this) {
     PlatformCapability.SUBMIT_TASK -> "tasks"
     PlatformCapability.OBSERVE_EVENTS -> "live events"
     PlatformCapability.CANCEL_TASK -> "cancel"
+    PlatformCapability.UPLOAD_FILE -> "upload files"
     PlatformCapability.LIST_ARTIFACTS -> "artifacts"
     PlatformCapability.DOWNLOAD_ARTIFACT -> "downloads"
 }

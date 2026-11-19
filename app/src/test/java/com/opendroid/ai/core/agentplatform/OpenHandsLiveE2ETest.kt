@@ -72,8 +72,12 @@ class OpenHandsLiveE2ETest {
         // 3. Submit: create a real conversation in a scratch workspace with a unique marker.
         val marker = "UU_E2E_${System.currentTimeMillis()}"
         val workDir = File(System.getProperty("java.io.tmpdir"), "uu-e2e-$marker").apply { mkdirs() }
+        val inputPath = "${workDir.absolutePath}/input.txt"
+        val uploaded = client.uploadFile(inputPath, "input.txt", marker.toByteArray())
+        assertTrue("Uploading the real input file failed: $uploaded", uploaded is PlatformResult.Success)
+        val outputPath = "${workDir.absolutePath}/result.txt"
         val prompt =
-            "Create a file named result.txt in the current directory containing exactly $marker " +
+            "Read $inputPath. Create $outputPath containing exactly the text from that input file " +
                 "and nothing else. Then reply with the single word DONE."
 
         val created = client.startConversation(prompt, workDir.absolutePath, settingsObject, run = true)
@@ -105,6 +109,9 @@ class OpenHandsLiveE2ETest {
         val produced = File(workDir, "result.txt")
         assertTrue("The agent did not create result.txt", produced.exists())
         assertEquals(marker, produced.readText().trim())
+        val downloaded = client.downloadFile(outputPath)
+        assertTrue("Downloading the generated file failed: $downloaded", downloaded is PlatformResult.Success)
+        assertEquals(marker, String((downloaded as PlatformResult.Success).value).trim())
 
         // A real tool execution must appear in the timeline, proving the agent acted.
         assertTrue(

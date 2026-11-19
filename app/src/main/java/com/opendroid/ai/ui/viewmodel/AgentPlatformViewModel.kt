@@ -1,5 +1,8 @@
 package com.opendroid.ai.ui.viewmodel
 
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.opendroid.ai.core.agentplatform.AgentPlatform
@@ -13,12 +16,17 @@ import com.opendroid.ai.core.agentplatform.PlatformConnectionStore
 import com.opendroid.ai.core.agentplatform.PlatformResult
 import com.opendroid.ai.core.agentplatform.SessionKeyHint
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import java.io.ByteArrayOutputStream
 import java.util.UUID
 import javax.inject.Inject
 
@@ -45,6 +53,10 @@ data class AgentPlatformUiState(
     val taskState: String = "IDLE",
     val timeline: List<TimelineEntry> = emptyList(),
     val finalResponse: String? = null,
+    val attachmentRemotePath: String? = null,
+    val fileDownloadPath: String = "",
+    val fileTransferBusy: Boolean = false,
+    val fileTransferMessage: String? = null,
     val history: List<AgentPlatformTaskEntity> = emptyList(),
     val cancelling: Boolean = false,
 ) {
@@ -62,6 +74,7 @@ data class AgentPlatformUiState(
 class AgentPlatformViewModel @Inject constructor(
     private val connectionStore: PlatformConnectionStore,
     private val taskRepository: AgentPlatformTaskRepository,
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AgentPlatformUiState())
@@ -94,6 +107,10 @@ class AgentPlatformViewModel @Inject constructor(
         _state.value = _state.value.copy(workingDir = dir)
     }
 
+    fun onFileDownloadPathChange(path: String) {
+        _state.value = _state.value.copy(fileDownloadPath = path)
+    }
+
     fun dismissConnectionError() {
         _state.value = _state.value.copy(connectionError = null)
     }
@@ -110,11 +127,17 @@ class AgentPlatformViewModel @Inject constructor(
         val url = baseUrl.trim()
         val key = sessionKey.trim()
         if (url.isBlank()) {
-            _state.value = _state.value.copy(connectionError = "Enter the agent server URL, for example http://192.168.1.10:3000")
+            _state.value = _state.value.copy(connectionError = "Enter an HTTPS agent-server URL. HTTP is suitable only for local loopback testing.")
             return
         }
-        if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            _state.value = _state.value.copy(connectionError = "The server URL must start with http:// or https://")
+        val parsedUrl = url.toHttpUrlOrNull()
+        if (parsedUrl == null || parsedUrl.username.isNotEmpty() || parsedUrl.password.isNotEmpty()) {
+            _state.value = _state.value.copy(connectionError = "Enter a valid server URL without embedded credentials")
+            return
+        }
+        val loopbackHosts = setOf("localhost", "127.0.0.1", "10.0.2.2", "::1")
+        if (parsedUrl.scheme != "https" && parsedUrl.host !in loopbackHosts) {
+            _state.value = _state.value.copy(connectionError = "Use HTTPS for remote servers; cleartext HTTP is allowed only on loopback")
             return
         }
         if (key.isBlank()) {
@@ -124,7 +147,7 @@ class AgentPlatformViewModel @Inject constructor(
         _state.value = _state.value.copy(connecting = true, connectionError = null)
         viewModelScope.launch {
             val client = OpenHandsClient(url, key)
-            when (val validation = client.validateConnection()) {
+            when (val validation = withContext(Dispatchers.IO) { client.validateConnection() }) {
                 is PlatformResult.Unsupported -> {
                     _state.value = _state.value.copy(
                         connecting = false,
@@ -138,7 +161,7 @@ class AgentPlatformViewModel @Inject constructor(
                     )
                 }
                 else -> {
-                    val model = ((client.fetchAgentSettings() as? PlatformResult.Success)
+                    val model = ((withContext(Dispatchers.IO) { client.fetchAgentSettings() } as? PlatformResult.Success)
                         ?.value?.get("llm") as? kotlinx.serialization.json.JsonObject)
                         ?.get("model")
                         ?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
@@ -173,6 +196,7 @@ class AgentPlatformViewModel @Inject constructor(
             taskState = "IDLE",
             timeline = emptyList(),
             finalResponse = null,
+            attachmentRemotePath = null,
         )
     }
 
@@ -204,8 +228,12 @@ class AgentPlatformViewModel @Inject constructor(
         )
         viewModelScope.launch {
             val client = OpenHandsClient(connection.baseUrl, key)
-            val settings = (client.fetchAgentSettings() as? PlatformResult.Success)?.value
-            when (val created = client.startConversation(prompt, workingDir, settings, run = true)) {
+            val settings = withContext(Dispatchers.IO) {
+                (client.fetchAgentSettings() as? PlatformResult.Success)?.value
+            }
+            when (val created = withContext(Dispatchers.IO) {
+                client.startConversation(prompt, workingDir, settings, run = true)
+            }) {
                 is PlatformResult.Unsupported -> {
                     _state.value = _state.value.copy(
                         submitting = false,
@@ -248,7 +276,7 @@ class AgentPlatformViewModel @Inject constructor(
             var lastCount = 0
             var terminalSeen = false
             repeat(MAX_POLLS) {
-                val conversation = client.getConversation(conversationId)
+                val conversation = withContext(Dispatchers.IO) { client.getConversation(conversationId) }
                 if (conversation is PlatformResult.Failure) {
                     _state.value = _state.value.copy(
                         submitError = "Lost contact with the server: ${conversation.message}",
@@ -258,7 +286,7 @@ class AgentPlatformViewModel @Inject constructor(
                 }
                 val status = (conversation as PlatformResult.Success).value.executionStatus ?: "unknown"
 
-                val eventsResult = client.searchEvents(conversationId)
+                val eventsResult = withContext(Dispatchers.IO) { client.searchEvents(conversationId) }
                 val events: List<OhEvent> =
                     (eventsResult as? PlatformResult.Success)?.value ?: emptyList()
                 val entries = events.map {
@@ -272,7 +300,7 @@ class AgentPlatformViewModel @Inject constructor(
                 val errorEvent = events.lastOrNull { it.isError() }
 
                 val finalText = if (status in TERMINAL_STATES) {
-                    (client.finalResponse(conversationId) as? PlatformResult.Success)?.value
+                    (withContext(Dispatchers.IO) { client.finalResponse(conversationId) } as? PlatformResult.Success)?.value
                 } else null
 
                 _state.value = _state.value.copy(
@@ -314,9 +342,9 @@ class AgentPlatformViewModel @Inject constructor(
         val key = connectionStore.sessionKey(connection.platformId) ?: return
         viewModelScope.launch {
             val client = OpenHandsClient(connection.baseUrl, key)
-            val conversation = client.getConversation(conversationId)
+            val conversation = withContext(Dispatchers.IO) { client.getConversation(conversationId) }
             if (conversation is PlatformResult.Success) {
-                val events = (client.searchEvents(conversationId) as? PlatformResult.Success)?.value ?: emptyList()
+                val events = (withContext(Dispatchers.IO) { client.searchEvents(conversationId) } as? PlatformResult.Success)?.value ?: emptyList()
                 _state.value = _state.value.copy(
                     taskState = conversation.value.executionStatus ?: _state.value.taskState,
                     timeline = events.map { TimelineEntry(it.id, it.kind, it.summary(), it.isError()) },
@@ -333,7 +361,7 @@ class AgentPlatformViewModel @Inject constructor(
         _state.value = _state.value.copy(cancelling = true)
         viewModelScope.launch {
             val client = OpenHandsClient(connection.baseUrl, key)
-            when (val result = client.interrupt(conversationId)) {
+            when (val result = withContext(Dispatchers.IO) { client.interrupt(conversationId) }) {
                 is PlatformResult.Unsupported -> _state.value = _state.value.copy(
                     cancelling = false,
                     submitError = "This platform does not support ${result.operation}",
@@ -362,6 +390,117 @@ class AgentPlatformViewModel @Inject constructor(
         viewModelScope.launch { taskRepository.delete(id) }
     }
 
+    /** Uploads a user-selected file to the server workspace over the authenticated API. */
+    fun uploadAttachment(uri: Uri) {
+        val connection = _state.value.connection ?: run {
+            _state.value = _state.value.copy(fileTransferMessage = "Connect OpenHands before uploading a file")
+            return
+        }
+        val directory = _state.value.workingDir.trim().trimEnd('/')
+        if (!directory.startsWith('/')) {
+            _state.value = _state.value.copy(fileTransferMessage = "Set an absolute server working directory first")
+            return
+        }
+        val key = connectionStore.sessionKey(connection.platformId) ?: run {
+            _state.value = _state.value.copy(fileTransferMessage = "The stored session key is unavailable. Reconnect OpenHands.")
+            return
+        }
+        _state.value = _state.value.copy(fileTransferBusy = true, fileTransferMessage = null)
+        viewModelScope.launch {
+            var uploadedName = "attachment.bin"
+            val result = withContext(Dispatchers.IO) {
+                try {
+                    val name = selectedFileName(uri).also { uploadedName = it }
+                    val bytes = readSelectedFile(uri)
+                    OpenHandsClient(connection.baseUrl, key).uploadFile("$directory/$name", name, bytes)
+                } catch (e: Exception) {
+                    PlatformResult.Failure("Could not read or upload file: ${e.message ?: e::class.simpleName}")
+                }
+            }
+            _state.value = when (result) {
+                is PlatformResult.Success -> _state.value.copy(
+                    fileTransferBusy = false,
+                    attachmentRemotePath = "$directory/$uploadedName",
+                    fileTransferMessage = "Uploaded to $directory/$uploadedName. Include this path in your task instructions.",
+                )
+                is PlatformResult.Failure -> _state.value.copy(fileTransferBusy = false, fileTransferMessage = result.message)
+                is PlatformResult.Unsupported -> _state.value.copy(
+                    fileTransferBusy = false,
+                    fileTransferMessage = "This platform does not support ${result.operation}",
+                )
+            }
+        }
+    }
+
+    /** Downloads a known remote file path and writes it to a user-selected document URI. */
+    fun downloadRemoteFile(remotePath: String, destination: Uri) {
+        val connection = _state.value.connection ?: run {
+            _state.value = _state.value.copy(fileTransferMessage = "Connect OpenHands before downloading a file")
+            return
+        }
+        val key = connectionStore.sessionKey(connection.platformId) ?: run {
+            _state.value = _state.value.copy(fileTransferMessage = "The stored session key is unavailable. Reconnect OpenHands.")
+            return
+        }
+        _state.value = _state.value.copy(fileTransferBusy = true, fileTransferMessage = null)
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                when (val download = OpenHandsClient(connection.baseUrl, key).downloadFile(remotePath.trim())) {
+                    is PlatformResult.Success -> try {
+                        val output = context.contentResolver.openOutputStream(destination)
+                            ?: throw IllegalStateException("The selected destination is not writable")
+                        output.use { it.write(download.value) }
+                        PlatformResult.Success(download.value.size)
+                    } catch (e: Exception) {
+                        PlatformResult.Failure("Downloaded the file but could not save it: ${e.message ?: e::class.simpleName}")
+                    }
+                    is PlatformResult.Failure -> download
+                    is PlatformResult.Unsupported -> download
+                }
+            }
+            _state.value = when (result) {
+                is PlatformResult.Success -> _state.value.copy(
+                    fileTransferBusy = false,
+                    fileTransferMessage = "Saved ${result.value} bytes from $remotePath",
+                )
+                is PlatformResult.Failure -> _state.value.copy(fileTransferBusy = false, fileTransferMessage = result.message)
+                is PlatformResult.Unsupported -> _state.value.copy(
+                    fileTransferBusy = false,
+                    fileTransferMessage = "This platform does not support ${result.operation}",
+                )
+            }
+        }
+    }
+
+    private fun selectedFileName(uri: Uri): String {
+        val displayName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+            ?: uri.lastPathSegment?.substringAfterLast('/')
+            ?: "attachment.bin"
+        return displayName.substringAfterLast('/').substringAfterLast('\\')
+            .replace(Regex("[^A-Za-z0-9._ -]"), "_")
+            .take(120)
+            .ifBlank { "attachment.bin" }
+    }
+
+    private fun readSelectedFile(uri: Uri): ByteArray {
+        val input = context.contentResolver.openInputStream(uri)
+            ?: throw IllegalStateException("The selected file could not be opened")
+        input.use { stream ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = stream.read(buffer)
+                if (count < 0) break
+                if (output.size() + count > MAX_ATTACHMENT_BYTES) {
+                    throw IllegalArgumentException("Files larger than 25 MB are not supported")
+                }
+                output.write(buffer, 0, count)
+            }
+            return output.toByteArray()
+        }
+    }
+
     override fun onCleared() {
         pollJob?.cancel()
         super.onCleared()
@@ -370,6 +509,7 @@ class AgentPlatformViewModel @Inject constructor(
     private companion object {
         const val POLL_INTERVAL_MS = 3_000L
         const val MAX_POLLS = 200
+        const val MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 
         /** `paused` is what the server reports after a successful interrupt. */
         val TERMINAL_STATES = setOf("finished", "error", "stopped", "paused")

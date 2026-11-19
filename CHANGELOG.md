@@ -13,6 +13,9 @@ Real web AI agent platform integration: discover, connect, submit, monitor, retr
   server. Covers `GET /api/settings`, `POST /api/conversations`, `POST /api/conversations/{id}/events`,
   `GET /api/conversations/{id}`, `GET /api/conversations/{id}/events/search`,
   `GET /api/conversations/{id}/agent_final_response` and `POST /api/conversations/{id}/interrupt`.
+  It also supports the documented authenticated workspace file upload and download endpoints,
+  with a 25 MB transfer limit and absolute-path traversal checks. The UI lets users pick an input
+  file and save a remote file by exact path; remote file enumeration is not exposed by this API.
   The session key travels only in the `X-Session-API-Key` header; no credential is placed in a URL,
   a log line, or an error string.
 - **`core/agentplatform/PlatformConnectionStore.kt`** — connection management backed by the existing
@@ -23,11 +26,12 @@ Real web AI agent platform integration: discover, connect, submit, monitor, retr
   existing migration chain is untouched.
 - **`ui/viewmodel/AgentPlatformViewModel.kt`** and **`ui/screens/AgentPlatformScreen.kt`** — the
   workflow: search the catalog, validate and store a connection, submit instructions, poll live
-  execution every 3 s, read the final answer, cancel, and reopen past tasks from history.
+  execution every 3 s, read the final answer, cancel, attach/download files, and reopen past tasks
+  from history. Blocking API calls run on the IO dispatcher, not the UI thread.
 - **`AgentPlatformLiveE2ETest`** — three JVM tests that run against a real server when
   `OH_E2E_BASE_URL`/`OH_E2E_SESSION_KEY` are supplied, and are skipped otherwise. The main test
-  creates a real conversation, waits for real execution, and asserts that the file the agent was
-  asked to write exists on disk with the exact requested content.
+  creates a real conversation, uploads an input file, waits for real execution, and asserts that the
+  generated output can be downloaded with exact content.
 
 ### Changed
 

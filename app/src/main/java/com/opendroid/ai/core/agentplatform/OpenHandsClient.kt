@@ -12,11 +12,14 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Response
 import java.io.IOException
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 
 /**
@@ -305,6 +308,91 @@ class OpenHandsClient(
             else -> PlatformResult.Failure("Unexpected response")
         }
 
+    /** Uploads a selected local file to a remote workspace using the documented Agent Server API. */
+    fun uploadFile(remotePath: String, fileName: String, bytes: ByteArray): PlatformResult<Unit> {
+        val invalidPath = validateFilePath(remotePath)
+        if (invalidPath != null) return PlatformResult.Failure(invalidPath)
+        if (fileName.isBlank() || fileName.contains('/') || fileName.contains('\\')) {
+            return PlatformResult.Failure("Choose a file with a valid file name")
+        }
+        if (bytes.isEmpty()) return PlatformResult.Failure("The selected file is empty")
+        if (bytes.size > MAX_FILE_TRANSFER_BYTES) {
+            return PlatformResult.Failure("Files larger than 25 MB are not supported")
+        }
+
+        val target = url("/api/file/upload").toHttpUrl().newBuilder()
+            .addQueryParameter("path", remotePath)
+            .build()
+        val multipart = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart("file", fileName, bytes.toRequestBody("application/octet-stream".toMediaType()))
+            .build()
+        val request = Request.Builder()
+            .url(target)
+            .header("X-Session-API-Key", sessionKey)
+            .header("Accept", "application/json")
+            .post(multipart)
+            .build()
+        return when (val result = execute(request)) {
+            is PlatformResult.Success -> PlatformResult.Success(Unit)
+            is PlatformResult.Failure -> result
+            else -> PlatformResult.Failure("Unexpected response uploading file")
+        }
+    }
+
+    /** Downloads a remote workspace file. The caller chooses where to persist the returned bytes. */
+    fun downloadFile(remotePath: String): PlatformResult<ByteArray> {
+        val invalidPath = validateFilePath(remotePath)
+        if (invalidPath != null) return PlatformResult.Failure(invalidPath)
+        val target = url("/api/file/download").toHttpUrl().newBuilder()
+            .addQueryParameter("path", remotePath)
+            .build()
+        val request = Request.Builder()
+            .url(target)
+            .header("X-Session-API-Key", sessionKey)
+            .header("Accept", "application/octet-stream")
+            .get()
+            .build()
+        return try {
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    val detail = response.body?.string().orEmpty()
+                    PlatformResult.Failure("HTTP ${response.code}: ${extractDetail(detail)}")
+                } else {
+                    val output = ByteArrayOutputStream()
+                    val buffer = ByteArray(8192)
+                    val input = response.body?.byteStream()
+                        ?: return PlatformResult.Failure("The server returned an empty file response")
+                    input.use { stream ->
+                        while (true) {
+                            val count = stream.read(buffer)
+                            if (count < 0) break
+                            if (output.size() + count > MAX_FILE_TRANSFER_BYTES) {
+                                return PlatformResult.Failure("Downloaded files larger than 25 MB are not supported")
+                            }
+                            output.write(buffer, 0, count)
+                        }
+                    }
+                    PlatformResult.Success(output.toByteArray())
+                }
+            }
+        } catch (e: IOException) {
+            PlatformResult.Failure("Network error: ${e.message ?: e::class.simpleName}")
+        } catch (e: RuntimeException) {
+            PlatformResult.Failure("Client error: ${e.message ?: e::class.simpleName}")
+        }
+    }
+
+    private fun validateFilePath(path: String): String? {
+        if (!path.startsWith('/') || path == "/" || path.endsWith('/')) {
+            return "Use an absolute file path on the agent server"
+        }
+        if (path.contains('\u0000') || path.split('/').any { it == "." || it == ".." }) {
+            return "The remote file path contains an invalid path segment"
+        }
+        return null
+    }
+
     /** Requests cancellation. The server stops at its next safe point, so this is not instant. */
     fun interrupt(conversationId: String): PlatformResult<Unit> =
         when (val r = execute(newRequest("/api/conversations/$conversationId/interrupt", "{}"))) {
@@ -312,4 +400,8 @@ class OpenHandsClient(
             is PlatformResult.Success -> PlatformResult.Success(Unit)
             else -> PlatformResult.Failure("Unexpected response interrupting")
         }
+
+    private companion object {
+        const val MAX_FILE_TRANSFER_BYTES = 25 * 1024 * 1024
+    }
 }

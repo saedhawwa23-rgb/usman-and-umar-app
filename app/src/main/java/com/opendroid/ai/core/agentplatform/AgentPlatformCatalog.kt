@@ -11,7 +11,9 @@ object AgentPlatformCatalog {
 
     /**
      * OpenHands agent server. Verified against a live v1.60.1 server: conversations can be created,
-     * tasks run, events streamed and the final answer read. Every capability below was exercised.
+     * tasks run, events streamed and the final answer read. File transfer uses the Agent Server's
+     * documented workspace endpoints; the opt-in live E2E test covers upload and download when a
+     * reachable server and session key are configured.
      */
     val openHands = AgentPlatform(
         id = "openhands",
@@ -24,12 +26,15 @@ object AgentPlatformCatalog {
             PlatformCapability.SUBMIT_TASK,
             PlatformCapability.OBSERVE_EVENTS,
             PlatformCapability.CANCEL_TASK,
+            PlatformCapability.UPLOAD_FILE,
+            PlatformCapability.DOWNLOAD_ARTIFACT,
         ),
         documentationUrl = "https://docs.all-hands.dev/",
         limitations = listOf(
             "Requires an OpenHands agent server the user runs (self-hosted or cloud) and its session key.",
             "Cancellation stops the agent at its next safe point; it is not instantaneous.",
             "The server must be reachable from the phone; a loopback URL only works on the same host.",
+            "Files can be uploaded and downloaded by exact server-side path; the Agent Server API does not currently expose file enumeration.",
         ),
     )
 
