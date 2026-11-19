@@ -67,6 +67,9 @@ class AndroidPlatformConnectionStore @Inject constructor(
     override fun connection(platformId: String): PlatformConnection? =
         connections().firstOrNull { it.platformId == platformId }
 
+    // The KTX edit(commit = true) helper returns Unit, which would discard commit()'s success
+    // flag; save() reports that flag to the caller.
+    @Suppress("UseKtx")
     override fun save(connection: PlatformConnection, sessionKey: String): Boolean {
         val written = records.write(
             storageKey = secretKey(connection.platformId),
@@ -88,6 +91,7 @@ class AndroidPlatformConnectionStore @Inject constructor(
             else -> null
         }
 
+    @Suppress("UseKtx")
     override fun remove(platformId: String): Boolean {
         records.removeRecord(secretKey(platformId))
         val remaining = connections().filterNot { it.platformId == platformId }
