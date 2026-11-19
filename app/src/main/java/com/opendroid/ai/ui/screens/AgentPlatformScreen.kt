@@ -154,6 +154,48 @@ fun AgentPlatformScreen(viewModel: AgentPlatformViewModel = hiltViewModel()) {
             }
         }
 
+        // ── OpenSwarm backend ──────────────────────────────────────────────────
+        item {
+            SectionHeading(
+                "OpenSwarm backend",
+                subtitle = "The app's own task backend, connected separately from OpenHands",
+            )
+        }
+        item {
+            val swarm = state.openSwarmConnection
+            if (swarm != null) {
+                PlatformCard(
+                    title = swarm.displayName,
+                    subtitle = swarm.baseUrl,
+                    status = "Token verified" to PlatformStatus.HEALTHY,
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        LabeledValue("Token", swarm.keyHint)
+                        LabeledValue(
+                            "Last validated",
+                            swarm.lastValidatedAtMillis?.let { formatMillis(it) } ?: "never",
+                        )
+                        // The backend reports its own readiness; showing it prevents the screen
+                        // from implying tasks can run when the server says they cannot.
+                        swarm.serverModel?.let {
+                            Text(
+                                "Backend reports: $it",
+                                fontSize = 11.sp,
+                                color = AppTheme.colors.textSecondary,
+                            )
+                        }
+                    }
+                }
+            } else {
+                OpenSwarmConnectForm(
+                    connecting = state.connecting,
+                    error = state.connectionError,
+                    onConnect = viewModel::connectOpenSwarm,
+                    onDismissError = viewModel::dismissConnectionError,
+                )
+            }
+        }
+
         // ── Submit ─────────────────────────────────────────────────────────────
         item { SectionHeading("Submit a task", subtitle = "The agent runs these instructions on the server") }
         item {
@@ -457,6 +499,60 @@ private fun ConnectForm(
             BrandButton(
                 text = if (connecting) "Checking…" else "Connect",
                 onClick = { onConnect(url, key) },
+                enabled = !connecting,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun OpenSwarmConnectForm(
+    connecting: Boolean,
+    error: String?,
+    onConnect: (String, String) -> Unit,
+    onDismissError: () -> Unit,
+) {
+    val colors = AppTheme.colors
+    var url by remember { mutableStateOf("https://") }
+    var token by remember { mutableStateOf("") }
+
+    PlatformCard(
+        title = "Connect OpenSwarm",
+        subtitle = "Point the app at your deployed task backend",
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedTextField(
+                value = url,
+                onValueChange = { url = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Backend URL") },
+                placeholder = { Text("https://your-backend.example.com (or local http://127.0.0.1:8000)") },
+                singleLine = true,
+            )
+            OutlinedTextField(
+                value = token,
+                onValueChange = { token = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("App client token") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+            )
+            Text(
+                "The token is sent only in the Authorization header and stored encrypted on this device. " +
+                    "Task execution stays disabled until the backend reports itself ready.",
+                fontSize = 11.sp,
+                color = colors.textSecondary,
+            )
+            error?.let {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(it, color = colors.accentRed, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onDismissError) { Text("Dismiss") }
+                }
+            }
+            BrandButton(
+                text = if (connecting) "Checking…" else "Connect",
+                onClick = { onConnect(url, token) },
                 enabled = !connecting,
                 modifier = Modifier.fillMaxWidth(),
             )

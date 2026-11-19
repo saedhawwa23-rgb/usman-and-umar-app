@@ -39,6 +39,36 @@ object AgentPlatformCatalog {
     )
 
     /**
+     * The USMAN AND UMAR OpenSwarm task backend (`cloud-backend/main.py`), the app's own service.
+     *
+     * Verified against a locally launched instance: `/health` needs no token, and `/agents`,
+     * `/capabilities`, `/tasks/{id}` and `/tasks/{id}/logs` require the bearer token and answer
+     * 401 without it and 404 for an unknown task. `/execute` refuses to run until the backend's own
+     * readiness checks pass (Upstash Redis configured) and returns `BACKEND_NOT_READY`, so task
+     * submission is declared but its precondition is stated in [limitations] rather than hidden.
+     */
+    val openSwarm = AgentPlatform(
+        id = "openswarm",
+        displayName = "OpenSwarm task backend",
+        integrationMode = IntegrationMode.DOCUMENTED_API,
+        authKind = PlatformAuthKind.API_TOKEN,
+        trustLevel = TrustLevel.SELF_HOSTED,
+        supported = setOf(
+            PlatformCapability.CREATE_SESSION,
+            PlatformCapability.SUBMIT_TASK,
+            PlatformCapability.OBSERVE_EVENTS,
+            PlatformCapability.CANCEL_TASK,
+        ),
+        documentationUrl = "https://github.com/saedhawwa23-rgb/usman-and-umar-app/tree/main/cloud-backend",
+        limitations = listOf(
+            "Requires your own deployed backend URL and the APP_CLIENT_TOKEN configured on it.",
+            "Task execution stays disabled until the backend reports ready; it needs Upstash Redis configured.",
+            "No file upload or artifact download: the backend does not expose those endpoints.",
+            "Cancellation is cooperative; the agent stops at its next safe point.",
+        ),
+    )
+
+    /**
      * Browser-only platforms are recorded honestly: no API, no unattended automation, no capability
      * that would imply either. This keeps the catalog from promising an integration it does not have.
      */
@@ -55,7 +85,7 @@ object AgentPlatformCatalog {
         ),
     )
 
-    val all: List<AgentPlatform> = listOf(openHands, browserOnlyExample)
+    val all: List<AgentPlatform> = listOf(openHands, openSwarm, browserOnlyExample)
 
     fun byId(id: String): AgentPlatform? = all.firstOrNull { it.id == id }
 

@@ -2,6 +2,53 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.11.0] - 2026-11-19
+
+Tool Bar web-based AI platform center: a second real platform, and an adapter layer that makes
+adding more a one-line change.
+
+### Added
+
+- **`core/agentplatform/OpenSwarmClient.kt`** — a real REST client for the app's own OpenSwarm task
+  backend (`cloud-backend/main.py`). Verified against a locally launched instance: `GET /health`
+  needs no token, and `GET /agents`, `GET /capabilities`, `GET /tasks/{id}` and `GET /tasks/{id}/logs`
+  require the bearer token, answering 401 without it and 404 for an unknown task. `POST /execute`
+  refuses to run until the backend's own readiness checks pass (Upstash Redis configured) and
+  returns `BACKEND_NOT_READY`; the client surfaces that refusal with the backend's `error_code` and
+  `recovery_action` instead of reporting a started task. Task ids are percent-encoded so an id
+  cannot inject a different route. The token travels only in the `Authorization` header.
+- **`core/agentplatform/AgentPlatformAdapters.kt`** — the first production `AgentPlatformAdapter`
+  implementation, plus a registry that maps a platform id to an adapter. An unknown id returns null,
+  so a platform can never appear connectable before its adapter exists. Adding a platform is one
+  catalog entry and one registry line; no screen or view-model change is required.
+- **Tool Bar entry "Web AI platform center"** — opens the platform center from the existing
+  AI-agents section. This also wires the `onOpenAgentPlatforms` callback that was previously
+  plumbed through `CapabilitiesScreen` but never reachable from any entry.
+- **OpenSwarm connection UI** — the platform screen now has a separate OpenSwarm section: connect
+  form, stored-token card and the backend's own readiness verdict, so the screen cannot imply that
+  tasks will run when the server says they will not.
+
+### Changed
+
+- **`AgentPlatformCatalog`** — added `openSwarm` declaring only verified capabilities: session,
+  task submission, events and cancel. File upload and artifact download are deliberately absent
+  because the backend exposes no such endpoints. Limitations state the Redis precondition, the
+  missing file transfer and the cooperative cancellation.
+- **`AgentPlatformViewModel`** — `connectOpenSwarm` validates the token against `/capabilities`
+  before persisting anything and keeps the backend's `/health` verdict in the connection record.
+  `submitTask` now stops with the real reason when the server's agent settings cannot be read,
+  instead of forwarding the server's opaque HTTP 422.
+- Server version references in the catalog, the OpenHands client and the changelog corrected from
+  v1.60.1 to v1.62.0, the version the client was actually verified against.
+
+### Testing
+
+- `OpenSwarmClientTest` — 13 tests, 0 skipped, against a real HTTP server. Covers bearer-token
+  validation, token-free `/health`, string-encoded booleans, 401 and `BACKEND_NOT_READY` message
+  propagation, token redaction, agent parsing, route-injection resistance, adapter state mapping,
+  declared-unsupported file transfer, and an opt-in live run (`SWARM_E2E_BASE_URL` /
+  `SWARM_E2E_TOKEN`) that was executed against a running backend.
+
 ## [3.10.8] - 2026-11-19
 
 Real web AI agent platform integration: discover, connect, submit, monitor, retrieve.

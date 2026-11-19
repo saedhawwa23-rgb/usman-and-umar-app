@@ -95,6 +95,7 @@ object CapabilityRegistry {
         Capability("ai.providers", "AI providers & models", CapabilityModule.AI_PROVIDERS, CapabilityRequirement.NETWORK, "discovery"),
         Capability("ai.cloud-agent", "Cloud AI tool agent", CapabilityModule.CLOUD_AGENT, CapabilityRequirement.CLOUD_SERVER, "universal_agent", mutating = true),
         Capability("ai.integrations", "Integrations, MCP & OpenAPI", CapabilityModule.PLUGINS, CapabilityRequirement.NONE, "plugin_platform", mutating = true),
+        Capability("ai.platforms", "Web AI platform center", CapabilityModule.OPENSWARM, CapabilityRequirement.CREDENTIAL, "agent_platforms", mutating = true),
         Capability("ai.remote", "Universal remote control", CapabilityModule.REMOTE, CapabilityRequirement.CLOUD_SERVER, "remote_control", mutating = true),
         Capability("tasks.manager", "Task Bar", CapabilityModule.TASKS, CapabilityRequirement.NONE, "task_manager"),
         Capability("github.search", "Search public repositories", CapabilityModule.GITHUB, CapabilityRequirement.NETWORK, "github_discovery"),

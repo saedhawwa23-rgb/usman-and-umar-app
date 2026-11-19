@@ -28,6 +28,9 @@ enum class ToolDestination {
 
     /** The integration platform (MCP servers, OpenAPI services, grants). */
     INTEGRATION_PLATFORM,
+
+    /** The web-based AI platform center: connect and run tasks on remote agent platforms. */
+    AGENT_PLATFORMS,
 }
 
 /**
@@ -87,6 +90,15 @@ object ToolBarModel {
                         "protocol with allowlisted local connectors. Sensitive actions stay behind approval.",
                     availability = ToolAvailability.NEEDS_SETUP,
                     destination = ToolDestination.CLOUD_AGENT,
+                ),
+                ToolEntry(
+                    id = "ai.platforms",
+                    title = "Web AI platform center",
+                    description = "Discover and connect web-based AI agent platforms, see each one's real " +
+                        "capabilities and limits, then submit, monitor and cancel tasks and move files " +
+                        "where the platform supports it.",
+                    availability = ToolAvailability.NEEDS_SETUP,
+                    destination = ToolDestination.AGENT_PLATFORMS,
                 ),
                 ToolEntry(
                     id = "ai.integrations",

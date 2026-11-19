@@ -11,6 +11,7 @@ import com.opendroid.ai.core.agentplatform.AgentPlatformTaskEntity
 import com.opendroid.ai.core.agentplatform.AgentPlatformTaskRepository
 import com.opendroid.ai.core.agentplatform.OhEvent
 import com.opendroid.ai.core.agentplatform.OpenHandsClient
+import com.opendroid.ai.core.agentplatform.OpenSwarmClient
 import com.opendroid.ai.core.agentplatform.PlatformConnection
 import com.opendroid.ai.core.agentplatform.PlatformConnectionStore
 import com.opendroid.ai.core.agentplatform.PlatformResult
@@ -42,6 +43,8 @@ data class AgentPlatformUiState(
     val query: String = "",
     val platforms: List<AgentPlatform> = AgentPlatformCatalog.all,
     val connection: PlatformConnection? = null,
+    /** The stored OpenSwarm backend connection, kept separate from the OpenHands one. */
+    val openSwarmConnection: PlatformConnection? = null,
     val connecting: Boolean = false,
     val connectionError: String? = null,
     val prompt: String = "",
@@ -86,6 +89,7 @@ class AgentPlatformViewModel @Inject constructor(
         val existing = connectionStore.connection(AgentPlatformCatalog.openHands.id)
         _state.value = _state.value.copy(
             connection = existing,
+            openSwarmConnection = connectionStore.connection(AgentPlatformCatalog.openSwarm.id),
             workingDir = existing?.let { "/tmp/agent-workspace" } ?: "",
         )
         viewModelScope.launch {
@@ -198,6 +202,78 @@ class AgentPlatformViewModel @Inject constructor(
             finalResponse = null,
             attachmentRemotePath = null,
         )
+    }
+
+    /**
+     * Validates and stores an OpenSwarm backend connection.
+     *
+     * The token is checked against `/capabilities` before anything is persisted, and the backend's
+     * `/health` verdict is kept so the screen can show that task execution is still blocked until
+     * the server reports ready. Nothing here implies a working task pipeline when it is not.
+     */
+    fun connectOpenSwarm(baseUrl: String, appToken: String) {
+        val url = baseUrl.trim()
+        val token = appToken.trim()
+        if (url.isBlank()) {
+            _state.value = _state.value.copy(connectionError = "Enter the OpenSwarm backend URL.")
+            return
+        }
+        val parsedUrl = url.toHttpUrlOrNull()
+        if (parsedUrl == null || parsedUrl.username.isNotEmpty() || parsedUrl.password.isNotEmpty()) {
+            _state.value = _state.value.copy(connectionError = "Enter a valid backend URL without embedded credentials")
+            return
+        }
+        val loopbackHosts = setOf("localhost", "127.0.0.1", "10.0.2.2", "::1")
+        if (parsedUrl.scheme != "https" && parsedUrl.host !in loopbackHosts) {
+            _state.value = _state.value.copy(connectionError = "Use HTTPS for remote servers; cleartext HTTP is allowed only on loopback")
+            return
+        }
+        if (token.isBlank()) {
+            _state.value = _state.value.copy(connectionError = "Enter the backend's APP_CLIENT_TOKEN")
+            return
+        }
+        _state.value = _state.value.copy(connecting = true, connectionError = null)
+        viewModelScope.launch {
+            val client = OpenSwarmClient(url, token)
+            when (val validation = withContext(Dispatchers.IO) { client.validateConnection() }) {
+                is PlatformResult.Failure -> {
+                    _state.value = _state.value.copy(
+                        connecting = false,
+                        connectionError = "Could not connect: ${validation.message}",
+                    )
+                }
+                is PlatformResult.Unsupported -> {
+                    _state.value = _state.value.copy(
+                        connecting = false,
+                        connectionError = "This platform does not support ${validation.operation}",
+                    )
+                }
+                else -> {
+                    val health = (withContext(Dispatchers.IO) { client.health() } as? PlatformResult.Success)?.value
+                    val connection = PlatformConnection(
+                        platformId = AgentPlatformCatalog.openSwarm.id,
+                        displayName = AgentPlatformCatalog.openSwarm.displayName,
+                        baseUrl = url,
+                        connectedAtMillis = System.currentTimeMillis(),
+                        lastValidatedAtMillis = System.currentTimeMillis(),
+                        lastValidationOk = true,
+                        keyHint = SessionKeyHint.of(token),
+                        serverModel = health?.reason,
+                    )
+                    val saved = connectionStore.save(connection, token)
+                    _state.value = _state.value.copy(
+                        connecting = false,
+                        openSwarmConnection = if (saved) connection else null,
+                        connectionError = when {
+                            !saved -> "Could not store the token in the device keystore"
+                            health != null && !health.ready ->
+                                "Connected, but the backend reports it is not ready: ${health.reason ?: "readiness checks failed"}"
+                            else -> null
+                        },
+                    )
+                }
+            }
+        }
     }
 
     /** Submits the current prompt to the real server and starts polling. */

@@ -120,4 +120,18 @@ class CapabilityRegistryTest {
         assertTrue(github.isNotEmpty())
         assertTrue(github.all { it.module == CapabilityModule.GITHUB })
     }
+
+    @Test
+    fun `tool bar availability agrees with the registry state for an unconfigured device`() {
+        // A fresh device: no Termux, no credential, no cloud server, no GitHub token.
+        val env = CapabilityEnvironment()
+        val drifted = ToolBarModel.sections().flatMap { section -> section.entries }
+            .mapNotNull { entry ->
+                val capability = CapabilityRegistry.find(entry.id) ?: return@mapNotNull null
+                val expected = CapabilityRegistry.resolve(capability, env)
+                val declared = CapabilityRegistry.fromToolBar(entry.availability)
+                if (declared == expected) null else "${entry.id}: tool bar=$declared registry=$expected"
+            }
+        assertEquals("Tool Bar availability drifted from the registry: $drifted", emptyList<String>(), drifted)
+    }
 }

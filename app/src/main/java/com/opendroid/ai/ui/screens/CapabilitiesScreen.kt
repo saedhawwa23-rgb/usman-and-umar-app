@@ -114,6 +114,7 @@ internal fun CapabilitiesScreenContent(
             ToolDestination.TERMUX -> onTermux()
             ToolDestination.CLOUD_AGENT -> onUniversalAgent()
             ToolDestination.INTEGRATION_PLATFORM -> onOpenPluginPlatform()
+            ToolDestination.AGENT_PLATFORMS -> onOpenAgentPlatforms()
         }
     }
 
@@ -223,6 +224,7 @@ private fun ToolDestination.icon(): ImageVector = when (this) {
     ToolDestination.TERMUX -> Icons.Default.Terminal
     ToolDestination.CLOUD_AGENT -> Icons.Default.SmartToy
     ToolDestination.INTEGRATION_PLATFORM -> Icons.Default.Extension
+    ToolDestination.AGENT_PLATFORMS -> Icons.Default.Hub
 }
 
 private fun ToolEntry.actionLabel(): String = when (destination) {
@@ -231,4 +233,5 @@ private fun ToolEntry.actionLabel(): String = when (destination) {
     ToolDestination.TERMUX -> "Open terminal"
     ToolDestination.CLOUD_AGENT -> "Open agent"
     ToolDestination.INTEGRATION_PLATFORM -> "Open"
+    ToolDestination.AGENT_PLATFORMS -> "Open platforms"
 }
