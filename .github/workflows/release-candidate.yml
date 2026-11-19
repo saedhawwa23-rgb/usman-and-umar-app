@@ -2,16 +2,6 @@ name: Verify signed Android release candidate
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - feature/hybrid-task-orchestrator
-    paths:
-      - 'app/**'
-      - 'gradle/**'
-      - '*.gradle'
-      - '*.properties'
-      - '.github/workflows/release-candidate.yml'
-      - '.github/scripts/verify-release-on-emulator.sh'
 
 permissions:
   contents: read
@@ -38,57 +28,72 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Generate candidate signing key
+      - name: Configure permanent release signing identity
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          EXPECTED_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
         shell: bash
         run: |
           set -euo pipefail
-          store_password="$(openssl rand -hex 24)"
-          keytool -genkeypair -v \
-            -keystore opendroid-release.keystore \
-            -storepass "$store_password" \
-            -keypass "$store_password" \
-            -alias usman-and-umar-release \
-            -keyalg RSA -keysize 4096 -validity 10000 \
-            -dname 'CN=USMAN AND UMAR Release, OU=OpenDroid, O=USMAN AND UMAR, C=PK'
-          {
-            echo "ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD=$store_password"
-            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS=usman-and-umar-release"
-            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD=$store_password"
-          } >> "$GITHUB_ENV"
+          test -n "$RELEASE_KEYSTORE_B64" || { echo 'Missing ANDROID_RELEASE_KEYSTORE_BASE64'; exit 1; }
+          test -n "$RELEASE_STORE_PASSWORD" || { echo 'Missing ANDROID_RELEASE_STORE_PASSWORD'; exit 1; }
+          test -n "$RELEASE_KEY_ALIAS" || { echo 'Missing ANDROID_RELEASE_KEY_ALIAS'; exit 1; }
+          test -n "$RELEASE_KEY_PASSWORD" || { echo 'Missing ANDROID_RELEASE_KEY_PASSWORD'; exit 1; }
+          test -n "$EXPECTED_CERT_SHA256" || { echo 'Missing ANDROID_RELEASE_CERT_SHA256'; exit 1; }
+          printf '%s' "$RELEASE_KEYSTORE_B64" | tr -d '[:space:]' | base64 --decode > opendroid-release.keystore
+          chmod 600 opendroid-release.keystore
           keytool -list -v -keystore opendroid-release.keystore \
-            -storepass "$store_password" -alias usman-and-umar-release \
-            | grep -E 'Alias name:|Valid from:|SHA256:' > signing-certificate.txt
+            -storepass "$RELEASE_STORE_PASSWORD" -alias "$RELEASE_KEY_ALIAS" > /tmp/release-key.txt
+          actual_cert=$(awk -F': ' '/SHA256:/{print $2; exit}' /tmp/release-key.txt | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')
+          expected_cert=$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')
+          test -n "$actual_cert" && test "$actual_cert" = "$expected_cert" || {
+            echo 'Release certificate fingerprint mismatch; refusing to sign.' >&2
+            exit 1
+          }
+          {
+            echo "ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD=$RELEASE_STORE_PASSWORD"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS=$RELEASE_KEY_ALIAS"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD=$RELEASE_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
 
-      - name: Run unit tests, lint, and assemble signed release
-        run: ./gradlew testDebugUnitTest lint assembleRelease --no-configuration-cache --stacktrace
+      - name: Run tests, lint, and signed R8 release build
+        run: ./gradlew testDebugUnitTest :remote-protocol:test :desktop-agent:test lint assembleRelease --no-configuration-cache --stacktrace
 
-      - name: Verify APK metadata, signature, checksum, and ABI packaging
+      - name: Verify APK metadata, signature, checksum, and ABIs
+        env:
+          ANDROID_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
         shell: bash
         run: |
           set -euo pipefail
           apk=app/build/outputs/apk/release/app-release.apk
+          out=dist
           aapt2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
           apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
-          mkdir -p dist
+          mkdir -p "$out"
           test -s "$apk"
-          "$aapt2" dump packagename "$apk" | tee dist/PACKAGE.txt
           test "$("$aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
-          "$aapt2" dump badging "$apk" | tee dist/BADGING.txt
-          grep -F "versionName='3.11.0'" dist/BADGING.txt
-          grep -F "versionCode='37'" dist/BADGING.txt
-          "$apksigner" verify --verbose "$apk" | tee dist/SIGNING_STATUS.txt
-          "$apksigner" verify --print-certs "$apk" | tee dist/SIGNING_CERTS.txt
+          "$aapt2" dump badging "$apk" | tee "$out/BADGING.txt"
+          grep -F "versionName='3.10.7'" "$out/BADGING.txt"
+          grep -F "versionCode='37'" "$out/BADGING.txt"
+          grep -F "targetSdkVersion:'36'" "$out/BADGING.txt"
+          "$apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
+          certs=$("$apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt")
+          actual_cert=$(printf '%s\n' "$certs" | awk -F': ' '/certificate SHA-256 digest:/{print $2; exit}' | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')
+          expected_cert=$(printf '%s' "$ANDROID_RELEASE_CERT_SHA256" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')
+          test -n "$actual_cert" && test "$actual_cert" = "$expected_cert"
+          unzip -Z1 "$apk" | grep -q '^lib/armeabi-v7a/'
+          unzip -Z1 "$apk" | grep -q '^lib/arm64-v8a/'
+          unzip -Z1 "$apk" | grep -E '^lib/(armeabi-v7a|arm64-v8a)/' > "$out/ABI_LIBRARIES.txt"
           keytool -list -v -keystore opendroid-release.keystore \
             -storepass "$ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD" \
             -alias "$ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS" \
-            | grep -E 'Alias name:|Valid from:|SHA256:' > dist/SIGNING_KEY.txt
-          unzip -Z1 "$apk" | grep -E '^lib/(armeabi-v7a|arm64-v8a)/' > dist/ABI_LIBRARIES.txt || true
-          if [ ! -s dist/ABI_LIBRARIES.txt ]; then
-            echo 'Universal APK: no native libraries; compatible with armeabi-v7a and arm64-v8a.' | tee dist/ABI_LIBRARIES.txt
-          fi
-          sha256sum "$apk" | tee dist/SHA256SUMS.txt
-          cp "$apk" dist/USMAN-AND-UMAR-v3.11.0-release-candidate.apk
-          printf 'commit=%s\nbranch=%s\n' "$(git rev-parse HEAD)" "$GITHUB_REF_NAME" > dist/BUILD_METADATA.txt
+            | grep -E 'Alias name:|Valid from:|SHA256:' > "$out/SIGNING_KEY.txt"
+          cp "$apk" "$out/USMAN-AND-UMAR-v3.10.7-release-candidate.apk"
+          sha256sum "$out/USMAN-AND-UMAR-v3.10.7-release-candidate.apk" | tee "$out/SHA256SUMS.txt"
+          printf 'commit=%s\nbranch=%s\n' "$(git rev-parse HEAD)" "$GITHUB_REF_NAME" > "$out/BUILD_METADATA.txt"
 
       - name: Install and verify release APK on API 36 emulator
         uses: reactivecircus/android-emulator-runner@v2
@@ -109,6 +114,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: usman-and-umar-v3.10.6-signed-release-candidate
+          name: usman-and-umar-v3.10.7-signed-release-candidate
           path: dist/
           if-no-files-found: error
+          retention-days: 30

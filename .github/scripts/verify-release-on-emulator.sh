@@ -6,8 +6,8 @@ adb shell pm path com.usmanandumar.app | tee "$GITHUB_WORKSPACE/dist/INSTALL_PAC
 adb shell dumpsys package com.usmanandumar.app \
   | grep -E 'versionCode=|versionName=' \
   | tee "$GITHUB_WORKSPACE/dist/INSTALL_VERSION.txt"
-grep -F 'versionCode=36' "$GITHUB_WORKSPACE/dist/INSTALL_VERSION.txt"
-grep -F 'versionName=3.10.6' "$GITHUB_WORKSPACE/dist/INSTALL_VERSION.txt"
+grep -F 'versionCode=37' "$GITHUB_WORKSPACE/dist/INSTALL_VERSION.txt"
+grep -F 'versionName=3.10.7' "$GITHUB_WORKSPACE/dist/INSTALL_VERSION.txt"
 adb shell monkey -p com.usmanandumar.app 1 >/dev/null
 adb shell dumpsys activity activities \
   | grep -F 'com.usmanandumar.app' \

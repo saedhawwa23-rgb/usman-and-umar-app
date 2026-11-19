@@ -1,9 +1,14 @@
 """Upstash Redis REST persistence for task state, checkpoints, receipts, and leases.
 
-All task data is stored as JSON under ``task_{task_id}`` via REST SET/GET.
-Lease read/modify/write sequences use a process-local lock only. Plain Upstash
-SET/GET does not provide cross-process compare-and-swap, so this adapter cannot
-claim exclusive ownership or fencing across simultaneous workers.
+All task data is stored as JSON under ``task_{task_id}``. Upstash's plain SET/GET
+is not a compare-and-swap, so :meth:`RedisTaskStorage.mutate` performs the
+read/modify/write inside a single Lua ``EVAL``. Redis runs a script atomically, so
+the update either observes the version it validated and commits, or fails with
+:class:`RedisLeaseConflict` and changes nothing. That makes ownership exclusive
+across processes, not merely across threads in one runtime.
+
+A process-local lock is still taken, but only to keep a single worker from
+queueing redundant round-trips; it is no longer what provides correctness.
 """
 from __future__ import annotations
 
@@ -107,18 +112,53 @@ class RedisTaskStorage:
     def delete(self, task_id: str) -> None:
         self.command("DEL", self.redis_key(task_id))
 
+    # Compare-and-swap: read the document, apply `update` in-process, then commit only if the
+    # stored bytes are still exactly what we read. Redis executes the whole script atomically,
+    # so two workers cannot both pass the check. Returns {-1} when the caller must retry.
+    _CAS_SCRIPT = """
+local current = redis.call('GET', KEYS[1])
+if current == false then
+  if ARGV[1] ~= '1' then return {-1} end
+  current = ''
+end
+if current ~= ARGV[2] then return {-1} end
+redis.call('SET', KEYS[1], ARGV[3])
+return {1}
+"""
+
+    def _cas(self, key: str, expected: str, encoded: str, create: bool) -> bool:
+        result = self.command("EVAL", self._CAS_SCRIPT, 1, key, "1" if create else "0", expected, encoded)
+        return bool(result) and int(result[0]) == 1
+
     def mutate(self, task_id: str, update: Callable[[dict[str, Any]], Any], *,
-               create: bool = False) -> tuple[dict[str, Any], Any]:
-        """Process-local serialized GET/SET update; not atomic across runtimes."""
+               create: bool = False, attempts: int = 8) -> tuple[dict[str, Any], Any]:
+        """Atomically apply ``update`` to a task document across processes.
+
+        Retries a bounded number of times when another worker commits first, then raises
+        :class:`RedisLeaseConflict` rather than overwriting the winner's state.
+        """
+        key = self.redis_key(task_id)
         with _MUTATION_LOCK:
-            document = self.get(task_id)
-            if document is None:
-                if not create:
-                    raise KeyError(f"Unknown task: {task_id}")
-                document = {"task_id": task_id, "events": [], "runtime": {}}
-            result = update(document)
-            self.set(task_id, document)
-            return document, result
+            for _ in range(attempts):
+                raw = self.command("GET", key)
+                if raw is None:
+                    if not create:
+                        raise KeyError(f"Unknown task: {task_id}")
+                    document: dict[str, Any] = {"task_id": task_id, "events": [], "runtime": {}}
+                else:
+                    try:
+                        document = json.loads(raw) if isinstance(raw, str) else raw
+                    except (TypeError, json.JSONDecodeError) as exc:
+                        raise RedisStorageError("Stored Redis task JSON is invalid") from exc
+                    if not isinstance(document, dict):
+                        raise RedisStorageError("Stored Redis task value must be a JSON object")
+                result = update(document)
+                encoded = json.dumps(document, ensure_ascii=False, separators=(",", ":"))
+                expected = raw if isinstance(raw, str) else ""
+                if self._cas(key, expected, encoded, create):
+                    return document, result
+            raise RedisLeaseConflict(
+                f"Concurrent update to task {task_id} did not settle after {attempts} attempts")
 
     def probe(self) -> bool:
         probe_id = f"__health_{uuid.uuid4().hex}"
@@ -465,7 +505,7 @@ class RedisTaskRuntime:
             "accepting_new_tasks": bool(ready and not draining), "draining": draining,
             "active_count": int(active_count), "active_tasks": int(active_count),
             "drain_after_seconds": self.drain_after_seconds,
-            "lease_policy": "Upstash REST GET/SET stores shared state but lease updates are not atomic across runtimes; do not treat as exclusive fencing."}
+            "lease_policy": "Lease updates use an atomic Redis EVAL compare-and-swap, so ownership is exclusive across runtimes; lease_version is the fencing token and a lost CAS raises RedisLeaseConflict instead of overwriting the winner."}
 
     def recover_checkpoint(self, task_id: str) -> dict[str, Any]:
         doc = self.storage.get(task_id) or {}

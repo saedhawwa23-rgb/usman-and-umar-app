@@ -20,8 +20,9 @@ GitHub and Termux capabilities require connectivity or an installed/configured T
 | Setting | Value |
 |---|---|
 | Minimum Android SDK | 28 (Android 9) |
-| Target Android SDK | 34 (Android 14) |
-| Current app version | `3.8.2` (versionCode 28) |
+| Compile / Target Android SDK | 36 (Android 16) |
+| Current app version | `3.10.7` (versionCode 37) |
+| ABIs packaged | `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64` |
 | Packaging | Android application; no model asset or inference JNI module |
 
 Build with JDK 21 and the Android SDK installed:

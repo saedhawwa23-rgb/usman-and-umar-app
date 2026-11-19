@@ -2,7 +2,75 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
-## [3.11.0] - 2026-11-19
+## [3.10.7] - 2026-11-12
+
+Production-readiness upgrade. Supersedes the local 3.11.0 release-candidate entry below, which was
+never published: the target version for this change is 3.10.7 (versionCode 37), so the version
+number moves down while the code content moves forward. Nothing is reverted from 3.11.0 — the
+capability registry and adapters described there are included here.
+
+### Added
+
+- **Registry adapters** (`core/capability/CapabilityAdapters.kt`). Projects the two real tool
+  registries (`AgentToolRegistry`, `UniversalToolRegistry`) into the canonical capability
+  vocabulary, deriving ownership from each tool's own risk and credential declarations instead of a
+  name table. A connector whose canonical name shadows a reviewed catalog id is reported by
+  `collisions()` and is not merged, so a plugin can never override a reviewed definition.
+- 9 JVM tests (`CapabilityAdaptersTest`) covering risk→mutating mapping, credential and cloud
+  gating, catalog merging, shadow prevention, stable ordering and unique native-action ids.
+- **Atomic cross-process task mutation** (`cloud-backend/redis_task_storage.py`). `mutate()` now
+  performs its read/modify/write inside a single Redis `EVAL`, comparing the stored bytes against
+  what it read. A losing writer retries a bounded number of times and then raises
+  `RedisLeaseConflict` instead of overwriting the winner. This replaces the process-local lock that
+  the previous code documented as insufficient for cross-worker exclusivity.
+- 4 backend tests covering a concurrent writer winning the race, exhaustion with the winner's state
+  intact, `KeyError` on a missing task, and the exact `EVAL` wire arguments.
+
+### Changed
+
+- **Target SDK 36** (was 34); `compileSdk` 36, `versionCode` 37, `versionName` 3.10.7.
+- **AGP 9.4.1** (was 8.x) with Gradle wrapper 9.7.0, Kotlin 2.4.0, KSP 2.3.10.
+- Dependency upgrades that are genuinely compatible with `compileSdk` 36: `room` 2.8.5,
+  `work-runtime` 2.12.0, `datastore` 1.3.0, `activity-compose` 1.13.0.
+- **Removed three unused permissions** from `AndroidManifest.xml`: `ACCESS_BACKGROUND_LOCATION`,
+  `SYSTEM_ALERT_WINDOW`, `PACKAGE_USAGE_STATS`. Each was verified to have zero call sites across
+  Kotlin, XML and reflection before removal. `QUERY_ALL_PACKAGES` is retained because it backs the
+  in-use `queryIntentActivities` calls.
+- README version table corrected to the source values (it still claimed 3.8.2 / versionCode 28 /
+  target 34).
+
+### Rejected from the supplied readiness kit (verified, not applied)
+
+- `lifecycle 2.12.0` and `activity-compose 1.14.0` **do not exist** on Google Maven; the highest
+  published versions are 2.11.0 and 1.13.0.
+- `lifecycle 2.11.0`, `navigation-compose 2.10.x` and Compose `1.12.x` (BOM 2026.08.00+) **require
+  `compileSdk` 37**, not 36. Adopting them at `compileSdk` 36 fails `checkDebugAarMetadata` with 14
+  errors. This build keeps Compose BOM 2026.06.01 (Compose 1.11.4), `lifecycle` 2.8.7 and
+  `navigation` 2.9.8, which are the newest releases that compile at 36.
+- The kit's PRoot findings do not apply to this repository: the APK ships no PRoot binary and the
+  Kotlin sources contain no PRoot references. The terminal backend is Termux `RUN_COMMAND`.
+
+### Verification (performed locally for this change)
+
+- `:app:testDebugUnitTest` **964 tests, 0 failures, 0 errors, 2 skipped**.
+- `cloud-backend` unittest suite **80 tests, 0 failures** (run with `GITHUB_TOKEN` unset; two
+  OpenSwarm adapter-readiness tests assert "unconfigured" and fail only when an ambient GitHub token
+  is present, which is an environment artifact, not a regression).
+- `:app:lintDebug` 0 errors, 0 warnings (1 hint; 9 pre-existing baseline suppressions remain).
+- `:app:assembleDebug` 91.2 MB and `:app:assembleRelease -PallowUnsignedRelease=true` 29.1 MB, both
+  reporting `versionCode 37`, `versionName 3.10.7`, `targetSdkVersion 36` and ABIs
+  `arm64-v8a armeabi-v7a x86 x86_64`. The `armeabi-v7a` libraries in the **release** APK were
+  confirmed ELF32 / `Machine: ARM` with `readelf -h`.
+
+### Still unverified
+
+- No physical 32-bit ARM device was available. ARM32 execution, Termux handshake, GitHub OAuth,
+  private-clone credentials and ZIP import remain device-unverified. ARM32 support is established
+  only at packaging level (32-bit ARM ELF libraries present in the release APK), not on hardware.
+- Release signing continuity is unresolved: no keystore is committed, and the release APK produced
+  here is **unsigned**. It cannot upgrade an installed build.
+
+## [3.11.0] - 2026-11-19 (superseded, never published)
 
 Unified release candidate. v3.10.6 already contained all of v3.10.4 and v3.10.5 in one history
 (`git merge-base --is-ancestor` for both), so there were no competing implementations to merge:
