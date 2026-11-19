@@ -1,0 +1,113 @@
+name: Verify signed Android release candidate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/hybrid-task-orchestrator
+    paths:
+      - 'app/**'
+      - 'gradle/**'
+      - '*.gradle'
+      - '*.properties'
+      - '.github/workflows/release-candidate.yml'
+      - '.github/scripts/verify-release-on-emulator.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  build-verify-upload:
+    name: Build, install-test, and upload signed release APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0 ndk;27.2.12479018 cmake;3.22.1'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Generate candidate signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          store_password="$(openssl rand -hex 24)"
+          key_password="$(openssl rand -hex 24)"
+          keytool -genkeypair -v \
+            -keystore opendroid-release.keystore \
+            -storepass "$store_password" \
+            -keypass "$key_password" \
+            -alias usman-and-umar-release \
+            -keyalg RSA -keysize 4096 -validity 10000 \
+            -dname 'CN=USMAN AND UMAR Release, OU=OpenDroid, O=USMAN AND UMAR, C=PK'
+          {
+            echo "ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD=$store_password"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS=usman-and-umar-release"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD=$key_password"
+          } >> "$GITHUB_ENV"
+          keytool -list -v -keystore opendroid-release.keystore \
+            -storepass "$store_password" -alias usman-and-umar-release \
+            | grep -E 'Alias name:|Valid from:|SHA256:' > signing-certificate.txt
+
+      - name: Run unit tests, lint, and assemble signed release
+        run: ./gradlew testDebugUnitTest lint assembleRelease --no-configuration-cache --stacktrace
+
+      - name: Verify APK metadata, signature, checksum, and ABI packaging
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/release/app-release.apk
+          mkdir -p dist
+          test -s "$apk"
+          aapt2 dump packagename "$apk" | tee dist/PACKAGE.txt
+          test "$(aapt2 dump packagename "$apk")" = "com.usmanandumar.app"
+          aapt2 dump badging "$apk" | tee dist/BADGING.txt
+          grep -F "versionName='3.10.6'" dist/BADGING.txt
+          grep -F "versionCode='36'" dist/BADGING.txt
+          apksigner verify --verbose "$apk" | tee dist/SIGNING_STATUS.txt
+          apksigner verify --print-certs "$apk" | tee dist/SIGNING_CERTS.txt
+          keytool -list -v -keystore opendroid-release.keystore \
+            -storepass "$ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD" \
+            -alias "$ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS" \
+            | grep -E 'Alias name:|Valid from:|SHA256:' > dist/SIGNING_KEY.txt
+          unzip -Z1 "$apk" | grep -E '^lib/(armeabi-v7a|arm64-v8a)/' > dist/ABI_LIBRARIES.txt || true
+          if [ ! -s dist/ABI_LIBRARIES.txt ]; then
+            echo 'Universal APK: no native libraries; compatible with armeabi-v7a and arm64-v8a.' | tee dist/ABI_LIBRARIES.txt
+          fi
+          sha256sum "$apk" | tee dist/SHA256SUMS.txt
+          cp "$apk" dist/USMAN-AND-UMAR-v3.10.6-release-candidate.apk
+          printf 'commit=%s\nbranch=%s\n' "$(git rev-parse HEAD)" "$GITHUB_REF_NAME" > dist/BUILD_METADATA.txt
+
+      - name: Install and verify release APK on API 36 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          cores: 4
+          ram-size: 4096M
+          emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          emulator-boot-timeout: 1200
+          disable-spellchecker: true
+          disable-animations: true
+          script: bash "$GITHUB_WORKSPACE/.github/scripts/verify-release-on-emulator.sh"
+
+      - name: Upload signed release candidate and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: usman-and-umar-v3.10.6-signed-release-candidate
+          path: dist/
+          if-no-files-found: error

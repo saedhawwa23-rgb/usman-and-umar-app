@@ -38,7 +38,9 @@ class VisualEvidenceInstrumentationTest {
             CaptureRoute("plugin-platform", OpenDroidRoutes.PLUGIN_PLATFORM, titles("Integration Platform")),
             CaptureRoute("remote-platform", OpenDroidRoutes.REMOTE_CONTROL, titles("Universal Remote")),
         )
-        val outputDirectory = File(targetContext.getExternalFilesDir(null), "visual-evidence").apply {
+        // Keep captures under internal filesDir: the CI host retrieves them with `run-as`,
+        // while external app storage is not addressable through that command.
+        val outputDirectory = File(targetContext.filesDir, "visual-evidence").apply {
             deleteRecursively()
             mkdirs()
         }
