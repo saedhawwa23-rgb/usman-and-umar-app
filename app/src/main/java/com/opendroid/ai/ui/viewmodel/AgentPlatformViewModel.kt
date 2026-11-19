@@ -228,9 +228,18 @@ class AgentPlatformViewModel @Inject constructor(
         )
         viewModelScope.launch {
             val client = OpenHandsClient(connection.baseUrl, key)
-            val settings = withContext(Dispatchers.IO) {
-                (client.fetchAgentSettings() as? PlatformResult.Success)?.value
+            val settingsResult = withContext(Dispatchers.IO) { client.fetchAgentSettings() }
+            if (settingsResult is PlatformResult.Failure) {
+                // The server rejects a conversation with no agent (HTTP 422 "One of `agent`,
+                // `agent_settings`, or `agent_profile_id` must be provided"), so surface the
+                // real reason instead of forwarding an opaque validation error.
+                _state.value = _state.value.copy(
+                    submitting = false,
+                    submitError = "Could not read the server's agent settings: ${settingsResult.message}",
+                )
+                return@launch
             }
+            val settings = (settingsResult as PlatformResult.Success).value
             when (val created = withContext(Dispatchers.IO) {
                 client.startConversation(prompt, workingDir, settings, run = true)
             }) {

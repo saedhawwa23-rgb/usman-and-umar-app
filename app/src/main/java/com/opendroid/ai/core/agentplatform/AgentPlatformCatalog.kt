@@ -10,7 +10,7 @@ package com.opendroid.ai.core.agentplatform
 object AgentPlatformCatalog {
 
     /**
-     * OpenHands agent server. Verified against a live v1.60.1 server: conversations can be created,
+     * OpenHands agent server. Verified against a live v1.62.0 server: conversations can be created,
      * tasks run, events streamed and the final answer read. File transfer uses the Agent Server's
      * documented workspace endpoints; the opt-in live E2E test covers upload and download when a
      * reachable server and session key are configured.

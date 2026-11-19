@@ -23,7 +23,7 @@ import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 
 /**
- * Wire types for the OpenHands agent-server REST API (verified against v1.60.1).
+ * Wire types for the OpenHands agent-server REST API (verified against v1.62.0).
  *
  * Only fields the app actually reads are modelled. `ignoreUnknownKeys` is on so a server upgrade
  * that adds fields cannot break the client.

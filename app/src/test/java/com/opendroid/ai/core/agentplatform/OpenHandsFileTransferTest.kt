@@ -6,6 +6,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.net.InetAddress
 
@@ -61,5 +62,36 @@ class OpenHandsFileTransferTest {
 
         assertTrue(result is PlatformResult.Failure)
         assertEquals(0, server.requestCount)
+    }
+
+    /**
+     * Exercises the shipping client against a genuinely running agent server, not a mock.
+     *
+     * Skipped unless an operator supplies a live server, because the roundtrip needs real server
+     * storage and a real session key:
+     *
+     * ```
+     * OH_E2E_BASE_URL=http://127.0.0.1:61234 \
+     * OH_E2E_SESSION_KEY=<session key> \
+     * ./gradlew :app:testDebugUnitTest --tests '*OpenHandsLiveFileTransferTest*'
+     * ```
+     */
+    @Test
+    fun `live server roundtrip returns identical bytes`() {
+        val baseUrl = System.getenv("OH_E2E_BASE_URL")
+        val sessionKey = System.getenv("OH_E2E_SESSION_KEY")
+        assumeTrue("OH_E2E_BASE_URL not set; skipping live transfer", !baseUrl.isNullOrBlank())
+        assumeTrue("OH_E2E_SESSION_KEY not set; skipping live transfer", !sessionKey.isNullOrBlank())
+
+        val client = OpenHandsClient(baseUrl!!, sessionKey!!)
+        val remotePath = "/tmp/oh-live-transfer-${System.nanoTime()}.bin"
+        val payload = byteArrayOf(0, 1, 2, 3, 127, -1, -2, 42)
+
+        val upload = client.uploadFile(remotePath, "live.bin", payload)
+        assertTrue("Upload against a live server must succeed: $upload", upload is PlatformResult.Success)
+
+        val download = client.downloadFile(remotePath)
+        assertTrue("Download against a live server must succeed: $download", download is PlatformResult.Success)
+        assertArrayEquals(payload, (download as PlatformResult.Success).value)
     }
 }

@@ -9,7 +9,7 @@ Real web AI agent platform integration: discover, connect, submit, monitor, retr
 ### Added
 
 - **`core/agentplatform/OpenHandsClient.kt`** — a real REST client for the OpenHands agent server,
-  written against the server's published OpenAPI document and verified against a live v1.60.1
+  written against the server's published OpenAPI document and verified against a live v1.62.0
   server. Covers `GET /api/settings`, `POST /api/conversations`, `POST /api/conversations/{id}/events`,
   `GET /api/conversations/{id}`, `GET /api/conversations/{id}/events/search`,
   `GET /api/conversations/{id}/agent_final_response` and `POST /api/conversations/{id}/interrupt`.
