@@ -43,18 +43,17 @@ jobs:
         run: |
           set -euo pipefail
           store_password="$(openssl rand -hex 24)"
-          key_password="$(openssl rand -hex 24)"
           keytool -genkeypair -v \
             -keystore opendroid-release.keystore \
             -storepass "$store_password" \
-            -keypass "$key_password" \
+            -keypass "$store_password" \
             -alias usman-and-umar-release \
             -keyalg RSA -keysize 4096 -validity 10000 \
             -dname 'CN=USMAN AND UMAR Release, OU=OpenDroid, O=USMAN AND UMAR, C=PK'
           {
             echo "ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD=$store_password"
             echo "ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS=usman-and-umar-release"
-            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD=$key_password"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD=$store_password"
           } >> "$GITHUB_ENV"
           keytool -list -v -keystore opendroid-release.keystore \
             -storepass "$store_password" -alias usman-and-umar-release \
