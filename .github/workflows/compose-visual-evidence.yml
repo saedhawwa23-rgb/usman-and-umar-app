@@ -1,4 +1,4 @@
-name: v3.10.6 emulator visual evidence
+name: Emulator visual evidence
 
 on:
   workflow_dispatch:
@@ -7,6 +7,8 @@ on:
       - feature/hybrid-task-orchestrator
     paths:
       - .github/workflows/compose-visual-evidence.yml
+      - .github/scripts/capture-emulator-screens.sh
+      - .github/scripts/strip-agent-platforms-from-baseline.py
       - app/src/androidTest/java/com/opendroid/ai/ui/screens/VisualEvidenceInstrumentationTest.kt
       - app/src/main/java/com/opendroid/ai/MainActivity.kt
       - app/src/main/java/com/opendroid/ai/ui/Navigation.kt
@@ -126,7 +128,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: usman-and-umar-v3.10.6-emulator-visual-evidence-${{ github.run_number }}
+          name: usman-and-umar-emulator-visual-evidence-${{ github.run_number }}
           path: artifacts/
           if-no-files-found: warn
           retention-days: 14
