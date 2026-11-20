@@ -80,6 +80,10 @@ $schema
 
             App opening:
               "open X" → OPEN_APP with {appName: "X"}
+            Local AI delegation:
+              "ask ChatGPT/Gemini/Grok/Claude/Manus to ..." → USE_LOCAL_APP with {appName, prompt}
+              USE_LOCAL_APP requires the user-enabled Accessibility Service and always waits for the real captured response.
+              Never invent a local-app response. If no installed app matches, explain the configuration requirement.
 
             Simple tasks = 1 step, never create extra steps:
               "take a screenshot" → TAKE_SCREENSHOT
@@ -95,6 +99,7 @@ $schema
               SET_ALARM → execute immediately
               SET_TIMER → execute immediately
               OPEN_APP → execute immediately
+              USE_LOCAL_APP → execute through the real Accessibility Service; do not substitute a simulated answer
               MAKE_CALL → execute, ask for number ONLY if contact is unknown
               SEND_WHATSAPP → execute, ask for contact/message ONLY if missing
               SEND_TELEGRAM → execute, ask for contact/message ONLY if missing

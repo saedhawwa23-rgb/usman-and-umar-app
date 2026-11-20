@@ -16,5 +16,12 @@ data class ConversationEntity(
     val modelBadge: String? = null,
     val contactPickerData: String? = null,
     // Which chat history this message belongs to. See ChatSessionEntity.
-    val sessionId: String
+    val sessionId: String,
+    val deliveryState: String? = null,
+    val deliveryTarget: String? = null,
+    val deliveryTaskId: String? = null,
+    val deliveryMetadata: String? = null,
+    val deliveryError: String? = null,
+    val deliveryRetryable: Boolean? = null,
+    val imageBase64: String? = null,
 )

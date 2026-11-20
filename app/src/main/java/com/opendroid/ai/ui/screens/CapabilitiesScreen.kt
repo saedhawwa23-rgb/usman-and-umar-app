@@ -2,108 +2,236 @@ package com.opendroid.ai.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.opendroid.ai.ui.components.BrandButton
+import com.opendroid.ai.ui.components.BrandHeader
+import com.opendroid.ai.ui.components.PlatformCard
+import com.opendroid.ai.ui.components.PlatformStatus
+import com.opendroid.ai.ui.components.PlatformTab
+import com.opendroid.ai.ui.components.SectionHeading
+import com.opendroid.ai.ui.components.SegmentedTabs
+import com.opendroid.ai.ui.screens.toolbar.ToolAvailability
+import com.opendroid.ai.ui.screens.toolbar.ToolBarContext
+import com.opendroid.ai.ui.screens.toolbar.ToolBarModel
+import com.opendroid.ai.ui.screens.toolbar.ToolDestination
+import com.opendroid.ai.ui.screens.toolbar.ToolEntry
+import com.opendroid.ai.ui.screens.toolbar.ToolSection
+import com.opendroid.ai.ui.screens.toolbar.ToolSectionId
 import com.opendroid.ai.ui.theme.AppTheme
+import com.opendroid.ai.ui.viewmodel.TermuxViewModel
+import com.opendroid.ai.ui.viewmodel.WorkspaceTaskViewModel
 
 /**
- * The user-facing entry point for capabilities that were previously buried in Settings.
- * Each action opens the existing, fully scoped feature screen.
+ * v3.10.5: the Tool Bar, restructured into three clearly labelled sections — AI providers and
+ * web-based agents, GitHub project management, and the Termux / Linux environment.
+ *
+ * Every entry routes to an existing, fully scoped feature screen; nothing here opens a website and
+ * calls it integration. Each entry shows an availability pill computed from the real runtime
+ * context (Termux installed, a cloud server configured), so the Tool Bar cannot label something
+ * "ready" that the user cannot yet run.
  */
 @Composable
 fun CapabilitiesScreen(
     onSearchAI: () -> Unit,
     onSearchGitHub: () -> Unit,
     onTermux: () -> Unit,
-    onUniversalAgent: () -> Unit
+    onUniversalAgent: () -> Unit,
+    onOpenPluginPlatform: () -> Unit = {},
+    onOpenAgentPlatforms: () -> Unit = {},
 ) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Text(
-            text = "TOOLS & CAPABILITIES",
-            color = AppTheme.colors.textPrimary,
-            fontWeight = FontWeight.Bold,
-            fontSize = 22.sp
+    val termuxViewModel: TermuxViewModel = hiltViewModel()
+    val workspaceTaskViewModel: WorkspaceTaskViewModel = hiltViewModel()
+    val termuxInstalled by termuxViewModel.installed.collectAsState()
+    val cloudServers by workspaceTaskViewModel.cloudServers.collectAsState()
+
+    val context = remember(termuxInstalled, cloudServers) {
+        ToolBarContext(
+            termuxInstalled = termuxInstalled,
+            cloudServerConfigured = cloudServers.any { it.enabled && it.url.isNotBlank() && it.token.isNotBlank() },
+            githubTokenConnected = false,
         )
-        Text(
-            text = "Discover live cloud model catalogs, inspect public GitHub repositories, and run explicitly allowlisted Termux tasks.",
-            color = AppTheme.colors.textSecondary,
-            fontSize = 13.sp
+    }
+    CapabilitiesScreenContent(
+        context = context,
+        onSearchAI = onSearchAI,
+        onSearchGitHub = onSearchGitHub,
+        onTermux = onTermux,
+        onUniversalAgent = onUniversalAgent,
+        onOpenPluginPlatform = onOpenPluginPlatform,
+        onOpenAgentPlatforms = onOpenAgentPlatforms,
+    )
+}
+
+/**
+ * The Tool Bar's presentation, split out from [CapabilitiesScreen] so it can be rendered directly
+ * with a fixed [context] and asserted in a Robolectric Compose test — the navigation callbacks are
+ * plain lambdas, so a test can prove each entry routes to the right screen without a device.
+ */
+@Composable
+internal fun CapabilitiesScreenContent(
+    context: ToolBarContext,
+    onSearchAI: () -> Unit,
+    onSearchGitHub: () -> Unit,
+    onTermux: () -> Unit,
+    onUniversalAgent: () -> Unit,
+    onOpenPluginPlatform: () -> Unit,
+    onOpenAgentPlatforms: () -> Unit = {},
+) {
+    val sections = remember(context) { ToolBarModel.resolvedSections(context) }
+    var selected by remember { mutableIntStateOf(0) }
+
+    val open: (ToolDestination) -> Unit = { destination ->
+        when (destination) {
+            ToolDestination.PROVIDER_DISCOVERY -> onSearchAI()
+            ToolDestination.GITHUB_DISCOVERY -> onSearchGitHub()
+            ToolDestination.TERMUX -> onTermux()
+            ToolDestination.CLOUD_AGENT -> onUniversalAgent()
+            ToolDestination.INTEGRATION_PLATFORM -> onOpenPluginPlatform()
+            ToolDestination.AGENT_PLATFORMS -> onOpenAgentPlatforms()
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        BrandHeader(
+            title = "Tool Bar",
+            subtitle = "AI agents, GitHub and the Linux environment",
+            icon = Icons.Default.Build,
         )
-        Spacer(Modifier.height(4.dp))
-        CapabilityCard(
-            title = "SEARCH AI PROVIDERS",
-            description = "Query configured AI provider model-list endpoints; results are not misrepresented as verified chat/tool capability.",
-            icon = Icons.Default.Search,
-            onClick = onSearchAI
-        )
-        CapabilityCard(
-            title = "SEARCH GITHUB PROJECTS",
-            description = "Search public GitHub repositories, preview README/files, then explicitly ADD, USE, or CLONE.",
-            icon = Icons.Default.Code,
-            onClick = onSearchGitHub
-        )
-        CapabilityCard(
-            title = "TERMUX INTEGRATION",
-            description = "Check Termux and run only the supported allowlisted tasks with visible results.",
-            icon = Icons.Default.Terminal,
-            onClick = onTermux
-        )
-        CapabilityCard(
-            title = "CLOUD AI TOOL AGENT",
-            description = "Use the configured cloud provider's native tool-call protocol with allowlisted local connectors. Sensitive/destructive actions remain blocked pending approval.",
-            icon = Icons.Default.Extension,
-            onClick = onUniversalAgent
-        )
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(top = 16.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                SegmentedTabs(
+                    tabs = sections.map { PlatformTab(it.shortLabel()) },
+                    selectedIndex = selected,
+                    onSelect = { selected = it },
+                )
+            }
+            val section = sections.getOrElse(selected) { sections.first() }
+            item {
+                SectionHeading(title = section.title, subtitle = section.subtitle)
+            }
+            items(section.entries, key = { it.id }) { entry ->
+                ToolEntryCard(entry = entry, onOpen = { open(entry.destination) })
+            }
+            item {
+                Spacer(Modifier.height(4.dp))
+                PlatformCard(
+                    title = "Integration platform",
+                    subtitle = "MCP servers, OpenAPI services and grants",
+                    icon = Icons.Default.Extension,
+                ) {
+                    Text(
+                        "Discover and connect AI platforms, MCP servers and OpenAPI services, manage grants " +
+                            "and chain them into automations.",
+                        color = AppTheme.colors.textSecondary,
+                        fontSize = 12.sp,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    BrandButton(
+                        text = "Open integrations",
+                        onClick = onOpenPluginPlatform,
+                        icon = Icons.Default.Extension,
+                    )
+                }
+            }
+            item {
+                PlatformCard(
+                    title = "Web agent platforms",
+                    subtitle = "Run tasks on a real remote agent server",
+                    icon = Icons.Default.Hub,
+                ) {
+                    Text(
+                        "Connect an OpenHands agent server, submit a task, watch it run and read the result.",
+                        color = AppTheme.colors.textSecondary,
+                        fontSize = 12.sp,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    BrandButton(
+                        text = "Open agent platforms",
+                        onClick = onOpenAgentPlatforms,
+                        icon = Icons.Default.Hub,
+                    )
+                }
+            }
+        }
     }
 }
 
 @Composable
-private fun CapabilityCard(
-    title: String,
-    description: String,
-    icon: ImageVector,
-    onClick: () -> Unit
-) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)
+private fun ToolEntryCard(entry: ToolEntry, onOpen: () -> Unit) {
+    PlatformCard(
+        title = entry.title,
+        icon = entry.destination.icon(),
+        status = ToolBarModel.availabilityLabel(entry.availability) to entry.availability.status(),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(icon, contentDescription = null, tint = AppTheme.colors.accentCyan)
-            Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
-                Text(title, color = AppTheme.colors.textPrimary, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(4.dp))
-                Text(description, color = AppTheme.colors.textSecondary, fontSize = 12.sp)
-            }
-            TextButton(onClick = onClick) { Text("OPEN") }
-        }
+        Text(entry.description, color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+        Spacer(Modifier.height(8.dp))
+        BrandButton(
+            text = entry.actionLabel(),
+            onClick = onOpen,
+            modifier = Modifier.fillMaxWidth(),
+            icon = entry.destination.icon(),
+        )
     }
+}
+
+private fun ToolSection.shortLabel(): String = when (id) {
+    ToolSectionId.AI_AGENTS -> "AI"
+    ToolSectionId.GITHUB -> "GitHub"
+    ToolSectionId.LINUX -> "Linux"
+}
+
+private fun ToolAvailability.status(): PlatformStatus = when (this) {
+    ToolAvailability.READY -> PlatformStatus.HEALTHY
+    ToolAvailability.READ_ONLY -> PlatformStatus.INFO
+    ToolAvailability.NEEDS_TERMUX -> PlatformStatus.WARNING
+    ToolAvailability.NEEDS_SETUP -> PlatformStatus.IDLE
+}
+
+private fun ToolDestination.icon(): ImageVector = when (this) {
+    ToolDestination.PROVIDER_DISCOVERY -> Icons.Default.SmartToy
+    ToolDestination.GITHUB_DISCOVERY -> Icons.Default.Code
+    ToolDestination.TERMUX -> Icons.Default.Terminal
+    ToolDestination.CLOUD_AGENT -> Icons.Default.SmartToy
+    ToolDestination.INTEGRATION_PLATFORM -> Icons.Default.Extension
+    ToolDestination.AGENT_PLATFORMS -> Icons.Default.Hub
+}
+
+private fun ToolEntry.actionLabel(): String = when (destination) {
+    ToolDestination.PROVIDER_DISCOVERY -> "Search providers"
+    ToolDestination.GITHUB_DISCOVERY -> "Open GitHub"
+    ToolDestination.TERMUX -> "Open terminal"
+    ToolDestination.CLOUD_AGENT -> "Open agent"
+    ToolDestination.INTEGRATION_PLATFORM -> "Open"
+    ToolDestination.AGENT_PLATFORMS -> "Open platforms"
 }

@@ -1,0 +1,161 @@
+name: Emulator visual evidence
+
+# Captures the genuine v3.10.6 baseline next to the current tree on two API
+# levels, so a release claim can be checked against real rendered screens
+# instead of a description of them.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/hybrid-task-orchestrator
+    paths:
+      - .github/workflows/compose-visual-evidence.yml
+      - .github/scripts/capture-emulator-screens.sh
+      - .github/scripts/verify-visual-evidence.py
+      - app/src/androidTest/java/com/opendroid/ai/ui/screens/VisualEvidenceInstrumentationTest.kt
+      - app/src/main/java/com/opendroid/ai/MainActivity.kt
+      - app/src/main/java/com/opendroid/ai/ui/Navigation.kt
+      - app/src/main/java/com/opendroid/ai/ui/screens/**
+      - app/src/main/java/com/opendroid/ai/ui/components/**
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: Visual evidence (API ${{ matrix.api-level }})
+    concurrency:
+      group: android-visual-evidence-${{ github.ref }}-${{ matrix.api-level }}
+      cancel-in-progress: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [28, 36]
+    env:
+      PACKAGE_NAME: com.usmanandumar.app
+      SCREENSHOT_TEST: com.opendroid.ai.ui.screens.VisualEvidenceInstrumentationTest
+      # v3.10.6, the last release before the Agent Platforms center landed.
+      BASELINE_SHA: bee86650630b9312f6008e86bad039ecd580c3c0
+      BASELINE_VERSION: '3.10.6'
+      CURRENT_VERSION: '3.12.1'
+      COMMON_SCREENS: task-bar,tool-bar,ai-providers,github,termux-linux,plugin-platform,remote-platform
+      CURRENT_SCREENS: task-bar,tool-bar,ai-providers,github,termux-linux,plugin-platform,remote-platform,agent-platforms
+      API_LEVEL: ${{ matrix.api-level }}
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-36 build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Prepare evidence directories
+        run: mkdir -p "artifacts/api$API_LEVEL/before" "artifacts/api$API_LEVEL/after" "artifacts/api$API_LEVEL/logs"
+
+      - name: Prepare pinned v3.10.6 baseline checkout
+        run: |
+          set -eu
+          baseline="$RUNNER_TEMP/usman-and-umar-v3106"
+          # A detached worktree of the pinned commit: the historical tree is used
+          # exactly as released, with no current source copied into it.
+          git worktree add --detach "$baseline" "$BASELINE_SHA"
+          echo "BASELINE_DIR=$baseline" >> "$GITHUB_ENV"
+          declared="$(sed -n 's/^[[:space:]]*versionName[[:space:]]*"\([^"]*\)".*/\1/p' "$baseline/app/build.gradle" | head -n 1)"
+          echo "Baseline declares version $declared"
+          test "$declared" = "$BASELINE_VERSION"
+
+      - name: Capture current-tree screens on API ${{ matrix.api-level }}
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          arch: x86_64
+          target: ${{ matrix.api-level >= 30 && 'google_apis' || 'default' }}
+          force-avd-creation: true
+          cores: 4
+          ram-size: 4096M
+          emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          emulator-boot-timeout: 1200
+          disable-spellchecker: true
+          disable-animations: true
+          script: |
+            sh "$GITHUB_WORKSPACE/.github/scripts/capture-emulator-screens.sh" "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/artifacts/api$API_LEVEL/after" "$GITHUB_WORKSPACE/artifacts/api$API_LEVEL/logs/current.log" "$CURRENT_VERSION" "$CURRENT_SCREENS"
+
+      - name: Verify current-tree screenshots
+        run: |
+          python3 "$GITHUB_WORKSPACE/.github/scripts/verify-visual-evidence.py" \
+            --directory "artifacts/api$API_LEVEL/after" \
+            --version "$CURRENT_VERSION" \
+            --screens "$CURRENT_SCREENS"
+
+      - name: Capture baseline screens on API ${{ matrix.api-level }}
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          arch: x86_64
+          target: ${{ matrix.api-level >= 30 && 'google_apis' || 'default' }}
+          force-avd-creation: true
+          cores: 4
+          ram-size: 4096M
+          emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          emulator-boot-timeout: 1200
+          disable-spellchecker: true
+          disable-animations: true
+          script: |
+            sh "$GITHUB_WORKSPACE/.github/scripts/capture-emulator-screens.sh" "$BASELINE_DIR" "$GITHUB_WORKSPACE/artifacts/api$API_LEVEL/before" "$GITHUB_WORKSPACE/artifacts/api$API_LEVEL/logs/baseline.log" "$BASELINE_VERSION" "$COMMON_SCREENS"
+
+      - name: Verify baseline screenshots
+        run: |
+          python3 "$GITHUB_WORKSPACE/.github/scripts/verify-visual-evidence.py" \
+            --directory "artifacts/api$API_LEVEL/before" \
+            --version "$BASELINE_VERSION" \
+            --screens "$COMMON_SCREENS"
+
+      - name: Confirm the baseline tree was not modified
+        run: |
+          set -eu
+          # The baseline must still be the pinned commit with a clean tree; any
+          # drift here means current source leaked into the historical build.
+          test "$(git -C "$BASELINE_DIR" rev-parse HEAD)" = "$BASELINE_SHA"
+          test -z "$(git -C "$BASELINE_DIR" status --porcelain)"
+
+      - name: Summarise evidence
+        if: always()
+        run: |
+          {
+            echo "### Visual evidence — API $API_LEVEL"
+            echo
+            echo "| tree | expected | captured |"
+            echo "| --- | --- | --- |"
+            echo "| v$BASELINE_VERSION baseline | 7 | $(find "artifacts/api$API_LEVEL/before" -name '*.png' -size +0c | wc -l) |"
+            echo "| v$CURRENT_VERSION current | 8 | $(find "artifacts/api$API_LEVEL/after" -name '*.png' -size +0c | wc -l) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload screenshots, reports, and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-evidence-api${{ matrix.api-level }}-run${{ github.run_number }}
+          path: artifacts/api${{ matrix.api-level }}/
+          if-no-files-found: warn
+          retention-days: 14

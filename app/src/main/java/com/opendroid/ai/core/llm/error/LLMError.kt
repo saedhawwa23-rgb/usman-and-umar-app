@@ -34,18 +34,21 @@ sealed class LLMError(val code: String) {
  */
 class RedactedDetail private constructor(
     val vendorType: String?,
-    val vendorCode: String?
+    val vendorCode: String?,
+    val providerMessage: String?
 ) {
     override fun toString(): String = buildList {
         vendorType?.let { add("type=$it") }
         vendorCode?.let { add("code=$it") }
+        providerMessage?.let { add("provider_message=\"$it\"") }
     }.joinToString()
 
     companion object {
         internal fun fromProviderDetail(detail: ProviderErrorDetail): RedactedDetail =
             RedactedDetail(
                 vendorType = detail.vendorType,
-                vendorCode = detail.vendorCode
+                vendorCode = detail.vendorCode,
+                providerMessage = detail.vendorMessage,
             )
 
     }
@@ -201,7 +204,8 @@ object LLMErrorMapper {
             error = error,
             provider = provider,
             model = model,
-            retryable = error == LLMError.Network && isConnectFailure,
+            retryable = error == LLMError.MalformedResponse ||
+                (error == LLMError.Network && isConnectFailure),
             detail = null
         )
     }

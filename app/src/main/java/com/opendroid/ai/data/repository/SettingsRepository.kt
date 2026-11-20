@@ -13,10 +13,15 @@ import com.opendroid.ai.core.security.CredentialStoreResult
 import com.opendroid.ai.core.security.ProviderCredentialId
 import com.opendroid.ai.core.security.ProviderCredentialRecoveryState
 import com.opendroid.ai.core.security.ProviderCredentialStore
+import com.opendroid.ai.core.browser.validateOpenSwarmTunnelUrl
+import com.opendroid.ai.core.browser.OpenSwarmRouteConfig
 import com.opendroid.ai.data.models.AutoReplyConfig
 import com.opendroid.ai.data.models.LLMConfig
+import com.opendroid.ai.data.db.dao.CloudServerDao
+import com.opendroid.ai.data.db.entities.CloudServerEntity
 import com.opendroid.ai.core.llm.ProviderCatalog
 import java.io.IOException
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,6 +29,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -43,20 +49,197 @@ sealed interface ProviderCredentialPersistenceState {
     data object CredentialsMustBeReentered : ProviderCredentialPersistenceState
 }
 
+@kotlinx.serialization.Serializable
+data class CloudServerConfig(
+    val id: String,
+    val name: String,
+    val url: String,
+    val enabled: Boolean = true,
+    @kotlinx.serialization.Transient val token: String = "",
+    val role: String = "OPENSWARM",
+)
+
+internal fun normalizeCloudServerUrl(value: String): String {
+    val normalized = value.trim().trimEnd('/')
+    require(normalized.isNotBlank()) { "Enter the HTTPS URL of your cloud backend." }
+    val uri = java.net.URI(normalized)
+    require(uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()) { "Enter the HTTPS URL of your cloud backend." }
+    require(uri.userInfo == null && uri.query == null && uri.fragment == null) { "The server URL must not contain credentials, a query, or a fragment." }
+    return normalized
+}
+
 @Singleton
 class SettingsRepository internal constructor(
     private val dataStore: DataStore<Preferences>,
     private val providerCredentialStore: ProviderCredentialStore,
-    private val runStartupMigration: Boolean
+    private val runStartupMigration: Boolean,
+    private val cloudServerDao: CloudServerDao? = null,
 ) {
+    companion object {
+        const val MAX_CLOUD_SERVERS = OpenSwarmRouteConfig.MAX_CONNECTED_NODES
+    }
     @Inject
     constructor(
         @ApplicationContext context: Context,
-        providerCredentialStore: ProviderCredentialStore
-    ) : this(context.dataStore, providerCredentialStore, runStartupMigration = true)
+        providerCredentialStore: ProviderCredentialStore,
+        cloudServerDao: CloudServerDao,
+    ) : this(context.dataStore, providerCredentialStore, runStartupMigration = true, cloudServerDao = cloudServerDao)
 
     private val json = Json { ignoreUnknownKeys = true }
     private val llmConfigKey = stringPreferencesKey("llm_config")
+    private val openSwarmServerUrlKey = stringPreferencesKey("openswarm_backend_url")
+    private val legacyOpenSwarmServerUrlKey = stringPreferencesKey("openswarm_render_url")
+    private val cloudServerUrlKeys = (1..3).map { stringPreferencesKey("openswarm_server_${it}_url") }
+    private val cloudServerEnabledKeys = (1..3).map { booleanPreferencesKey("openswarm_server_${it}_enabled") }
+    private val cloudServersKey = stringPreferencesKey("openswarm_cloud_servers_v2")
+    private val cloudKeepAliveKey = booleanPreferencesKey("openswarm_cloud_keep_alive_enabled")
+    private val autoRunGeneratedCodeKey = booleanPreferencesKey("auto_run_generated_code")
+    private val approvedFmhyHostsKey = stringSetPreferencesKey("fmhy_approved_hosts")
+    private val mutableOpenSwarmClientToken = MutableStateFlow("")
+    val openSwarmClientToken: StateFlow<String> = mutableOpenSwarmClientToken.asStateFlow()
+    private val mutableCloudServerTokens = MutableStateFlow(listOf("", "", ""))
+    val cloudServerTokens: StateFlow<List<String>> = mutableCloudServerTokens.asStateFlow()
+
+    /** Unlimited server profiles are Room-backed; bearer tokens are hydrated from encrypted storage. */
+    val cloudServers: Flow<List<CloudServerConfig>> = if (cloudServerDao != null) {
+        cloudServerDao.observeAll().map { rows ->
+            rows.map { row ->
+                CloudServerConfig(row.id, row.name, row.url, row.enabled, readDynamicCloudToken(row.id), row.role)
+            }
+        }.flowOn(Dispatchers.IO)
+    } else {
+        // Keeps isolated repository tests and pre-Hilt migration callers compatible.
+        dataStore.data.map { preferences ->
+            val stored = preferences[cloudServersKey].orEmpty().let { raw ->
+                runCatching { json.decodeFromString<List<CloudServerConfig>>(raw) }.getOrNull()
+            } ?: legacyCloudServers(preferences)
+            stored.map { server -> server.copy(token = readDynamicCloudToken(server.id)) }
+        }.flowOn(Dispatchers.IO)
+    }
+
+    val cloudKeepAliveEnabled: Flow<Boolean> = dataStore.data
+        .map { it[cloudKeepAliveKey] ?: false }
+        .flowOn(Dispatchers.IO)
+
+    suspend fun setCloudKeepAliveEnabled(enabled: Boolean) {
+        dataStore.edit { it[cloudKeepAliveKey] = enabled }
+    }
+
+    /** Persistent owner consent is scoped to one exact canonical host, never a suffix wildcard. */
+    val approvedFmhyHosts: Flow<Set<String>> = dataStore.data
+        .map { preferences -> preferences[approvedFmhyHostsKey].orEmpty().toSet() }
+        .flowOn(Dispatchers.IO)
+
+    suspend fun setFmhyHostApproved(host: String, approved: Boolean) {
+        val canonical = host.trim().trimEnd('.').lowercase(java.util.Locale.ROOT)
+        val labels = canonical.split('.')
+        require(canonical.length <= 253 && labels.size >= 2 && labels.all {
+            it.length in 1..63 && it.matches(Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"))
+        }) {
+            "A canonical public host name is required."
+        }
+        dataStore.edit { preferences ->
+            val current = preferences[approvedFmhyHostsKey].orEmpty().toMutableSet()
+            if (approved) current += canonical else current -= canonical
+            if (current.isEmpty()) preferences.remove(approvedFmhyHostsKey)
+            else preferences[approvedFmhyHostsKey] = current
+        }
+    }
+
+    private fun legacyCloudServers(preferences: Preferences): List<CloudServerConfig> =
+        (0..2).mapNotNull { index ->
+            val url = preferences[cloudServerUrlKeys[index]].orEmpty().ifBlank {
+                if (index == 0) preferences[openSwarmServerUrlKey] ?: preferences[legacyOpenSwarmServerUrlKey] ?: "" else ""
+            }
+            url.takeIf(String::isNotBlank)?.let {
+                CloudServerConfig("legacy-${index + 1}", "Server ${index + 1}", it, preferences[cloudServerEnabledKeys[index]] ?: (index == 0))
+            }
+        }
+
+    private fun dynamicCloudCredential(id: String): ProviderCredentialId.ApiKey =
+        ProviderCredentialId.ApiKey("openswarm-cloud-server-$id")
+
+    private fun cloudCredential(id: String): ProviderCredentialId = when (id.removePrefix("legacy-").toIntOrNull()) {
+        1 -> ProviderCredentialId.OpenSwarmServer1Token
+        2 -> ProviderCredentialId.OpenSwarmServer2Token
+        3 -> ProviderCredentialId.OpenSwarmServer3Token
+        else -> dynamicCloudCredential(id)
+    }
+
+    private fun readDynamicCloudToken(id: String): String {
+        return (providerCredentialStore.read(cloudCredential(id)) as? CredentialStoreResult.Success)?.value.orEmpty()
+    }
+
+    suspend fun addCloudServer(name: String, url: String, token: String = ""): CloudServerConfig {
+        check(cloudServers.first().size < MAX_CLOUD_SERVERS) {
+            "A cluster can contain at most $MAX_CLOUD_SERVERS cloud servers."
+        }
+        val server = CloudServerConfig(UUID.randomUUID().toString(), name.trim().ifBlank { "OpenSwarm Colab" }.take(80), validateOpenSwarmTunnelUrl(url), role = "OPENSWARM")
+        saveCloudServer(server, token)
+        return server
+    }
+
+    suspend fun saveCloudServer(server: CloudServerConfig, token: String = server.token) {
+        val normalized = server.copy(name = server.name.trim().ifBlank { "OpenSwarm Colab" }.take(80), url = validateOpenSwarmTunnelUrl(server.url), token = "", role = "OPENSWARM")
+        check(cloudServers.first().none { it.id != normalized.id }) {
+            "Only one OpenSwarm Colab node can be connected. Remove the existing node first."
+        }
+        saveDynamicCloudToken(normalized.id, token)
+        if (cloudServerDao != null) {
+            val rows = cloudServerDao.observeAll().first()
+            val position = rows.firstOrNull { it.id == normalized.id }?.position
+                ?: ((rows.maxOfOrNull { it.position } ?: -1) + 1)
+            cloudServerDao.upsert(
+                CloudServerEntity(normalized.id, normalized.name, normalized.url, normalized.enabled, position, normalized.role)
+            )
+        } else {
+            val current = cloudServers.first().map { it.copy(token = "") }.filterNot { it.id == normalized.id }
+            dataStore.edit { it[cloudServersKey] = json.encodeToString(current + normalized) }
+        }
+    }
+
+    suspend fun removeCloudServer(id: String) {
+        providerCredentialStore.remove(cloudCredential(id))
+        if (cloudServerDao != null) {
+            cloudServerDao.delete(id)
+        } else {
+            val remaining = cloudServers.first().filterNot { it.id == id }.map { it.copy(token = "") }
+            dataStore.edit { it[cloudServersKey] = json.encodeToString(remaining) }
+        }
+    }
+
+    suspend fun setCloudServerEnabled(id: String, enabled: Boolean) {
+        if (cloudServerDao != null) {
+            cloudServerDao.setEnabled(id, enabled)
+        } else {
+            val updated = cloudServers.first().map { if (it.id == id) it.copy(enabled = enabled, token = "") else it.copy(token = "") }
+            dataStore.edit { it[cloudServersKey] = json.encodeToString(updated) }
+        }
+    }
+
+    private suspend fun migrateLegacyCloudServersToRoom() {
+        val dao = cloudServerDao ?: return
+        if (dao.observeAll().first().isNotEmpty()) return
+        val preferences = dataStore.data.first()
+        val legacy = preferences[cloudServersKey].orEmpty().let { raw ->
+            runCatching { json.decodeFromString<List<CloudServerConfig>>(raw) }.getOrNull()
+        } ?: legacyCloudServers(preferences)
+        if (legacy.isEmpty()) return
+        dao.upsertAll(legacy.mapIndexed { index, server ->
+            CloudServerEntity(server.id, server.name, normalizeCloudServerUrl(server.url), server.enabled, index, "OPENSWARM")
+        })
+        dataStore.edit { it.remove(cloudServersKey) }
+    }
+
+    private suspend fun saveDynamicCloudToken(id: String, value: String) = withContext(Dispatchers.IO) {
+        val credential = cloudCredential(id)
+        val result = if (value.trim().isBlank()) providerCredentialStore.remove(credential) else providerCredentialStore.write(credential, value.trim())
+        when (result) {
+            is CredentialStoreResult.Success -> Unit
+            CredentialStoreResult.CredentialsMustBeReentered -> error("Credential storage needs recovery before saving a cloud token.")
+            CredentialStoreResult.StorageUnavailable -> error("Android secure storage is unavailable; the cloud token was not saved.")
+        }
+    }
 
     /** A UI-safe recovery signal; it never contains credential or ciphertext data. */
     val providerCredentialRecoveryState = providerCredentialStore.recoveryState
@@ -68,11 +251,11 @@ class SettingsRepository internal constructor(
         mutableProviderCredentialPersistenceState.asStateFlow()
 
     init {
-        if (runStartupMigration) {
-            // Legacy encrypted-preference credentials are imported before DataStore
-            // secrets are stripped. If either store is unavailable, updateConfig still strips
-            // plaintext rather than using it as a recovery fallback.
-            CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+        CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+            if (runStartupMigration) {
+                // Legacy encrypted-preference credentials are imported before DataStore
+                // secrets are stripped. If either store is unavailable, updateConfig still strips
+                // plaintext rather than using it as a recovery fallback.
                 try {
                     providerCredentialStore.migrateLegacyCredentials()
                     updateConfig { it }
@@ -80,6 +263,8 @@ class SettingsRepository internal constructor(
                     // The credential store has no plaintext fallback; a later update retries.
                 }
             }
+            runCatching { migrateLegacyCloudServersToRoom() }
+            readOpenSwarmClientToken()
         }
     }
 
@@ -180,7 +365,9 @@ class SettingsRepository internal constructor(
             val previousValue = when (credential) {
                 is ProviderCredentialId.ApiKey -> snapshot.providerApiKeys[credential.providerName]
                 ProviderCredentialId.ElevenLabsApiKey -> snapshot.elevenLabsApiKey
-                ProviderCredentialId.HuggingFaceToken -> null
+                ProviderCredentialId.HuggingFaceToken, ProviderCredentialId.OpenSwarmClientToken,
+                ProviderCredentialId.OpenSwarmServer1Token, ProviderCredentialId.OpenSwarmServer2Token,
+                ProviderCredentialId.OpenSwarmServer3Token -> null
             }
             val result = persistCredential(credential, previousValue)
             if (result !is CredentialStoreResult.Success) return result.toPersistenceState()
@@ -280,6 +467,103 @@ class SettingsRepository internal constructor(
             customPrompt = preferences[autoReplyCustomPromptKey],
             maxRepliesPerContactPerHour = preferences[autoReplyMaxPerHourKey] ?: 3
         )
+    }
+
+    /** Base URL for the user's own cloud-hosted OpenSwarm bridge; blank means not configured. */
+    val openSwarmServerUrl: Flow<String> = dataStore.data
+        .map { preferences ->
+            preferences[openSwarmServerUrlKey]
+                ?: preferences[legacyOpenSwarmServerUrlKey]
+                ?: ""
+        }
+        .flowOn(Dispatchers.IO)
+
+    val cloudServerUrls: Flow<List<String>> = dataStore.data.map { preferences ->
+        (0..2).map { index ->
+            preferences[cloudServerUrlKeys[index]].orEmpty().ifBlank {
+                if (index == 0) preferences[openSwarmServerUrlKey] ?: preferences[legacyOpenSwarmServerUrlKey] ?: "" else ""
+            }
+        }
+    }.flowOn(Dispatchers.IO)
+
+    val cloudServerEnabled: Flow<List<Boolean>> = dataStore.data.map { preferences ->
+        (0..2).map { index -> preferences[cloudServerEnabledKeys[index]] ?: (index == 0) }
+    }.flowOn(Dispatchers.IO)
+
+    suspend fun saveOpenSwarmServerUrl(value: String) {
+        saveCloudServerUrl(0, value)
+    }
+
+    suspend fun saveCloudServerUrl(index: Int, value: String) {
+        require(index in 0..2) { "Server index must be between 0 and 2." }
+        val normalized = value.trim().trimEnd('/')
+        if (normalized.isNotEmpty()) {
+            val uri = java.net.URI(normalized)
+            require(uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()) {
+                "Enter the HTTPS URL of your cloud backend."
+            }
+            require(uri.userInfo == null && uri.query == null && uri.fragment == null) {
+                "The server URL must not contain credentials, a query, or a fragment."
+            }
+        }
+        dataStore.edit { preferences ->
+            if (normalized.isBlank()) preferences.remove(cloudServerUrlKeys[index])
+            else preferences[cloudServerUrlKeys[index]] = normalized
+            if (index == 0) {
+                if (normalized.isBlank()) preferences.remove(openSwarmServerUrlKey)
+                else preferences[openSwarmServerUrlKey] = normalized
+                preferences.remove(legacyOpenSwarmServerUrlKey)
+            }
+        }
+    }
+
+    suspend fun setCloudServerEnabled(index: Int, enabled: Boolean) {
+        require(index in 0..2) { "Server index must be between 0 and 2." }
+        dataStore.edit { it[cloudServerEnabledKeys[index]] = enabled }
+    }
+
+    private fun readOpenSwarmClientToken() {
+        val ids = listOf(ProviderCredentialId.OpenSwarmServer1Token, ProviderCredentialId.OpenSwarmServer2Token, ProviderCredentialId.OpenSwarmServer3Token)
+        val values = ids.map { (providerCredentialStore.read(it) as? CredentialStoreResult.Success)?.value.orEmpty() }
+        mutableCloudServerTokens.value = values
+        mutableOpenSwarmClientToken.value = values.firstOrNull().orEmpty()
+    }
+
+    suspend fun currentOpenSwarmClientToken(): String = withContext(Dispatchers.IO) {
+        readOpenSwarmClientToken()
+        mutableOpenSwarmClientToken.value
+    }
+
+    suspend fun saveOpenSwarmClientToken(value: String) = withContext(Dispatchers.IO) {
+        saveCloudServerToken(0, value)
+    }
+
+    suspend fun saveCloudServerToken(index: Int, value: String) = withContext(Dispatchers.IO) {
+        require(index in 0..2) { "Server index must be between 0 and 2." }
+        val normalized = value.trim()
+        require(normalized.length <= 512) { "The bridge token is too long." }
+        val credential = listOf(ProviderCredentialId.OpenSwarmServer1Token, ProviderCredentialId.OpenSwarmServer2Token, ProviderCredentialId.OpenSwarmServer3Token)[index]
+        val result = if (normalized.isBlank()) {
+            providerCredentialStore.remove(credential)
+        } else {
+            providerCredentialStore.write(credential, normalized)
+        }
+        when (result) {
+            is CredentialStoreResult.Success -> {
+                mutableCloudServerTokens.value = mutableCloudServerTokens.value.toMutableList().also { it[index] = normalized }
+                if (index == 0) mutableOpenSwarmClientToken.value = normalized
+            }
+            CredentialStoreResult.CredentialsMustBeReentered -> error("Credential storage needs recovery before the cloud token can be saved.")
+            CredentialStoreResult.StorageUnavailable -> error("Android secure storage is unavailable; the cloud token was not saved.")
+        }
+    }
+
+    val autoRunGeneratedCode: Flow<Boolean> = dataStore.data
+        .map { preferences -> preferences[autoRunGeneratedCodeKey] ?: false }
+        .flowOn(Dispatchers.IO)
+
+    suspend fun setAutoRunGeneratedCode(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[autoRunGeneratedCodeKey] = enabled }
     }
 
     suspend fun updateConfig(

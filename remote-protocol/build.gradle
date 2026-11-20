@@ -1,0 +1,24 @@
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+    id 'org.jetbrains.kotlin.plugin.serialization'
+}
+
+// A plain JVM library so the exact same protocol code runs on Android and on the desktop agent.
+// Nothing here touches the Android framework, which is what makes the desktop build possible.
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+kotlin {
+    jvmToolchain(21)
+}
+
+dependencies {
+    api 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1'
+    testImplementation 'junit:junit:4.13.2'
+}
+
+tasks.withType(Test).configureEach {
+    useJUnit()
+}

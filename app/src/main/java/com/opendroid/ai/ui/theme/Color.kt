@@ -25,7 +25,22 @@ data class OpenDroidColors(
     val accentCyan: Color,
     val accentRed: Color,
     val accentOrange: Color = Color(0xFFFF9500),
-    val isDark: Boolean
+    val isDark: Boolean,
+    // ── v3.10.4 brand identity: navy · emerald · electric-blue ──────────────────
+    /** Deep navy page background for the Plugin and Remote dashboards. */
+    val navyDeep: Color = Color(0xFF0B1220),
+    /** Elevated navy surface for dashboard cards. */
+    val navySurface: Color = Color(0xFF111C33),
+    /** Emerald: the brand's primary "healthy / connected" accent. */
+    val emerald: Color = Color(0xFF10B981),
+    /** Emerald tuned for large filled button surfaces. */
+    val emeraldButton: Color = Color(0xFF059669),
+    /** Electric blue: the brand's secondary "active / informational" accent. */
+    val electricBlue: Color = Color(0xFF3B82F6),
+    /** Softer electric blue for thin marks and borders. */
+    val electricBlueSoft: Color = Color(0xFF60A5FA),
+    /** A muted success tint for card backgrounds (low alpha applied at the call site). */
+    val onBrand: Color = Color(0xFFFFFFFF),
 )
 
 // ── Dark palette: Classic Pure Black (#000000) ───────────────
@@ -42,7 +57,15 @@ val DarkPalette = OpenDroidColors(
     accentCyan = Color(0xFF38BDF8),      // Sky sapphire
     accentRed = Color(0xFFEF4444),       // Clean alert red
     accentOrange = Color(0xFFFF9500),
-    isDark = true
+    isDark = true,
+    // Brand identity on the dark (OLED) surface: emerald and electric-blue read as vivid marks.
+    navyDeep = Color(0xFF0B1220),
+    navySurface = Color(0xFF111C33),
+    emerald = Color(0xFF34D399),         // emerald-400: high contrast on navy/black
+    emeraldButton = Color(0xFF047857),   // emerald-700: white text meets WCAG AA (>=4.5)
+    electricBlue = Color(0xFF60A5FA),    // blue-400: high contrast on navy/black
+    electricBlueSoft = Color(0xFF93C5FD),
+    onBrand = Color(0xFFFFFFFF)
 )
 
 // ── Light palette: Classic Pure White (#FFFFFF) ─────────────
@@ -59,7 +82,15 @@ val LightPalette = OpenDroidColors(
     accentCyan = Color(0xFF0284C7),      // Ocean sapphire
     accentRed = Color(0xFFDC2626),       // Clean alert red
     accentOrange = Color(0xFFD97706),
-    isDark = false
+    isDark = false,
+    // Brand identity on the light surface: darker emerald/blue so text and marks stay AA-legible.
+    navyDeep = Color(0xFF0B1220),
+    navySurface = Color(0xFF111C33),
+    emerald = Color(0xFF047857),         // emerald-700
+    emeraldButton = Color(0xFF047857),   // emerald-700: white text meets WCAG AA (>=4.5)
+    electricBlue = Color(0xFF1D4ED8),    // blue-700
+    electricBlueSoft = Color(0xFF2563EB),
+    onBrand = Color(0xFFFFFFFF)
 )
 
 val LocalOpenDroidColors = compositionLocalOf { DarkPalette }
@@ -135,4 +166,40 @@ val AccentOrange: Color
     @Composable
     @ReadOnlyComposable
     get() = AppTheme.colors.accentOrange
+
+// ── v3.10.4 brand identity aliases (navy · emerald · electric-blue) ──────────
+val NavyDeep: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = AppTheme.colors.navyDeep
+
+val NavySurface: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = AppTheme.colors.navySurface
+
+val Emerald: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = AppTheme.colors.emerald
+
+val EmeraldButton: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = AppTheme.colors.emeraldButton
+
+val ElectricBlue: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = AppTheme.colors.electricBlue
+
+val ElectricBlueSoft: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = AppTheme.colors.electricBlueSoft
+
+val OnBrand: Color
+    @Composable
+    @ReadOnlyComposable
+    get() = AppTheme.colors.onBrand
 

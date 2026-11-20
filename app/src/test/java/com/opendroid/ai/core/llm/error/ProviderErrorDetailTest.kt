@@ -2,6 +2,7 @@ package com.opendroid.ai.core.llm.error
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProviderErrorDetailTest {
@@ -85,5 +86,38 @@ class ProviderErrorDetailTest {
         assertEquals(null, detail.vendorType)
         assertEquals(null, detail.vendorCode)
         assertEquals("Cohere request failed with HTTP 401.", detail.message)
+    }
+
+    @Test
+    fun `surfaces a short safe provider message`() {
+        val detail = ProviderErrorDetail.fromHttpFailure(
+            provider = ProviderErrorDetail.Provider.OPENROUTER,
+            httpStatus = 400,
+            rawBody = """{"error":{"message":"Unknown model requested."}}""",
+            knownSecrets = emptyList(),
+            forbiddenText = listOf("A user prompt that is not repeated here")
+        )
+
+        assertEquals("Unknown model requested.", detail.vendorMessage)
+        assertTrue(detail.toString().contains("Unknown model requested."))
+    }
+
+    @Test
+    fun `rejects provider messages that echo prompts URLs or credential-like strings`() {
+        val key = "sk-0123456789abcdefghijklmnopqrstuvwxyz"
+        val rawBody = """{"error":{"message":"Prompt CANARY https://private.example $key"}}"""
+        val detail = ProviderErrorDetail.fromHttpFailure(
+            provider = ProviderErrorDetail.Provider.OPENROUTER,
+            httpStatus = 400,
+            rawBody = rawBody,
+            knownSecrets = listOf(key),
+            forbiddenText = listOf("CANARY", "https://private.example")
+        )
+
+        assertEquals(null, detail.vendorMessage)
+        val observableText = detail.toString()
+        assertFalse(observableText.contains("CANARY"))
+        assertFalse(observableText.contains(key))
+        assertFalse(observableText.contains("private.example"))
     }
 }

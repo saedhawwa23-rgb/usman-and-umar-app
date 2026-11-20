@@ -11,7 +11,12 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven { url = 'https://jitpack.io' }
+        maven { url = 'https://artifactory.appodeal.com/appodeal-public' }
     }
 }
 rootProject.name = "USMAN AND UMAR Workspace"
 include ':app'
+// The remote-control wire protocol, shared verbatim by the Android app and the desktop agent.
+include ':remote-protocol'
+// The desktop companion agent (Windows/Linux/macOS). A plain JVM application, not Android.
+include ':desktop-agent'

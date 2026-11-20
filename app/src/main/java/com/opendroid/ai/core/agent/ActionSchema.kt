@@ -47,6 +47,18 @@ object ActionSchema {
             category = ActionCategory.SYSTEM
         ),
         ActionDefinition(
+            name = "USE_LOCAL_APP",
+            description = "Launches a selected installed AI app, injects a prompt through the enabled Accessibility Service, presses Send, waits for a stable response, and returns the captured text to the agent",
+            params = listOf(
+                ParamDefinition("appName", ParamType.STRING, false, "Visible name of the installed AI app"),
+                ParamDefinition("packageName", ParamType.STRING, false, "Exact Android package name when known"),
+                ParamDefinition("prompt", ParamType.STRING, true, "Prompt to send to the local AI app"),
+            ),
+            examples = listOf("ask ChatGPT to summarize this", "use Gemini to compare these answers", "send this prompt to Claude"),
+            category = ActionCategory.AGENT,
+            isSimple = false,
+        ),
+        ActionDefinition(
             name = "TOGGLE_FLASHLIGHT",
             description = """Turns flashlight/torch on, off, or toggles.
                 'toggle' flips current state automatically.

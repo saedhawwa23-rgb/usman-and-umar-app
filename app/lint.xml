@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- PDFBox Android pulls in Bouncy Castle's test-only trust-all helper.
+         Exclude only that dependency JAR; keep the check enabled for application code. -->
+    <issue id="TrustAllX509TrustManager" severity="error">
+        <ignore path="*/bcpkix-jdk15to18-*.jar" />
+    </issue>
+</lint>

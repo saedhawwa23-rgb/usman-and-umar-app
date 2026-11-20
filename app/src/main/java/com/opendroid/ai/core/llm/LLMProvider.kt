@@ -25,7 +25,8 @@ sealed class StreamChunk {
 interface AIProvider {
     suspend fun generate(
         messages: List<ChatMessage>,
-        tools: List<ToolDefinition> = emptyList()
+        tools: List<ToolDefinition> = emptyList(),
+        systemPrompt: String = "You are an autonomous AI agent for Android."
     ): Flow<StreamChunk>
 }
 
@@ -38,9 +39,9 @@ interface LLMProvider : AIProvider {
 
     override suspend fun generate(
         messages: List<ChatMessage>,
-        tools: List<ToolDefinition>
+        tools: List<ToolDefinition>,
+        systemPrompt: String
     ): Flow<StreamChunk> {
-        val systemPrompt = "You are an autonomous AI agent for Android."
         val request = LLMRequest(
             systemPrompt = systemPrompt,
             messages = messages,
