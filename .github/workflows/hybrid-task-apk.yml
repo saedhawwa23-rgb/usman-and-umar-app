@@ -98,8 +98,13 @@ jobs:
           out=dist
           mkdir -p "$out"
           test "$("$ANDROID_HOME/build-tools/36.0.0/aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='3.10.7'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='37'"
+          # Compare the built APK against app/build.gradle, not a hardcoded pair, so the version
+          # bump in one place cannot leave the verification step asserting an old build.
+          expected_name=$(sed -n 's/.*versionName "\(.*\)".*/\1/p' app/build.gradle | head -1)
+          expected_code=$(sed -n 's/.*versionCode \([0-9]*\).*/\1/p' app/build.gradle | head -1)
+          test -n "$expected_name" && test -n "$expected_code"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionName='$expected_name'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt2" dump badging "$apk" | grep -F "versionCode='$expected_code'"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
           certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt")
           expected_sha1=$(keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | awk -F': ' '/SHA1:/{print toupper($2); exit}')
@@ -110,15 +115,15 @@ jobs:
           file /tmp/proot-from-apk | tee "$out/PROOT_ELF.txt"
           grep -E 'ELF 32-bit.*ARM.*EABI5.*statically linked' "$out/PROOT_ELF.txt"
           sha256sum /tmp/proot-from-apk | tee "$out/PROOT_SHA256SUM.txt"
-          cp "$apk" "$out/USMAN-AND-UMAR-v3.10.7-proot-debug.apk"
+          cp "$apk" "$out/USMAN-AND-UMAR-v${expected_name}-proot-debug.apk"
           cp cloud-backend/redis_task_storage.py "$out/redis_task_storage.py"
-          sha256sum "$out/USMAN-AND-UMAR-v3.10.7-proot-debug.apk" | tee "$out/SHA256SUMS.txt"
+          sha256sum "$out/USMAN-AND-UMAR-v${expected_name}-proot-debug.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nref=%s\n' "$(git rev-parse HEAD)" "${GITHUB_REF_NAME}" > "$out/BUILD_METADATA.txt"
 
       - name: Upload APK and verification files (no GitHub Release)
         uses: actions/upload-artifact@v4
         with:
-          name: usman-and-umar-v3.10.7-proot-debug-${{ github.run_number }}
+          name: usman-and-umar-proot-debug-${{ github.run_number }}
           path: dist/*
           if-no-files-found: error
           retention-days: 30

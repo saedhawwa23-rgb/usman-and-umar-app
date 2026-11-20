@@ -68,16 +68,61 @@ class OpenSwarmAdapter(
 object AgentPlatformAdapters {
 
     /**
-     * Platform ids that have a real adapter. Must stay in step with [create]; OpenHands is
-     * deliberately absent because its conversation lifecycle is driven by its own client.
+     * Platform ids that have a real adapter. Must stay in step with [create]; the parity test fails
+     * if an id here cannot be built.
      */
-    fun supportedIds(): Set<String> = setOf(AgentPlatformCatalog.openSwarm.id)
+    fun supportedIds(): Set<String> = setOf(
+        AgentPlatformCatalog.openHands.id,
+        AgentPlatformCatalog.openSwarm.id,
+        AgentPlatformCatalog.mcpServer.id,
+    )
 
-    fun create(platformId: String, baseUrl: String, secret: String): AgentPlatformAdapter? =
-        when (platformId) {
-            AgentPlatformCatalog.openSwarm.id -> OpenSwarmAdapter(AgentPlatformCatalog.openSwarm, OpenSwarmClient(baseUrl, secret))
-            // OpenHands is driven by its own richer client/view-model path; it has no adapter
-            // because that path already implements the full conversation lifecycle.
-            else -> null
-        }
+    /**
+     * Builds the adapter for [platformId].
+     *
+     * [workingDir] is only used by platforms that need a server-side workspace (OpenHands); it is
+     * ignored by the others, so a caller can pass it unconditionally.
+     *
+     * [mcpCredentials] is required only by an MCP platform, whose tool calls read their token
+     * through the shared credential resolver rather than holding it directly.
+     */
+    fun create(
+        platformId: String,
+        baseUrl: String,
+        secret: String,
+        workingDir: String = DEFAULT_WORKING_DIR,
+        mcpCredentials: com.opendroid.ai.core.connector.ConnectorCredentialResolver? = null,
+    ): AgentPlatformAdapter? = when (platformId) {
+        AgentPlatformCatalog.openSwarm.id ->
+            OpenSwarmAdapter(AgentPlatformCatalog.openSwarm, OpenSwarmClient(baseUrl, secret))
+
+        AgentPlatformCatalog.openHands.id ->
+            OpenHandsAdapter(
+                AgentPlatformCatalog.openHands,
+                OpenHandsClient(baseUrl, secret),
+                workingDir.ifBlank { DEFAULT_WORKING_DIR },
+            )
+
+        AgentPlatformCatalog.mcpServer.id ->
+            McpPlatformAdapter(
+                platform = AgentPlatformCatalog.mcpServer,
+                endpoint = baseUrl,
+                credentials = mcpCredentials ?: NoCredentialResolver,
+            )
+
+        else -> null
+    }
+
+    /**
+     * Fallback resolver for an MCP server that needs no token. It never invents a secret: the block
+     * receives null, which the connector treats as "no Authorization header".
+     */
+    private object NoCredentialResolver : com.opendroid.ai.core.connector.ConnectorCredentialResolver {
+        override suspend fun <T> withSecret(
+            ref: com.opendroid.ai.core.connector.ConnectorCredentialRef?,
+            block: suspend (String?) -> T,
+        ): T = block(null)
+    }
+
+    const val DEFAULT_WORKING_DIR: String = "/workspace"
 }

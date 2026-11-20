@@ -7,6 +7,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.opendroid.ai.core.agentplatform.AgentPlatform
 import com.opendroid.ai.core.agentplatform.AgentPlatformCatalog
+import com.opendroid.ai.core.agentplatform.AgentPlatformOrchestrator
+import com.opendroid.ai.core.agentplatform.AgentTaskState
 import com.opendroid.ai.core.agentplatform.AgentPlatformTaskEntity
 import com.opendroid.ai.core.agentplatform.AgentPlatformTaskRepository
 import com.opendroid.ai.core.agentplatform.OhEvent
@@ -15,6 +17,7 @@ import com.opendroid.ai.core.agentplatform.OpenSwarmClient
 import com.opendroid.ai.core.agentplatform.PlatformConnection
 import com.opendroid.ai.core.agentplatform.PlatformConnectionStore
 import com.opendroid.ai.core.agentplatform.PlatformResult
+import com.opendroid.ai.core.agentplatform.PlatformUrlPolicy
 import com.opendroid.ai.core.agentplatform.SessionKeyHint
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -26,7 +29,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import javax.inject.Inject
@@ -62,6 +64,10 @@ data class AgentPlatformUiState(
     val fileTransferMessage: String? = null,
     val history: List<AgentPlatformTaskEntity> = emptyList(),
     val cancelling: Boolean = false,
+    /** Platform the last orchestrated run targeted, so the UI can name it. */
+    val activePlatformId: String? = null,
+    /** Result line of the last orchestrated run; null until one runs. */
+    val orchestrationMessage: String? = null,
 ) {
     val isConnected: Boolean get() = connection != null
     val isRunning: Boolean get() = taskState == "running" || taskState == "queued"
@@ -84,6 +90,58 @@ class AgentPlatformViewModel @Inject constructor(
     val state: StateFlow<AgentPlatformUiState> = _state.asStateFlow()
 
     private var pollJob: Job? = null
+
+    private val orchestrator = AgentPlatformOrchestrator(connectionStore)
+
+    /**
+     * Runs the current prompt through the shared adapter contract on [platformId].
+     *
+     * This is the unified path: the same code drives OpenHands, OpenSwarm and an MCP server. It
+     * reports the platform's own reason for a refusal, and never ends with a silent "stopped".
+     */
+    fun runOnPlatform(platformId: String) {
+        val prompt = _state.value.prompt.trim()
+        if (prompt.isEmpty()) {
+            _state.value = _state.value.copy(submitError = "Enter a task before running it.")
+            return
+        }
+        _state.value = _state.value.copy(
+            submitting = true,
+            submitError = null,
+            orchestrationMessage = null,
+            activePlatformId = platformId,
+        )
+        viewModelScope.launch {
+            val outcome = withContext(Dispatchers.IO) {
+                orchestrator.runTask(platformId, prompt, _state.value.workingDir.ifBlank { "/workspace" })
+            }
+            _state.value = _state.value.copy(
+                submitting = false,
+                taskState = outcome.state.name.lowercase(),
+                activeConversationId = outcome.sessionId,
+                timeline = outcome.events.map { event ->
+                    TimelineEntry(
+                        id = "${outcome.platformId}-${event.sequence}",
+                        kind = event.state.name.lowercase(),
+                        text = event.message,
+                        isError = event.state == AgentTaskState.FAILED,
+                    )
+                },
+                orchestrationMessage = outcome.failure ?: when (outcome.state) {
+                    AgentTaskState.COMPLETE -> "${outcome.platformName} finished the task."
+                    AgentTaskState.UNKNOWN ->
+                        "${outcome.platformName} did not report a state, so the outcome is unknown."
+                    AgentTaskState.CANCELLED -> "${outcome.platformName} cancelled the task."
+                    else -> "${outcome.platformName} reported ${outcome.state.name.lowercase()}."
+                },
+                submitError = outcome.failure,
+            )
+        }
+    }
+
+    fun dismissOrchestrationMessage() {
+        _state.value = _state.value.copy(orchestrationMessage = null)
+    }
 
     init {
         val existing = connectionStore.connection(AgentPlatformCatalog.openHands.id)
@@ -128,21 +186,18 @@ class AgentPlatformViewModel @Inject constructor(
      * never persisted, so the UI cannot show "connected" for credentials that do not work.
      */
     fun connect(baseUrl: String, sessionKey: String) {
-        val url = baseUrl.trim()
         val key = sessionKey.trim()
-        if (url.isBlank()) {
-            _state.value = _state.value.copy(connectionError = "Enter an HTTPS agent-server URL. HTTP is suitable only for local loopback testing.")
-            return
-        }
-        val parsedUrl = url.toHttpUrlOrNull()
-        if (parsedUrl == null || parsedUrl.username.isNotEmpty() || parsedUrl.password.isNotEmpty()) {
-            _state.value = _state.value.copy(connectionError = "Enter a valid server URL without embedded credentials")
-            return
-        }
-        val loopbackHosts = setOf("localhost", "127.0.0.1", "10.0.2.2", "::1")
-        if (parsedUrl.scheme != "https" && parsedUrl.host !in loopbackHosts) {
-            _state.value = _state.value.copy(connectionError = "Use HTTPS for remote servers; cleartext HTTP is allowed only on loopback")
-            return
+        val url = when (
+            val verdict = PlatformUrlPolicy.check(
+                baseUrl,
+                "Enter an HTTPS agent-server URL. HTTP is suitable only for local loopback testing.",
+            )
+        ) {
+            is PlatformUrlPolicy.Verdict.Rejected -> {
+                _state.value = _state.value.copy(connectionError = verdict.message)
+                return
+            }
+            is PlatformUrlPolicy.Verdict.Accepted -> verdict.url.toString().trimEnd('/')
         }
         if (key.isBlank()) {
             _state.value = _state.value.copy(connectionError = "Enter the agent server session key")
@@ -212,21 +267,15 @@ class AgentPlatformViewModel @Inject constructor(
      * the server reports ready. Nothing here implies a working task pipeline when it is not.
      */
     fun connectOpenSwarm(baseUrl: String, appToken: String) {
-        val url = baseUrl.trim()
         val token = appToken.trim()
-        if (url.isBlank()) {
-            _state.value = _state.value.copy(connectionError = "Enter the OpenSwarm backend URL.")
-            return
-        }
-        val parsedUrl = url.toHttpUrlOrNull()
-        if (parsedUrl == null || parsedUrl.username.isNotEmpty() || parsedUrl.password.isNotEmpty()) {
-            _state.value = _state.value.copy(connectionError = "Enter a valid backend URL without embedded credentials")
-            return
-        }
-        val loopbackHosts = setOf("localhost", "127.0.0.1", "10.0.2.2", "::1")
-        if (parsedUrl.scheme != "https" && parsedUrl.host !in loopbackHosts) {
-            _state.value = _state.value.copy(connectionError = "Use HTTPS for remote servers; cleartext HTTP is allowed only on loopback")
-            return
+        val url = when (
+            val verdict = PlatformUrlPolicy.check(baseUrl, "Enter the OpenSwarm backend URL.")
+        ) {
+            is PlatformUrlPolicy.Verdict.Rejected -> {
+                _state.value = _state.value.copy(connectionError = verdict.message)
+                return
+            }
+            is PlatformUrlPolicy.Verdict.Accepted -> verdict.url.toString().trimEnd('/')
         }
         if (token.isBlank()) {
             _state.value = _state.value.copy(connectionError = "Enter the backend's APP_CLIENT_TOKEN")

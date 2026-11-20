@@ -69,6 +69,32 @@ object AgentPlatformCatalog {
     )
 
     /**
+     * A Model Context Protocol server the user runs or subscribes to.
+     *
+     * This is a real integration mode, not a link: the app performs MCP `tools/list` to verify the
+     * connection and `tools/call` to run a tool, using [com.opendroid.ai.core.connector.McpToolDiscovery]
+     * and [com.opendroid.ai.core.connector.McpConnector]. MCP defines no conversation, no event
+     * stream and no cancellation, so none of those capabilities are declared.
+     */
+    val mcpServer = AgentPlatform(
+        id = "mcp_server",
+        displayName = "MCP tool server",
+        integrationMode = IntegrationMode.MCP,
+        authKind = PlatformAuthKind.API_TOKEN,
+        trustLevel = TrustLevel.SELF_HOSTED,
+        supported = setOf(
+            PlatformCapability.SUBMIT_TASK,
+        ),
+        documentationUrl = "https://modelcontextprotocol.io/",
+        limitations = listOf(
+            "Requires the URL of an MCP server you run or are subscribed to.",
+            "A call is one tool invocation: the prompt's first line is the tool name, the rest is its JSON arguments.",
+            "MCP defines no conversation, event stream, cancellation or file transfer, so those are unavailable rather than simulated.",
+            "The server's own tool schemas are used as-is; the app does not invent parameters.",
+        ),
+    )
+
+    /**
      * Browser-only platforms are recorded honestly: no API, no unattended automation, no capability
      * that would imply either. This keeps the catalog from promising an integration it does not have.
      */
@@ -85,7 +111,7 @@ object AgentPlatformCatalog {
         ),
     )
 
-    val all: List<AgentPlatform> = listOf(openHands, openSwarm, browserOnlyExample)
+    val all: List<AgentPlatform> = listOf(openHands, openSwarm, mcpServer, browserOnlyExample)
 
     fun byId(id: String): AgentPlatform? = all.firstOrNull { it.id == id }
 

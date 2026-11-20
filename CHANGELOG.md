@@ -2,6 +2,48 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.12.0] - 2026-11-12
+
+MCP joins the platform catalog, the cross-platform orchestrator becomes reachable from the
+platform screen, and the APK workflows stop asserting a version that no longer matches the build.
+
+### Added
+
+- **`core/agentplatform/McpPlatformAdapter.kt`** - the third real `AgentPlatformAdapter`, for a
+  Model Context Protocol server. Connection validation runs a real `tools/list` through
+  `McpToolDiscovery`; a task is one `tools/call` through the existing `McpConnector`. MCP defines
+  no conversation, event stream, cancellation or file transfer, so those methods return
+  `PlatformResult.Unsupported` rather than imitating them, and the catalog entry declares only
+  `SUBMIT_TASK`. The prompt frames the call: the first line is the tool name, the rest is its JSON
+  arguments - a convention of this adapter, stated in the refusal message.
+- **`AgentPlatformCatalog.mcpServer`** - a fourth catalog entry with `IntegrationMode.MCP`, the
+  first entry to use that mode. Its limitations state the server-URL requirement and the missing
+  lifecycle operations.
+- **`AgentPlatformViewModel.runOnPlatform`** - exposes `AgentPlatformOrchestrator.runTask` to the
+  UI, so the unified cross-platform path drives OpenHands, OpenSwarm and MCP through one contract.
+  The outcome line names the platform and reports a refusal verbatim; it never ends in a silent
+  "stopped".
+- **Per-platform "Run task here"** on the discovery card, shown only when the platform declares
+  `SUBMIT_TASK`, so a platform without a task operation gets no button that cannot work.
+
+### Changed
+
+- **APK workflows no longer hardcode the version.** `hybrid-task-apk.yml`, `android-release.yml`
+  and `release-candidate.yml` asserted `versionName='3.10.7'` and `versionCode='37'` while
+  `app/build.gradle` was already at 3.11.0/39, so every APK verification step failed against a
+  correctly built APK. They now read both values from `app/build.gradle` and compare the built APK
+  against them.
+- Version bumped to 3.12.0 (versionCode 40).
+
+### Testing
+
+- `McpPlatformAdapterTest` - 6 tests against a real HTTP server via MockWebServer, run under
+  Robolectric because the connector builds its request with `org.json`. Covers real `tools/list`
+  discovery, a `tools/call` submission reaching `COMPLETE`, an empty prompt refused before any
+  request, session/cancel/events reported unsupported without a request, an unknown invocation
+  reported rather than guessed, and the catalog declaring only `SUBMIT_TASK`.
+- Full `:app:testDebugUnitTest` - 1020 tests, 0 failures, 7 skipped (opt-in live E2E).
+
 ## [3.11.0] - 2026-11-19
 
 Tool Bar web-based AI platform center: a second real platform, and an adapter layer that makes

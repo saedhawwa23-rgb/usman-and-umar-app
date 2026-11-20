@@ -76,8 +76,8 @@ jobs:
           test -s "$apk"
           test "$("$aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
           "$aapt2" dump badging "$apk" | tee "$out/BADGING.txt"
-          grep -F "versionName='3.10.7'" "$out/BADGING.txt"
-          grep -F "versionCode='37'" "$out/BADGING.txt"
+          grep -F "versionName='$(sed -n 's/.*versionName "\(.*\)".*/\1/p' app/build.gradle | head -1)'" "$out/BADGING.txt"
+          grep -F "versionCode='$(sed -n 's/.*versionCode \([0-9]*\).*/\1/p' app/build.gradle | head -1)'" "$out/BADGING.txt"
           grep -F "targetSdkVersion:'36'" "$out/BADGING.txt"
           "$apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
           certs=$("$apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt")
@@ -91,8 +91,8 @@ jobs:
             -storepass "$ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD" \
             -alias "$ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS" \
             | grep -E 'Alias name:|Valid from:|SHA256:' > "$out/SIGNING_KEY.txt"
-          cp "$apk" "$out/USMAN-AND-UMAR-v3.10.7-release-candidate.apk"
-          sha256sum "$out/USMAN-AND-UMAR-v3.10.7-release-candidate.apk" | tee "$out/SHA256SUMS.txt"
+          cp "$apk" "$out/USMAN-AND-UMAR-v$(sed -n 's/.*versionName "\(.*\)".*/\1/p' app/build.gradle | head -1)-release-candidate.apk"
+          sha256sum "$out/USMAN-AND-UMAR-v$(sed -n 's/.*versionName "\(.*\)".*/\1/p' app/build.gradle | head -1)-release-candidate.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nbranch=%s\n' "$(git rev-parse HEAD)" "$GITHUB_REF_NAME" > "$out/BUILD_METADATA.txt"
 
       - name: Install and verify release APK on API 36 emulator
@@ -114,7 +114,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: usman-and-umar-v3.10.7-signed-release-candidate
+          name: usman-and-umar-signed-release-candidate
           path: dist/
           if-no-files-found: error
           retention-days: 30

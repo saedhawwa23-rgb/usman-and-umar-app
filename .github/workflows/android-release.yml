@@ -47,14 +47,14 @@ jobs:
           test -s "$apk"
           test "$("$aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
           "$aapt2" dump badging "$apk" | tee debug-badging.txt
-          grep -F "versionName='3.10.7'" debug-badging.txt
-          grep -F "versionCode='37'" debug-badging.txt
+          grep -F "versionName='$(sed -n 's/.*versionName "\(.*\)".*/\1/p' app/build.gradle | head -1)'" debug-badging.txt
+          grep -F "versionCode='$(sed -n 's/.*versionCode \([0-9]*\).*/\1/p' app/build.gradle | head -1)'" debug-badging.txt
           sha256sum "$apk" | tee debug-SHA256SUMS.txt
 
       - name: Upload debug QA artifact (never creates a GitHub Release)
         uses: actions/upload-artifact@v4
         with:
-          name: usman-and-umar-v3.10.7-debug-qa
+          name: usman-and-umar-debug-qa
           path: |
             app/build/outputs/apk/debug/*.apk
             debug-badging.txt

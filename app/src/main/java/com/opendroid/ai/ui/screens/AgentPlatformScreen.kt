@@ -116,7 +116,14 @@ fun AgentPlatformScreen(viewModel: AgentPlatformViewModel = hiltViewModel()) {
             }
         }
         items(state.platforms, key = { it.id }) { platform ->
-            PlatformDiscoveryCard(platform)
+            PlatformDiscoveryCard(
+                platform = platform,
+                // Only a platform that can accept a task offers the action; the rest keep the card
+                // purely informational rather than showing a button that cannot work.
+                canRun = PlatformCapability.SUBMIT_TASK in platform.supported && !state.submitting,
+                isActive = state.activePlatformId == platform.id,
+                onRun = { viewModel.runOnPlatform(platform.id) },
+            )
         }
 
         // ── Connection ─────────────────────────────────────────────────────────
@@ -231,6 +238,20 @@ fun AgentPlatformScreen(viewModel: AgentPlatformViewModel = hiltViewModel()) {
                     }
                     state.fileTransferMessage?.let { message ->
                         Text(message, fontSize = 11.sp, color = colors.textSecondary)
+                    }
+                    state.orchestrationMessage?.let { message ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                message,
+                                color = colors.textSecondary,
+                                fontSize = 12.sp,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = viewModel::dismissOrchestrationMessage) { Text("Dismiss") }
+                        }
                     }
                     state.submitError?.let { message ->
                         Row(
@@ -425,7 +446,12 @@ fun AgentPlatformScreen(viewModel: AgentPlatformViewModel = hiltViewModel()) {
 }
 
 @Composable
-private fun PlatformDiscoveryCard(platform: AgentPlatform) {
+private fun PlatformDiscoveryCard(
+    platform: AgentPlatform,
+    canRun: Boolean = false,
+    isActive: Boolean = false,
+    onRun: () -> Unit = {},
+) {
     val colors = AppTheme.colors
     PlatformCard(
         title = platform.displayName,
@@ -451,6 +477,18 @@ private fun PlatformDiscoveryCard(platform: AgentPlatform) {
             }
             if (platform.documentationUrl.isNotBlank()) {
                 Text(platform.documentationUrl, fontSize = 11.sp, color = colors.electricBlueSoft)
+            }
+            if (canRun) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    BrandOutlineButton(
+                        text = if (isActive) "Running…" else "Run task here",
+                        onClick = onRun,
+                        enabled = !isActive,
+                    )
+                }
             }
         }
     }
