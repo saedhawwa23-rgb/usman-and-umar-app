@@ -22,13 +22,12 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: android-visual-evidence-${{ github.ref }}-${{ matrix.api-level }}
-  cancel-in-progress: true
-
 jobs:
   capture:
     name: Visual evidence (API ${{ matrix.api-level }})
+    concurrency:
+      group: android-visual-evidence-${{ github.ref }}-${{ matrix.api-level }}
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
