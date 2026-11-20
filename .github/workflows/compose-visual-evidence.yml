@@ -99,12 +99,7 @@ jobs:
           disable-spellchecker: true
           disable-animations: true
           script: |
-            sh "$GITHUB_WORKSPACE/.github/scripts/capture-emulator-screens.sh" \
-              "$GITHUB_WORKSPACE" \
-              "$GITHUB_WORKSPACE/artifacts/api$API_LEVEL/after" \
-              "$GITHUB_WORKSPACE/artifacts/api$API_LEVEL/logs/current.log" \
-              "$CURRENT_VERSION" \
-              "$CURRENT_SCREENS"
+            sh "$GITHUB_WORKSPACE/.github/scripts/capture-emulator-screens.sh" "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/artifacts/api$API_LEVEL/after" "$GITHUB_WORKSPACE/artifacts/api$API_LEVEL/logs/current.log" "$CURRENT_VERSION" "$CURRENT_SCREENS"
 
       - name: Verify current-tree screenshots
         run: |
@@ -127,12 +122,7 @@ jobs:
           disable-spellchecker: true
           disable-animations: true
           script: |
-            sh "$GITHUB_WORKSPACE/.github/scripts/capture-emulator-screens.sh" \
-              "$BASELINE_DIR" \
-              "$GITHUB_WORKSPACE/artifacts/api$API_LEVEL/before" \
-              "$GITHUB_WORKSPACE/artifacts/api$API_LEVEL/logs/baseline.log" \
-              "$BASELINE_VERSION" \
-              "$COMMON_SCREENS"
+            sh "$GITHUB_WORKSPACE/.github/scripts/capture-emulator-screens.sh" "$BASELINE_DIR" "$GITHUB_WORKSPACE/artifacts/api$API_LEVEL/before" "$GITHUB_WORKSPACE/artifacts/api$API_LEVEL/logs/baseline.log" "$BASELINE_VERSION" "$COMMON_SCREENS"
 
       - name: Verify baseline screenshots
         run: |
