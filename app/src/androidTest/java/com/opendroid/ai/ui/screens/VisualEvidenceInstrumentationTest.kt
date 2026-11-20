@@ -27,7 +27,7 @@ class VisualEvidenceInstrumentationTest {
     private val device = UiDevice.getInstance(instrumentation)
 
     @Test
-    fun captureSevenProductionScreens() {
+    fun captureProductionScreens() {
         val prefix = "v${BuildConfig.VERSION_NAME}"
         val routes = listOf(
             CaptureRoute("task-bar", OpenDroidRoutes.VISUAL_TASK_BAR, titles("Task Bar")),
