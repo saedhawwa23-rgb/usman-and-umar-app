@@ -2,6 +2,29 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.12.1] - 2026-11-12
+
+The Web AI platform center becomes verifiable evidence rather than a claim: both the on-device
+capture test and the JVM routing test now cover the screen it opens.
+
+### Added
+
+- **`VisualEvidenceInstrumentationTest`** - captures the `agent-platforms` route, so the platform
+  center is screenshotted on a real emulator alongside the other seven production screens. Before
+  this, the route had a screen, a view model and a navigator entry but no runtime proof that it
+  composed or that its title rendered.
+- **`ToolBarRenderTest.agentPlatformCenterRoutesToAgentPlatforms`** - proves the Tool Bar's
+  "Open platforms" action invokes the platform-center callback exactly once. The test's `render`
+  helper did not pass `onOpenAgentPlatforms` at all, so the entry relied on the composable's
+  default no-op and a broken route would have passed unnoticed.
+
+### Verified
+
+- Backend contract suite: 80/80 pass under the same `python -m unittest discover` command CI runs.
+  Live server exercised against real endpoints: unauthenticated `/capabilities` returns 401, the
+  roster returns 17 specialists, and `/execute` refuses with `BACKEND_NOT_READY` plus a
+  `recovery_action` instead of silently stalling.
+
 ## [3.12.0] - 2026-11-12
 
 MCP joins the platform catalog, the cross-platform orchestrator becomes reachable from the

@@ -35,6 +35,7 @@ class ToolBarRenderTest {
     private var termux = 0
     private var universalAgent = 0
     private var pluginPlatform = 0
+    private var agentPlatforms = 0
 
     private fun render(context: ToolBarContext = ToolBarContext()) {
         compose.setContent {
@@ -46,6 +47,7 @@ class ToolBarRenderTest {
                     onTermux = { termux++ },
                     onUniversalAgent = { universalAgent++ },
                     onOpenPluginPlatform = { pluginPlatform++ },
+                    onOpenAgentPlatforms = { agentPlatforms++ },
                 )
             }
         }
@@ -152,5 +154,13 @@ class ToolBarRenderTest {
         compose.onNodeWithText("Open integrations").performClick()
         compose.waitForIdle()
         assertEquals(1, pluginPlatform)
+    }
+
+    @Test
+    fun agentPlatformCenterRoutesToAgentPlatforms() {
+        render()
+        compose.onNodeWithText("Open platforms").performClick()
+        compose.waitForIdle()
+        assertEquals(1, agentPlatforms)
     }
 }
