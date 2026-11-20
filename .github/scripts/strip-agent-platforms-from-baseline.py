@@ -12,6 +12,7 @@ import re
 import sys
 
 PATTERNS = [
+    r"\n[ \t]*const val AGENT_PLATFORMS = \"agent_platforms\"",
     r"\n[ \t]*onNavigateToAgentPlatforms = \{\n[^}]*?\n[ \t]*\}",
     r"\n[ \t]*composable\(OpenDroidRoutes\.AGENT_PLATFORMS\) \{\n[^}]*?\n[ \t]*\}",
     r"\n[ \t]*onNavigateToAgentPlatforms: \(\) -> Unit = \{\},",
