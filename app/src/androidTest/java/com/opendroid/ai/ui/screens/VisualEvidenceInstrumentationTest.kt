@@ -29,21 +29,18 @@ class VisualEvidenceInstrumentationTest {
     @Test
     fun captureProductionScreens() {
         val prefix = "v${BuildConfig.VERSION_NAME}"
+        // Every route is required. The v3.10.6 baseline builds its own copy of this test from its
+        // own tree, so this file never has to compile against an older OpenDroidRoutes.
         val routes = listOf(
-            CaptureRoute("task-bar", OpenDroidRoutes.VISUAL_TASK_BAR, titles("Task Bar")),
-            CaptureRoute("tool-bar", OpenDroidRoutes.VISUAL_TOOL_BAR, titles("Tool Bar")),
-            CaptureRoute("ai-providers", OpenDroidRoutes.DISCOVERY, titles("AI Providers")),
-            CaptureRoute("github", OpenDroidRoutes.GITHUB_DISCOVERY, titles("GitHub Explorer")),
-            CaptureRoute("termux-linux", OpenDroidRoutes.TERMUX, titles("Termux · Linux")),
-            CaptureRoute("plugin-platform", OpenDroidRoutes.PLUGIN_PLATFORM, titles("Integration Platform")),
-            CaptureRoute("remote-platform", OpenDroidRoutes.REMOTE_CONTROL, titles("Universal Remote")),
-        ).let { base ->
-            // The v3.10.5 baseline this workflow also builds predates the agent platform center, so
-            // its OpenDroidRoutes has no AGENT_PLATFORMS constant. Resolving it by reflection keeps
-            // this file compiling against that older tree while still capturing the route here.
-            optionalRoute("agent-platforms", "AGENT_PLATFORMS", "Agent Platforms")
-                ?.let { base + it } ?: base
-        }
+            CaptureRoute("task-bar", OpenDroidRoutes.VISUAL_TASK_BAR, "Task Bar"),
+            CaptureRoute("tool-bar", OpenDroidRoutes.VISUAL_TOOL_BAR, "Tool Bar"),
+            CaptureRoute("ai-providers", OpenDroidRoutes.DISCOVERY, "AI Providers"),
+            CaptureRoute("github", OpenDroidRoutes.GITHUB_DISCOVERY, "GitHub Explorer"),
+            CaptureRoute("termux-linux", OpenDroidRoutes.TERMUX, "Termux · Linux"),
+            CaptureRoute("plugin-platform", OpenDroidRoutes.PLUGIN_PLATFORM, "Integration Platform"),
+            CaptureRoute("remote-platform", OpenDroidRoutes.REMOTE_CONTROL, "Universal Remote"),
+            CaptureRoute("agent-platforms", OpenDroidRoutes.AGENT_PLATFORMS, "Agent Platforms"),
+        )
         // Keep captures under internal filesDir: the CI host retrieves them with `run-as`,
         // while external app storage is not addressable through that command.
         val outputDirectory = File(targetContext.filesDir, "visual-evidence").apply {
@@ -55,15 +52,12 @@ class VisualEvidenceInstrumentationTest {
             val intent = Intent(targetContext, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                 .putExtra(MainActivity.EXTRA_VISUAL_ROUTE, route.destination)
-            ActivityScenario.launch<MainActivity>(intent).use { scenario ->
+            ActivityScenario.launch<MainActivity>(intent).use {
                 check(device.wait(Until.hasObject(By.pkg(targetContext.packageName)), 20_000)) {
                     "Application package did not become visible for ${route.name}"
                 }
-                val titleVisible = route.expectedTitles.isEmpty() || route.expectedTitles.any { title ->
-                    device.wait(Until.hasObject(By.text(title)), 20_000)
-                }
-                check(titleVisible) {
-                    "Expected one of ${route.expectedTitles} was not visible for ${route.name}"
+                check(device.wait(Until.hasObject(By.text(route.expectedTitle)), 20_000)) {
+                    "Expected ${route.expectedTitle} was not visible for ${route.name}"
                 }
                 // Let the branded entry animation and initial view-model composition settle.
                 SystemClock.sleep(1_000)
@@ -79,22 +73,6 @@ class VisualEvidenceInstrumentationTest {
     private data class CaptureRoute(
         val name: String,
         val destination: String,
-        val expectedTitles: List<String>,
+        val expectedTitle: String,
     )
-
-    /**
-     * Builds a capture route from a route constant that may not exist in the tree being built.
-     * Returns null when the constant is absent, so this test compiles against both the current
-     * source and the older baseline the visual-evidence workflow checks out alongside it.
-     */
-    private fun optionalRoute(name: String, constantName: String, title: String): CaptureRoute? {
-        val destination = runCatching {
-            OpenDroidRoutes::class.java.getField(constantName).get(null) as String
-        }.getOrNull() ?: return null
-        return CaptureRoute(name, destination, titles(title))
-    }
-
-    private fun titles(vararg values: String): List<String> =
-        if (BuildConfig.VERSION_NAME == "3.10.5") emptyList() else values.toList()
-
 }
