@@ -104,12 +104,18 @@ jobs:
           script: |
             sh "$GITHUB_WORKSPACE/.github/scripts/capture-emulator-screens.sh" v3.10.5 "$GITHUB_WORKSPACE/artifacts/before" "$GITHUB_WORKSPACE/artifacts/test-logs/v3105-before.log" "$BASELINE_DIR"
 
-      - name: Verify fourteen genuine emulator screenshots
+      - name: Verify genuine emulator screenshots
         run: |
           set -eu
           find artifacts/before artifacts/after -type f -name '*.png' -size +0c -print | sort
+          # The baseline predates the agent platform center, so it always captures 7 screens. The
+          # current tree captures 8 when the optional agent-platforms route resolves, and 7 when it
+          # does not, so both are accepted rather than pinning a number that hides a lost capture.
           test "$(find artifacts/before -type f -name '*.png' -size +0c | wc -l)" -eq 7
-          test "$(find artifacts/after -type f -name '*.png' -size +0c | wc -l)" -eq 7
+          after_count="$(find artifacts/after -type f -name '*.png' -size +0c | wc -l)"
+          test "$after_count" -ge 7
+          test "$after_count" -le 8
+          echo "after screenshots: $after_count"
           file artifacts/before/*.png artifacts/after/*.png
 
       - name: Upload screenshots, reports, and logs

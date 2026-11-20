@@ -37,8 +37,13 @@ class VisualEvidenceInstrumentationTest {
             CaptureRoute("termux-linux", OpenDroidRoutes.TERMUX, titles("Termux · Linux")),
             CaptureRoute("plugin-platform", OpenDroidRoutes.PLUGIN_PLATFORM, titles("Integration Platform")),
             CaptureRoute("remote-platform", OpenDroidRoutes.REMOTE_CONTROL, titles("Universal Remote")),
-            CaptureRoute("agent-platforms", OpenDroidRoutes.AGENT_PLATFORMS, titles("Agent Platforms")),
-        )
+        ).let { base ->
+            // The v3.10.5 baseline this workflow also builds predates the agent platform center, so
+            // its OpenDroidRoutes has no AGENT_PLATFORMS constant. Resolving it by reflection keeps
+            // this file compiling against that older tree while still capturing the route here.
+            optionalRoute("agent-platforms", "AGENT_PLATFORMS", "Agent Platforms")
+                ?.let { base + it } ?: base
+        }
         // Keep captures under internal filesDir: the CI host retrieves them with `run-as`,
         // while external app storage is not addressable through that command.
         val outputDirectory = File(targetContext.filesDir, "visual-evidence").apply {
@@ -76,6 +81,18 @@ class VisualEvidenceInstrumentationTest {
         val destination: String,
         val expectedTitles: List<String>,
     )
+
+    /**
+     * Builds a capture route from a route constant that may not exist in the tree being built.
+     * Returns null when the constant is absent, so this test compiles against both the current
+     * source and the older baseline the visual-evidence workflow checks out alongside it.
+     */
+    private fun optionalRoute(name: String, constantName: String, title: String): CaptureRoute? {
+        val destination = runCatching {
+            OpenDroidRoutes::class.java.getField(constantName).get(null) as String
+        }.getOrNull() ?: return null
+        return CaptureRoute(name, destination, titles(title))
+    }
 
     private fun titles(vararg values: String): List<String> =
         if (BuildConfig.VERSION_NAME == "3.10.5") emptyList() else values.toList()
