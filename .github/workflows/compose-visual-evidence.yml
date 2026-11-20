@@ -84,6 +84,10 @@ jobs:
             "$baseline/app/src/androidTest/java/com/opendroid/ai/ui/screens/VisualEvidenceInstrumentationTest.kt"
           cp app/src/main/java/com/opendroid/ai/MainActivity.kt "$baseline/app/src/main/java/com/opendroid/ai/MainActivity.kt"
           cp app/src/main/java/com/opendroid/ai/ui/Navigation.kt "$baseline/app/src/main/java/com/opendroid/ai/ui/Navigation.kt"
+          # The current Navigation.kt references the agent platform center, which this older tree
+          # has no screen for. Strip only those references so the baseline still builds.
+          python3 "$GITHUB_WORKSPACE/.github/scripts/strip-agent-platforms-from-baseline.py" \
+            "$baseline/app/src/main/java/com/opendroid/ai/ui/Navigation.kt"
           sed -i "/androidTestImplementation 'androidx.test.espresso:espresso-core/a\\    androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.3.0'" \
             "$baseline/app/build.gradle"
           echo "BASELINE_DIR=$baseline" >> "$GITHUB_ENV"
