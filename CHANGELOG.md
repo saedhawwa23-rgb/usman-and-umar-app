@@ -2,6 +2,41 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.13.0] - 2026-11-21
+
+### Added
+
+- **Internet sharing: use the paired computer's connection from the phone.** The desktop agent now
+  serves a SOCKS5 proxy, and the phone exposes it on loopback as an HTTP proxy, so a browser or app
+  pointed at `127.0.0.1:<port>` sends its traffic out through the computer's network. This works
+  wherever the computer itself is reachable, not only on the same Wi-Fi.
+  - New Remote > Internet tab: start, stop, see the proxy address, and watch request and byte
+    counters. Sharing is off until you turn it on.
+  - Authentication is mandatory and per-connection. The phone presents an HMAC minted from the
+    paired secret with a 60-second lifetime, and the desktop refuses anything else, so an unpaired
+    host cannot use the computer as an open proxy. A replayed credential is refused.
+  - The phone-side proxy binds to loopback only, so it is not reachable from the network the phone
+    is on.
+  - The proxy is stopped by the kill switch along with every other remote path.
+  - New agent flags: `--no-share-internet` and `--share-port <n>` (default 45872).
+
+### Fixed
+
+- **IPv6 addresses lost their canonical form on the wire.** `::1` came back as
+  `0:0:0:0:0:0:0:1` because `InetAddress.hostAddress` does not compress zero groups. Address
+  formatting now follows RFC 5952, so an address compares equal to the one that was sent.
+- **A SOCKS5 reply's bound address was validated as if it were a dial target.** Replies legitimately
+  carry `0.0.0.0:0`, which the old single type rejected, failing every tunnel. Wire addresses and
+  dialable targets are now separate types.
+
+### Notes
+
+- Verified in this repository: 20 protocol tests and 5 agent tests run against real sockets,
+  including a live fetch of `example.com` through the proxy (928 bytes returned).
+- Not verified here: on-device behaviour. This container has no Android device and no display, so
+  the Android proxy path and the agent's `java.awt` screen capture were not exercised end to end.
+  The agent also needs a real desktop to run at all.
+
 ## [3.12.3] - 2026-11-21
 
 ### Fixed

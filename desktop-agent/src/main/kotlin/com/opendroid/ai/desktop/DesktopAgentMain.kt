@@ -1,5 +1,7 @@
 package com.opendroid.ai.desktop
 
+import com.opendroid.ai.remote.socks.Socks5
+import com.opendroid.ai.remote.socks.Socks5Server
 import java.io.File
 import java.io.FileInputStream
 import java.net.ServerSocket
@@ -60,10 +62,30 @@ fun main(args: Array<String>) {
     println("  Enter this code on the phone to pair. Press Ctrl-C to stop.")
     println()
 
+    // Internet sharing: a SOCKS5 proxy that only accepts paired devices. Started before the
+    // control listener so a failure here is visible at startup, not on the phone's first request.
+    val proxy = if (options.shareInternet) {
+        Socks5Server(
+            port = options.sharePort,
+            secretFor = { deviceId ->
+                store.find(deviceId)?.takeIf { !it.revoked }?.secret
+            },
+            log = { println("  [proxy] $it") },
+        ).also {
+            runCatching { it.start() }.onFailure { error ->
+                println("  WARNING: internet sharing is unavailable: ${error.message}")
+            }
+        }
+    } else {
+        println("  internet sharing: disabled (--no-share-internet)")
+        null
+    }
+
     val pool = Executors.newFixedThreadPool(config.maxClients)
     val shutdown = Thread {
         println("shutting down")
         runCatching { serverSocket.close() }
+        runCatching { proxy?.stop() }
         pool.shutdownNow()
     }
     Runtime.getRuntime().addShutdownHook(shutdown)
@@ -121,6 +143,9 @@ data class AgentOptions(
     val noInput: Boolean,
     val noFiles: Boolean,
     val showHelp: Boolean,
+    /** Serve a SOCKS5 proxy so paired phones can reach the internet through this machine. */
+    val shareInternet: Boolean = true,
+    val sharePort: Int = Socks5.DEFAULT_PORT,
 ) {
     companion object {
         val USAGE = """
@@ -134,6 +159,8 @@ data class AgentOptions(
           --tls-password <pw>   keystore password
           --no-input            do not accept mouse or keyboard input
           --no-files            do not allow file transfer
+          --no-share-internet   do not serve the SOCKS5 proxy for paired phones
+          --share-port <n>      SOCKS5 proxy port (default ${Socks5.DEFAULT_PORT})
           --help                show this message
         """.trimIndent()
 
@@ -146,6 +173,8 @@ data class AgentOptions(
             var noInput = false
             var noFiles = false
             var help = false
+            var shareInternet = true
+            var sharePort = Socks5.DEFAULT_PORT
             var i = 0
             while (i < args.size) {
                 when (val arg = args[i]) {
@@ -160,12 +189,17 @@ data class AgentOptions(
                     }
                     "--no-input" -> noInput = true
                     "--no-files" -> noFiles = true
+                    "--no-share-internet" -> shareInternet = false
+                    "--share-port" -> sharePort = args.getOrNull(++i)?.toIntOrNull() ?: sharePort
                     "--help", "-h" -> help = true
                     else -> if (arg.startsWith("--tls-password")) i++ // consumed with the keystore
                 }
                 i++
             }
-            return AgentOptions(port, storePath, fileRoot, serverName, tls, noInput, noFiles, help)
+            return AgentOptions(
+                port, storePath, fileRoot, serverName, tls, noInput, noFiles, help,
+                shareInternet, sharePort,
+            )
         }
     }
 }

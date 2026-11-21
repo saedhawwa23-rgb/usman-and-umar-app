@@ -103,6 +103,7 @@ fun RemoteControlScreen(viewModel: RemoteControlViewModel = hiltViewModel()) {
                     PlatformTab("Devices", activeSessions),
                     PlatformTab("Transfer"),
                     PlatformTab("Terminal"),
+                    PlatformTab("Internet"),
                     PlatformTab("Gateway"),
                 ),
                 selectedIndex = tab,
@@ -114,6 +115,7 @@ fun RemoteControlScreen(viewModel: RemoteControlViewModel = hiltViewModel()) {
                 1 -> RemoteDevicesTab(state, viewModel, transferCode, { transferCode = it })
                 2 -> RemoteTransferTab(state, viewModel)
                 3 -> RemoteTerminalTab(state, viewModel)
+                4 -> RemoteInternetSharingTab(state, viewModel)
                 else -> RemoteGatewayTab(state, viewModel, gatewayStatus, deviceStatus)
             }
 
@@ -554,5 +556,122 @@ private fun RemoteGatewayTab(
             onClick = { viewModel.engageKillSwitch() },
             enabled = !state.killSwitchActive,
         ) { Text("ENGAGE KILL SWITCH") }
+    }
+}
+
+/**
+ * Internet sharing: send this phone's traffic out through a paired computer's connection.
+ *
+ * The proxy is loopback only, so the address shown here cannot be reached from the network the
+ * phone is on. That is deliberate: it means only this phone can use the tunnel.
+ */
+@Composable
+private fun RemoteInternetSharingTab(
+    state: RemoteControlViewModel.UiState,
+    viewModel: RemoteControlViewModel,
+) {
+    val colors = AppTheme.colors
+    val desktop = state.pairedDesktops.firstOrNull()
+
+    PlatformCard(
+        title = "Share this computer's internet",
+        subtitle = "Browse through the paired computer's connection",
+        status = if (state.sharingRunning) "On" to PlatformStatus.HEALTHY else "Off" to PlatformStatus.IDLE,
+    ) {
+        Text(
+            "While this is on, requests sent to the proxy address below leave through the paired " +
+                "computer's network instead of this phone's. Useful when the phone has no data or " +
+                "is on a restricted Wi-Fi network.",
+            color = colors.textSecondary, fontSize = 12.sp,
+        )
+
+        if (desktop == null) {
+            EmptyState(
+                Icons.Filled.Computer,
+                "No computer paired",
+                "Connect a computer in the Gateway tab first, then come back here.",
+            )
+            return@PlatformCard
+        }
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Column {
+                Text("Computer", color = colors.textSecondary, fontSize = 11.sp)
+                Text(desktop.serverName, color = colors.textPrimary, fontSize = 13.sp)
+            }
+            Column(horizontalAlignment = Alignment.End) {
+                Text("Link", color = colors.textSecondary, fontSize = 11.sp)
+                Text(
+                    "${desktop.host}:${desktop.port}",
+                    color = colors.textPrimary, fontSize = 13.sp,
+                )
+            }
+        }
+
+        if (state.sharingRunning) {
+            SectionHeading("Proxy address", subtitle = "Enter this in your browser or Wi-Fi proxy settings")
+            Text(
+                state.sharingProxyAddress ?: "starting…",
+                color = colors.electricBlue, fontSize = 15.sp,
+            )
+            Text(
+                "Through ${state.sharingDesktopName ?: desktop.serverName} · " +
+                    "${state.sharingRequests} request(s) · ${state.sharingBytes / 1024} KB",
+                color = colors.textSecondary, fontSize = 11.sp,
+            )
+            Text(
+                "If the computer goes offline, requests fail until it is back. Nothing falls back to " +
+                    "this phone's own connection, so you always know which path is in use.",
+                color = colors.textSecondary, fontSize = 11.sp,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BrandOutlineButton(
+                    text = "Refresh",
+                    onClick = { viewModel.refreshSharingStats() },
+                    enabled = true,
+                    modifier = Modifier.weight(1f),
+                )
+                BrandOutlineButton(
+                    text = "Stop sharing",
+                    onClick = { viewModel.stopInternetSharing() },
+                    enabled = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        } else {
+            state.sharingError?.let {
+                Text(it, color = colors.accentRed, fontSize = 12.sp)
+            }
+            Button(
+                onClick = { viewModel.startInternetSharing(desktop) },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !state.killSwitchActive,
+            ) { Text("START SHARING") }
+            if (state.killSwitchActive) {
+                Text(
+                    "Remote features are off because the kill switch is engaged.",
+                    color = colors.textSecondary, fontSize = 11.sp,
+                )
+            }
+        }
+    }
+
+    PlatformCard(
+        title = "On the computer",
+        subtitle = "The agent must be running with sharing enabled",
+    ) {
+        Text(
+            "Start the desktop agent normally. It serves a SOCKS5 proxy on port " +
+                "${com.opendroid.ai.remote.socks.Socks5.DEFAULT_PORT} and only accepts devices " +
+                "paired with it. Add --no-share-internet to turn it off, or --share-port to change " +
+                "the port.",
+            color = colors.textSecondary, fontSize = 12.sp,
+        )
+        Text(
+            "The proxy is reachable only where the computer can be reached. On the same Wi-Fi that " +
+                "is the local address; from outside, the computer needs to be reachable itself, " +
+                "for example through a VPN or a port forward you control.",
+            color = colors.textSecondary, fontSize = 11.sp,
+        )
     }
 }

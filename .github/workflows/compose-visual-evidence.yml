@@ -40,7 +40,7 @@ jobs:
       # v3.10.6, the last release before the Agent Platforms center landed.
       BASELINE_SHA: bee86650630b9312f6008e86bad039ecd580c3c0
       BASELINE_VERSION: '3.10.6'
-      CURRENT_VERSION: '3.12.3'
+      CURRENT_VERSION: '3.13.0'
       COMMON_SCREENS: task-bar,tool-bar,ai-providers,github,termux-linux,plugin-platform,remote-platform
       CURRENT_SCREENS: task-bar,tool-bar,ai-providers,github,termux-linux,plugin-platform,remote-platform,agent-platforms
       API_LEVEL: ${{ matrix.api-level }}

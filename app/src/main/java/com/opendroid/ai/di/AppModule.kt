@@ -330,6 +330,11 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideInternetSharingController(): com.opendroid.ai.core.remote.InternetSharingController =
+        com.opendroid.ai.core.remote.InternetSharingController()
+
+    @Provides
+    @Singleton
     fun provideAgentToolEnvironment(environment: AndroidAgentToolEnvironment): AgentToolEnvironment =
         environment
 

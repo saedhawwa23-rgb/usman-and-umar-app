@@ -45,6 +45,7 @@ class RemoteControlViewModel @Inject constructor(
     private val client: LanRemoteClient,
     private val desktopClient: RemoteDesktopClient,
     private val desktopStore: PairedDesktopStore,
+    private val internetSharing: com.opendroid.ai.core.remote.InternetSharingController,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
 
@@ -79,6 +80,14 @@ class RemoteControlViewModel @Inject constructor(
         val remoteEntries: List<FileEntry> = emptyList(),
         // Remote terminal (executed as an authorized remote action on this phone)
         val terminalOutput: String? = null,
+        // Internet sharing: this phone's traffic leaving through a paired desktop
+        val sharingRunning: Boolean = false,
+        /** Loopback HTTP proxy the owner points a browser at, e.g. 127.0.0.1:41234. */
+        val sharingProxyAddress: String? = null,
+        val sharingDesktopName: String? = null,
+        val sharingRequests: Long = 0,
+        val sharingBytes: Long = 0,
+        val sharingError: String? = null,
     )
 
     private val mutableState = MutableStateFlow(
@@ -89,6 +98,9 @@ class RemoteControlViewModel @Inject constructor(
             listening = transport.state.value.running,
             listenPort = transport.state.value.port,
             pairedDesktops = desktopStore.load(),
+            sharingRunning = internetSharing.state.value.running,
+            sharingProxyAddress = internetSharing.state.value.proxyAddress,
+            sharingDesktopName = internetSharing.state.value.desktopName,
         )
     )
     val state: StateFlow<UiState> = mutableState.asStateFlow()
@@ -159,6 +171,52 @@ class RemoteControlViewModel @Inject constructor(
     fun stopListening() {
         transport.stop()
         setMessage("Stopped listening. Paired devices can no longer reach this phone.", isError = false)
+    }
+
+    /**
+     * Turn on internet sharing through [desktop]: this phone's browser traffic then leaves via that
+     * machine's connection. Refused while the kill switch is engaged, like every other remote path.
+     */
+    fun startInternetSharing(desktop: PairedDesktop) {
+        if (mutableState.value.killSwitchActive) {
+            setMessage("Internet sharing is disabled by the kill switch.", isError = true)
+            return
+        }
+        val result = internetSharing.start(desktop)
+        val state = internetSharing.state.value
+        mutableState.value = mutableState.value.copy(
+            sharingRunning = state.running,
+            sharingProxyAddress = state.proxyAddress,
+            sharingDesktopName = state.desktopName,
+            sharingRequests = 0,
+            sharingBytes = 0,
+            sharingError = state.error,
+        )
+        setMessage(result, isError = !state.running)
+    }
+
+    fun stopInternetSharing() {
+        internetSharing.stop()
+        mutableState.value = mutableState.value.copy(
+            sharingRunning = false,
+            sharingProxyAddress = null,
+            sharingDesktopName = null,
+            sharingRequests = 0,
+            sharingBytes = 0,
+            sharingError = null,
+        )
+        setMessage("Internet sharing is off. Traffic uses this phone's own connection again.", isError = false)
+    }
+
+    /** Pull the live counters while sharing is running, for the status card. */
+    fun refreshSharingStats() {
+        if (!mutableState.value.sharingRunning) return
+        internetSharing.refreshStats()
+        val state = internetSharing.state.value
+        mutableState.value = mutableState.value.copy(
+            sharingRequests = state.requestsServed,
+            sharingBytes = state.bytesRelayed,
+        )
     }
 
     /** The owner's answer to an inbound remote action. */
@@ -276,11 +334,17 @@ class RemoteControlViewModel @Inject constructor(
 
     fun engageKillSwitch() {
         val result = coordinator.engageKillSwitch()
+        // Sharing must not outlive the kill switch: an open tunnel would keep carrying traffic
+        // after the owner has asked every remote path to stop.
+        internetSharing.stopForKillSwitch()
         mutableState.value = mutableState.value.copy(
             pairingCode = null,
             pairingDeviceId = null,
             pairingExpiresAtMs = 0L,
             killSwitchActive = true,
+            sharingRunning = false,
+            sharingProxyAddress = null,
+            sharingDesktopName = null,
             sessions = coordinator.sessions(),
             message = (result as? RemoteControlCoordinator.StepResult.Success)?.message,
             messageIsError = false,
