@@ -12,6 +12,12 @@ All notable changes to USMAN AND UMAR are recorded here.
   instead of being assumed.
 - **TLS pinning was never exercised by a real handshake** - the pinning tests now run against a
   genuine `SSLServerSocket`, so a wrong certificate actually fails the connection.
+- **The desktop companion agent could not be packaged.** `:desktop-agent:fatJar` used
+  `configurations.runtimeClasspath.get()`, which Gradle 9 removed, so the task failed and no
+  installable agent jar could be produced. It now resolves lazily and builds a runnable
+  `opendroid-desktop-agent-all.jar`.
+- **CI never built the agent jar**, only its tests, which is why the broken task went unnoticed.
+  `android-ci.yml` now builds `:desktop-agent:fatJar` and uploads the jar as an artifact.
 
 ### Changed
 

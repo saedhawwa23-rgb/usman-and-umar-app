@@ -60,8 +60,17 @@ jobs:
 
       - name: Run unit tests and build debug APK
         # The two JVM modules carry the remote-control protocol and the desktop agent; their
-        # tests are plain JUnit and headless, so they run here alongside the app's.
-        run: ./gradlew testDebugUnitTest :remote-protocol:test :desktop-agent:test assembleDebug --stacktrace
+        # tests are plain JUnit and headless, so they run here alongside the app's. fatJar is
+        # built too: the tests never exercised it, so it could break without CI noticing.
+        run: ./gradlew testDebugUnitTest :remote-protocol:test :desktop-agent:test :desktop-agent:fatJar assembleDebug --stacktrace
+
+      - name: Upload desktop agent
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opendroid-desktop-agent
+          path: desktop-agent/build/libs/opendroid-desktop-agent-all.jar
+          if-no-files-found: error
 
       - name: Upload installable debug APK
         if: success()
