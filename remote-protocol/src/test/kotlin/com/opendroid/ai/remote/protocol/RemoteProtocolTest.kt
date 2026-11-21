@@ -54,6 +54,9 @@ class RemoteProtocolTest {
             FileDownloadBegin("/tmp/a.txt", 12, "t1"),
             FileUploadBegin("/tmp/a.txt", 12, "t1"),
             FileTransferEnd("t1", true),
+            ClipboardSet("copied text"),
+            ClipboardGet(),
+            ClipboardValue("desktop text", true),
         )
 
         for (message in messages) {

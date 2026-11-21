@@ -49,6 +49,9 @@ class DesktopSessionTest {
             launched = id
             return if (id == "app:test") LaunchOutcome(true, null, 7L) else LaunchOutcome(false, "Unknown application id '$id'")
         }
+        var clipboard: String? = "initial clipboard"
+        override fun readClipboard(): String? = clipboard
+        override fun writeClipboard(text: String) { clipboard = text }
     }
 
     private fun session(
@@ -194,6 +197,129 @@ class DesktopSessionTest {
             assertFalse((client.receive() as AuthResult).accepted)
             client.send(Disconnect("done"))
         }
+    }
+
+    @Test
+    fun `clipboard get returns the desktop clipboard`() {
+        val store = ClientStore(File(tempRoot, "clients.json"))
+        val secret = RemoteCrypto.deriveSecret("ABCD2345", "n", "s")
+        store.save(PairedClient("device-1", "Phone", secret, System.currentTimeMillis()))
+        val controller = FakeController().apply { clipboard = "desktop has this" }
+        val session = session(store, controller, PairingController())
+
+        runSession(session) { client ->
+            client.send(hello())
+            client.receive()
+            val challenge = client.receive() as AuthChallenge
+            client.send(AuthResponse("device-1", RemoteCrypto.proof(secret, "device-1", challenge.challenge)))
+            client.receive()
+
+            client.send(ClipboardGet())
+            val value = client.receive() as ClipboardValue
+            assertEquals("desktop has this", value.text)
+            assertTrue(value.available)
+
+            client.send(Disconnect("done"))
+        }
+    }
+
+    @Test
+    fun `clipboard get reports unavailable when the desktop holds no text`() {
+        val store = ClientStore(File(tempRoot, "clients.json"))
+        val secret = RemoteCrypto.deriveSecret("ABCD2345", "n", "s")
+        store.save(PairedClient("device-1", "Phone", secret, System.currentTimeMillis()))
+        val controller = FakeController().apply { clipboard = null }
+        val session = session(store, controller, PairingController())
+
+        runSession(session) { client ->
+            client.send(hello())
+            client.receive()
+            val challenge = client.receive() as AuthChallenge
+            client.send(AuthResponse("device-1", RemoteCrypto.proof(secret, "device-1", challenge.challenge)))
+            client.receive()
+
+            client.send(ClipboardGet())
+            val value = client.receive() as ClipboardValue
+            assertEquals("", value.text)
+            assertFalse("an absent clipboard must be reported as unavailable", value.available)
+
+            client.send(Disconnect("done"))
+        }
+    }
+
+    @Test
+    fun `clipboard set writes to the desktop clipboard`() {
+        val store = ClientStore(File(tempRoot, "clients.json"))
+        val secret = RemoteCrypto.deriveSecret("ABCD2345", "n", "s")
+        store.save(PairedClient("device-1", "Phone", secret, System.currentTimeMillis()))
+        val controller = FakeController()
+        val session = session(store, controller, PairingController())
+
+        runSession(session) { client ->
+            client.send(hello())
+            client.receive()
+            val challenge = client.receive() as AuthChallenge
+            client.send(AuthResponse("device-1", RemoteCrypto.proof(secret, "device-1", challenge.challenge)))
+            client.receive()
+
+            client.send(ClipboardSet("text from the phone"))
+            client.send(ClipboardGet())
+            assertEquals("text from the phone", (client.receive() as ClipboardValue).text)
+
+            client.send(Disconnect("done"))
+        }
+        assertEquals("text from the phone", controller.clipboard)
+    }
+
+    @Test
+    fun `clipboard set is refused when input is disabled`() {
+        val store = ClientStore(File(tempRoot, "clients.json"))
+        val secret = RemoteCrypto.deriveSecret("ABCD2345", "n", "s")
+        store.save(PairedClient("device-1", "Phone", secret, System.currentTimeMillis()))
+        val controller = FakeController().apply { clipboard = "untouched" }
+        val session = session(
+            store, controller, PairingController(),
+            AgentConfig("test-agent", 0, tempRoot, allowInput = false),
+        )
+
+        runSession(session) { client ->
+            client.send(hello())
+            client.receive()
+            val challenge = client.receive() as AuthChallenge
+            client.send(AuthResponse("device-1", RemoteCrypto.proof(secret, "device-1", challenge.challenge)))
+            client.receive()
+
+            client.send(ClipboardSet("should not apply"))
+            val error = client.receive() as ProtocolError
+            assertEquals("clipboard_disabled", error.code)
+
+            client.send(Disconnect("done"))
+        }
+        assertEquals("the desktop clipboard must be untouched", "untouched", controller.clipboard)
+    }
+
+    @Test
+    fun `an oversized clipboard payload is refused by the agent`() {
+        val store = ClientStore(File(tempRoot, "clients.json"))
+        val secret = RemoteCrypto.deriveSecret("ABCD2345", "n", "s")
+        store.save(PairedClient("device-1", "Phone", secret, System.currentTimeMillis()))
+        val controller = FakeController().apply { clipboard = "untouched" }
+        val session = session(store, controller, PairingController())
+
+        runSession(session) { client ->
+            client.send(hello())
+            client.receive()
+            val challenge = client.receive() as AuthChallenge
+            client.send(AuthResponse("device-1", RemoteCrypto.proof(secret, "device-1", challenge.challenge)))
+            client.receive()
+
+            client.send(ClipboardSet("y".repeat(ClipboardSet.CLIPBOARD_TEXT_LIMIT + 1)))
+            val error = client.receive() as ProtocolError
+            assertEquals("clipboard_too_large", error.code)
+
+            client.send(Disconnect("done"))
+        }
+        assertEquals("untouched", controller.clipboard)
     }
 
     @Test

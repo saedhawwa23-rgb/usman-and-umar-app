@@ -43,7 +43,10 @@ import com.opendroid.ai.ui.components.PlatformStatus
 import com.opendroid.ai.ui.components.SectionHeading
 import com.opendroid.ai.ui.components.SegmentedTabs
 import com.opendroid.ai.ui.components.StatusPill
+import com.opendroid.ai.ui.components.ClipboardSyncRow
 import com.opendroid.ai.ui.components.PlatformTab
+import com.opendroid.ai.ui.components.RemoteDesktopView
+import com.opendroid.ai.ui.components.RemoteKeyboardField
 import com.opendroid.ai.ui.theme.AppTheme
 import com.opendroid.ai.ui.viewmodel.RemoteControlViewModel
 
@@ -395,6 +398,7 @@ private fun RemoteGatewayTab(
     var port by remember { mutableStateOf("8777") }
     var code by remember { mutableStateOf("") }
     var width by remember { mutableStateOf("1280") }
+    var fingerprint by remember { mutableStateOf("") }
 
     PlatformCard(
         title = "Remote gateway (LAN listener)",
@@ -437,9 +441,31 @@ private fun RemoteGatewayTab(
                 label = { Text("Pairing code") }, singleLine = true, modifier = Modifier.weight(1f),
             )
         }
+        OutlinedTextField(
+            value = fingerprint, onValueChange = { fingerprint = it },
+            label = { Text("Desktop certificate SHA-256 (for a secure connection)") },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            if (fingerprint.isBlank()) {
+                "Without a fingerprint the session uses plain TCP. That is fine on a trusted local " +
+                    "network, but use the fingerprint the desktop printed before connecting over the internet."
+            } else {
+                "The desktop certificate will be pinned to this fingerprint, so an impostor cannot " +
+                    "complete the connection."
+            },
+            color = colors.textSecondary, fontSize = 11.sp,
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = { viewModel.pairWithDesktop(host, port.toIntOrNull() ?: 8777, code) },
+                onClick = {
+                    viewModel.pairWithDesktop(
+                        host,
+                        port.toIntOrNull() ?: 8777,
+                        code,
+                        fingerprint.takeIf { it.isNotBlank() },
+                    )
+                },
                 enabled = host.isNotBlank() && code.isNotBlank() && !state.desktopConnected,
             ) { Text("PAIR") }
             OutlinedButton(
@@ -478,6 +504,31 @@ private fun RemoteGatewayTab(
                     color = colors.textSecondary, fontSize = 12.sp,
                 )
             }
+            if (state.desktopStreaming || state.lastScreenFrame != null) {
+                RemoteDesktopView(
+                    frame = state.lastScreenFrame,
+                    onInput = { viewModel.sendDesktopInput(it) },
+                )
+                Text(
+                    "Tap to click, drag to move, long press for right click.",
+                    color = colors.textSecondary, fontSize = 11.sp,
+                )
+                RemoteKeyboardField(onSend = { text ->
+                    viewModel.sendDesktopInput(
+                        com.opendroid.ai.remote.protocol.InputEvent(
+                            com.opendroid.ai.remote.protocol.InputEvent.TEXT,
+                            text = text,
+                        )
+                    )
+                })
+            }
+            ClipboardSyncRow(
+                desktopClipboard = state.desktopClipboard,
+                syncEnabled = state.clipboardSyncEnabled,
+                onPull = { viewModel.requestDesktopClipboard() },
+                onPush = { viewModel.sendToDesktopClipboard(it) },
+                onToggleSync = { viewModel.setClipboardSyncEnabled(it) },
+            )
             state.desktopApplications.take(10).forEach { app ->
                 Row(
                     Modifier.fillMaxWidth(),

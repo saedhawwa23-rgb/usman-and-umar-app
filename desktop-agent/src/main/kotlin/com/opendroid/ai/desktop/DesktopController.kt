@@ -5,6 +5,8 @@ import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
 import java.awt.Robot
 import java.awt.Toolkit
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.StringSelection
 import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
 import java.awt.image.BufferedImage
@@ -37,6 +39,8 @@ interface DesktopControllerContract {
     fun typeText(text: String): Int
     fun listApplications(): List<AppEntryView>
     fun launchApplication(id: String): LaunchOutcome
+    fun readClipboard(): String?
+    fun writeClipboard(text: String)
 }
 
 class DesktopController(
@@ -45,6 +49,24 @@ class DesktopController(
 
     /** The virtual desktop size. On a multi-monitor machine this spans every screen. */
     override fun screenSize(): Dimension = Toolkit.getDefaultToolkit().screenSize
+
+    /**
+     * The desktop clipboard's text, or null when it holds no text (an image, a file list) or the
+     * platform refuses access. A headless session has no clipboard owner, so this returns null
+     * rather than throwing.
+     */
+    override fun readClipboard(): String? = runCatching {
+        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+        if (!clipboard.isDataFlavorAvailable(DataFlavor.stringFlavor)) null
+        else clipboard.getData(DataFlavor.stringFlavor) as? String
+    }.getOrNull()
+
+    override fun writeClipboard(text: String) {
+        runCatching {
+            Toolkit.getDefaultToolkit().systemClipboard
+                .setContents(StringSelection(text), null)
+        }
+    }
 
     /** Number of attached screens, so the client can offer a monitor choice. */
     override fun monitorCount(): Int = GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices.size
@@ -107,10 +129,17 @@ class DesktopController(
 
     override fun mouseWheel(amount: Int) = robot.mouseWheel(amount)
 
+    /**
+     * Maps the protocol's button number to AWT's mask.
+     *
+     * The protocol follows the X11 convention (1 = left, 2 = middle, 3 = right), which is what
+     * every other remote-desktop client sends. AWT's own numbering differs: BUTTON2 is the middle
+     * button and BUTTON3 the right one.
+     */
     private fun maskFor(button: Int): Int = when (button) {
         1 -> InputEvent.BUTTON1_DOWN_MASK
-        2 -> InputEvent.BUTTON3_DOWN_MASK
-        3 -> InputEvent.BUTTON2_DOWN_MASK
+        2 -> InputEvent.BUTTON2_DOWN_MASK
+        3 -> InputEvent.BUTTON3_DOWN_MASK
         else -> InputEvent.BUTTON1_DOWN_MASK
     }
 

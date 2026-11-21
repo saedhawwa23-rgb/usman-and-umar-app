@@ -48,6 +48,10 @@ fun main(args: Array<String>) {
     println("  file access : ${if (config.allowFileTransfer) "enabled" else "disabled"}")
     if (options.tls == null) {
         println("  WARNING: no TLS keystore supplied. Use this only on a trusted local network.")
+    } else {
+        // The phone pins this fingerprint, so it has to be printed where the owner can read it.
+        println("  certificate : sha256 ${certificateFingerprint(options.tls)}")
+        println("  Give the phone this fingerprint when pairing for a pinned TLS session.")
     }
 
     val code = pairing.open()
@@ -79,6 +83,17 @@ fun main(args: Array<String>) {
             }
         }
     }
+}
+
+/** The SHA-256 fingerprint of the certificate the keystore will present, in `keytool` style. */
+internal fun certificateFingerprint(tls: TlsOptions): String {
+    val keyStore = KeyStore.getInstance("PKCS12")
+    FileInputStream(tls.keystorePath).use { keyStore.load(it, tls.password.toCharArray()) }
+    val alias = keyStore.aliases().toList().firstOrNull()
+        ?: error("The keystore ${tls.keystorePath} holds no certificate")
+    val certificate = keyStore.getCertificate(alias) as java.security.cert.X509Certificate
+    val digest = java.security.MessageDigest.getInstance("SHA-256").digest(certificate.encoded)
+    return digest.joinToString(":") { "%02X".format(it) }
 }
 
 private fun createTlsServer(tls: TlsOptions, port: Int): SSLServerSocket {

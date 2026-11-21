@@ -248,6 +248,32 @@ data class FileUploadBegin(val path: String, val size: Long, val transferId: Str
 @SerialName("file_transfer_end")
 data class FileTransferEnd(val transferId: String, val ok: Boolean, val reason: String? = null) : RemoteMessage()
 
+// ---- Clipboard ----
+
+/**
+ * Clipboard text, in both directions.
+ *
+ * The two sides do not share a clipboard, so a change is pushed as an explicit message rather than
+ * read on demand. [CLIPBOARD_TEXT_LIMIT] bounds the payload: a huge clipboard (a pasted log, an
+ * image encoded as base64) would otherwise exceed the frame limit and break the session.
+ */
+@Serializable
+@SerialName("clipboard_set")
+data class ClipboardSet(val text: String) : RemoteMessage() {
+    companion object {
+        const val CLIPBOARD_TEXT_LIMIT = 256 * 1024
+    }
+}
+
+/** Asks the other side for its current clipboard text. */
+@Serializable
+@SerialName("clipboard_get")
+data class ClipboardGet(val unused: Int = 0) : RemoteMessage()
+
+@Serializable
+@SerialName("clipboard_value")
+data class ClipboardValue(val text: String, val available: Boolean = true) : RemoteMessage()
+
 /** Encodes and decodes control messages, refusing an unknown or mismatched message. */
 object RemoteCodec {
 

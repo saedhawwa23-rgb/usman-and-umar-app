@@ -11,6 +11,8 @@ import com.opendroid.ai.desktop.PairingController
 import com.opendroid.ai.remote.protocol.AppEntry
 import com.opendroid.ai.remote.protocol.AppLaunchResult
 import com.opendroid.ai.remote.protocol.AppList
+import com.opendroid.ai.remote.protocol.ClipboardSet
+import com.opendroid.ai.remote.protocol.ClipboardValue
 import com.opendroid.ai.remote.protocol.InputEvent
 import com.opendroid.ai.remote.protocol.RemoteProtocol
 import com.opendroid.ai.remote.protocol.ScreenFrameCodec
@@ -18,6 +20,7 @@ import com.opendroid.ai.remote.protocol.RemoteMessage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -51,6 +54,9 @@ class RemoteDesktopClientIntegrationTest {
         override fun typeText(text: String): Int { input += "text($text)"; return text.length }
         override fun listApplications() = listOf(AppEntryView("app:notes", "Notes", false))
         override fun launchApplication(id: String) = LaunchOutcome(id == "app:notes", null, 3L)
+        var clipboard: String? = "desktop clipboard"
+        override fun readClipboard(): String? = clipboard
+        override fun writeClipboard(text: String) { clipboard = text }
     }
 
     private class MemoryStore : PairedDesktopStore {
@@ -144,6 +150,144 @@ class RemoteDesktopClientIntegrationTest {
 
         client2.disconnect("done")
         streamJob.join()
+    }
+
+    @Test
+    fun `clipboard text crosses in both directions over a paired session`() = runBlocking {
+        val controller = FakeController()
+        val pairing = PairingController()
+        val code = pairing.open()
+        val store = ClientStore(File(tempRoot, "clipboard-clients.json"))
+        val port = startAgent(controller, pairing, store)
+        val phoneStore = MemoryStore()
+
+        val client = RemoteDesktopClient(phoneStore, "Test Phone")
+        val pairJob = launch { client.connect("127.0.0.1", port, code, { }, { }, { }) }
+        val deadline = System.currentTimeMillis() + 15_000
+        while (phoneStore.load().isEmpty() && System.currentTimeMillis() < deadline) delay(50)
+        client.disconnect("paired")
+        pairJob.join()
+
+        val client2 = RemoteDesktopClient(phoneStore, "Test Phone")
+        val received = java.util.concurrent.atomic.AtomicReference<ClipboardValue?>(null)
+        val streamJob = launch {
+            client2.connect("127.0.0.1", port, null, { }, { }) { message ->
+                if (message is ClipboardValue) received.set(message)
+            }
+        }
+        val ready = System.currentTimeMillis() + 15_000
+        while (client2.state !is DesktopSessionState.Connected && System.currentTimeMillis() < ready) delay(50)
+        assertTrue(client2.state is DesktopSessionState.Connected)
+
+        // Phone -> desktop: the agent's clipboard must end up holding the phone's text.
+        assertTrue(client2.setClipboard("copied on the phone"))
+        val applied = System.currentTimeMillis() + 15_000
+        while (controller.clipboard != "copied on the phone" && System.currentTimeMillis() < applied) delay(50)
+        assertEquals("copied on the phone", controller.clipboard)
+
+        // Desktop -> phone: the agent answers with its current clipboard.
+        controller.clipboard = "copied on the desktop"
+        client2.requestClipboard()
+        val answered = System.currentTimeMillis() + 15_000
+        while (received.get() == null && System.currentTimeMillis() < answered) delay(50)
+        assertEquals("copied on the desktop", received.get()?.text)
+        assertEquals(true, received.get()?.available)
+
+        client2.disconnect("done")
+        streamJob.join()
+    }
+
+    @Test
+    fun `an oversized clipboard payload is refused without breaking the session`() = runBlocking {
+        val controller = FakeController()
+        val pairing = PairingController()
+        val code = pairing.open()
+        val store = ClientStore(File(tempRoot, "clipboard-limit-clients.json"))
+        val port = startAgent(controller, pairing, store)
+        val phoneStore = MemoryStore()
+
+        val client = RemoteDesktopClient(phoneStore, "Test Phone")
+        val pairJob = launch { client.connect("127.0.0.1", port, code, { }, { }, { }) }
+        val deadline = System.currentTimeMillis() + 15_000
+        while (phoneStore.load().isEmpty() && System.currentTimeMillis() < deadline) delay(50)
+        client.disconnect("paired")
+        pairJob.join()
+
+        val client2 = RemoteDesktopClient(phoneStore, "Test Phone")
+        val streamJob = launch { client2.connect("127.0.0.1", port, null, { }, { }, { }) }
+        val ready = System.currentTimeMillis() + 15_000
+        while (client2.state !is DesktopSessionState.Connected && System.currentTimeMillis() < ready) delay(50)
+
+        val huge = "x".repeat(ClipboardSet.CLIPBOARD_TEXT_LIMIT + 1)
+        assertFalse("oversized text must be refused locally", client2.setClipboard(huge))
+
+        // The session must survive the refusal and still carry a normal update.
+        assertTrue(client2.setClipboard("still working"))
+        val applied = System.currentTimeMillis() + 15_000
+        while (controller.clipboard != "still working" && System.currentTimeMillis() < applied) delay(50)
+        assertEquals("still working", controller.clipboard)
+
+        client2.disconnect("done")
+        streamJob.join()
+    }
+
+    @Test
+    fun `a file is uploaded to the desktop and downloaded back byte for byte`() = runBlocking {
+        val controller = FakeController()
+        val pairing = PairingController()
+        val code = pairing.open()
+        val store = ClientStore(File(tempRoot, "transfer-clients.json"))
+        val port = startAgent(controller, pairing, store)
+        val phoneStore = MemoryStore()
+
+        val client = RemoteDesktopClient(phoneStore, "Test Phone")
+        val pairJob = launch { client.connect("127.0.0.1", port, code, { }, { }, { }) }
+        val deadline = System.currentTimeMillis() + 15_000
+        while (phoneStore.load().isEmpty() && System.currentTimeMillis() < deadline) delay(50)
+        client.disconnect("paired")
+        pairJob.join()
+
+        val client2 = RemoteDesktopClient(phoneStore, "Test Phone")
+        val downloaded = java.util.concurrent.atomic.AtomicReference<ByteArray?>(null)
+        client2.onDownloadComplete = { _, bytes -> downloaded.set(bytes) }
+        val streamJob = launch { client2.connect("127.0.0.1", port, null, { }, { }, { }) }
+
+        // A blocking socket read cannot be cancelled, so the connection is always closed in the
+        // finally block; otherwise a failed assertion would hang the whole suite.
+        try {
+            withTimeout(30_000) {
+                while (client2.state !is DesktopSessionState.Connected) delay(50)
+
+                // Larger than one 128 KB chunk, so the chunking path is really exercised.
+                val payload = ByteArray(400 * 1024) { (it % 251).toByte() }
+                // Paths are relative to the agent's shared root: it resolves every request inside
+                // that root and refuses anything that escapes it.
+                val relative = "uploaded-by-phone.bin"
+                val target = File(tempRoot, relative)
+                target.delete()
+
+                val result = client2.uploadFile(relative, payload)
+                assertTrue("upload should be accepted: $result", result.isSuccess)
+
+                // Verify against the file on the agent's disk, not against a return value.
+                while ((!target.exists() || target.length() < payload.size)) delay(50)
+                assertTrue(
+                    "the desktop file must match the phone bytes",
+                    target.readBytes().contentEquals(payload),
+                )
+
+                // Download the same file back and compare the reassembled bytes.
+                client2.downloadFile(relative)
+                while (downloaded.get() == null) delay(50)
+                assertTrue(
+                    "the downloaded bytes must match the original",
+                    downloaded.get()!!.contentEquals(payload),
+                )
+            }
+        } finally {
+            client2.disconnect("done")
+            streamJob.cancel()
+        }
     }
 
     @Test

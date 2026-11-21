@@ -12,10 +12,13 @@ import com.opendroid.ai.core.remote.RemoteDesktopClient
 import com.opendroid.ai.core.remote.RemoteControlCoordinator
 import com.opendroid.ai.core.remote.RemoteRisk
 import com.opendroid.ai.core.remote.RemoteSession
+import com.opendroid.ai.core.remote.RemoteTlsMode
 import com.opendroid.ai.core.remote.RemoteTransportController
 import com.opendroid.ai.remote.protocol.AppEntry
 import com.opendroid.ai.remote.protocol.AppLaunchResult
 import com.opendroid.ai.remote.protocol.AppList
+import com.opendroid.ai.remote.protocol.ClipboardSet
+import com.opendroid.ai.remote.protocol.ClipboardValue
 import com.opendroid.ai.remote.protocol.FileEntry
 import com.opendroid.ai.remote.protocol.FileList
 import com.opendroid.ai.remote.protocol.InputEvent
@@ -42,6 +45,7 @@ class RemoteControlViewModel @Inject constructor(
     private val client: LanRemoteClient,
     private val desktopClient: RemoteDesktopClient,
     private val desktopStore: PairedDesktopStore,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
 
     /** What the screen shows. [pairingCode] is non-null only while a code is live. */
@@ -64,6 +68,12 @@ class RemoteControlViewModel @Inject constructor(
         val desktopStreaming: Boolean = false,
         val lastScreenFrame: ScreenFrameCodec.ScreenFrame? = null,
         val desktopApplications: List<AppEntry> = emptyList(),
+        /** The last clipboard text the desktop reported; null until asked for. */
+        val desktopClipboard: String? = null,
+        /** True while the phone's own clipboard is pushed to the desktop automatically. */
+        val clipboardSyncEnabled: Boolean = false,
+        /** Bytes received so far in the current download, for the progress line. */
+        val transferProgress: Long = 0L,
         // Secure file transfer (desktop agent)
         val remotePath: String = ".",
         val remoteEntries: List<FileEntry> = emptyList(),
@@ -84,6 +94,33 @@ class RemoteControlViewModel @Inject constructor(
     val state: StateFlow<UiState> = mutableState.asStateFlow()
 
     init {
+        // Files land in the app's own external files dir, which needs no storage permission and is
+        // removed with the app. Nothing is written anywhere else.
+        desktopClient.onDownloadComplete = { path, bytes ->
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val name = path.substringAfterLast('/').ifBlank { "download.bin" }
+                val dir = java.io.File(appContext.getExternalFilesDir(null) ?: appContext.filesDir, "remote-downloads")
+                dir.mkdirs()
+                val out = java.io.File(dir, name)
+                runCatching { out.writeBytes(bytes) }.fold(
+                    onSuccess = {
+                        mutableState.value = mutableState.value.copy(
+                            message = "Saved ${bytes.size / 1024} KB to ${out.name}.",
+                            messageIsError = false,
+                        )
+                    },
+                    onFailure = {
+                        mutableState.value = mutableState.value.copy(
+                            message = "Could not save ${out.name}: ${it.message ?: "unknown error"}",
+                            messageIsError = true,
+                        )
+                    },
+                )
+            }
+        }
+        desktopClient.onDownloadProgress = { _, received ->
+            mutableState.value = mutableState.value.copy(transferProgress = received)
+        }
         viewModelScope.launch {
             transport.state.collect { s ->
                 mutableState.value = mutableState.value.copy(listening = s.running, listenPort = s.port)
@@ -259,11 +296,17 @@ class RemoteControlViewModel @Inject constructor(
      * Pair with a desktop agent running on a computer. The code is the one the agent printed when it
      * started; nothing is stored unless the agent accepts it.
      */
-    fun pairWithDesktop(host: String, port: Int, code: String) {
+    fun pairWithDesktop(host: String, port: Int, code: String, certificateFingerprint: String? = null) {
         if (desktopConnected) {
             setMessage("Disconnect the current desktop before pairing with another.", isError = true)
             return
         }
+        // Pinning needs the fingerprint the desktop printed. Without one the user has chosen a
+        // trusted local network, so plain TCP is used and the message says so.
+        desktopClient.tlsMode = certificateFingerprint
+            ?.takeIf { it.isNotBlank() }
+            ?.let { RemoteTlsMode.Pinned(it) }
+            ?: RemoteTlsMode.Plain
         viewModelScope.launch {
             desktopClient.connect(
                 host = host.trim(),
@@ -279,6 +322,10 @@ class RemoteControlViewModel @Inject constructor(
     /** Connect to a desktop that has already been paired. */
     fun connectToDesktop(host: String, port: Int) {
         if (desktopConnected) return
+        val known = desktopStore.load().firstOrNull { it.host == host.trim() && it.port == port }
+        desktopClient.tlsMode = known?.certificateFingerprint
+            ?.let { RemoteTlsMode.Pinned(it) }
+            ?: RemoteTlsMode.Plain
         viewModelScope.launch {
             desktopClient.connect(
                 host = host.trim(),
@@ -317,6 +364,48 @@ class RemoteControlViewModel @Inject constructor(
     fun sendDesktopInput(event: InputEvent) {
         if (!desktopConnected) return
         desktopClient.sendInput(event)
+    }
+
+    // ---- Clipboard ----
+
+    /** Ask the desktop for its current clipboard text. */
+    fun requestDesktopClipboard() {
+        if (!desktopConnected) {
+            setMessage("Connect to a desktop before syncing the clipboard.", isError = true)
+            return
+        }
+        desktopClient.requestClipboard()
+    }
+
+    /**
+     * Send text to the desktop clipboard. [text] usually comes from this phone's clipboard, which
+     * the screen reads; the view model never touches the Android clipboard itself so it stays
+     * testable off-device.
+     */
+    fun sendToDesktopClipboard(text: String) {
+        if (!desktopConnected) {
+            setMessage("Connect to a desktop before syncing the clipboard.", isError = true)
+            return
+        }
+        if (text.isBlank()) {
+            setMessage("There is no text to send.", isError = true)
+            return
+        }
+        val sent = desktopClient.setClipboard(text)
+        setMessage(
+            if (sent) "Sent ${text.length} characters to the desktop clipboard."
+            else "That text is too large for the clipboard (limit ${ClipboardSet.CLIPBOARD_TEXT_LIMIT} characters).",
+            isError = !sent,
+        )
+    }
+
+    fun setClipboardSyncEnabled(enabled: Boolean) {
+        mutableState.value = mutableState.value.copy(
+            clipboardSyncEnabled = enabled,
+            message = if (enabled) "Clipboard sync is on: text you copy here is sent to the desktop."
+            else "Clipboard sync is off.",
+            messageIsError = false,
+        )
     }
 
     fun listDesktopApplications() {
@@ -369,6 +458,35 @@ class RemoteControlViewModel @Inject constructor(
         }
         desktopClient.downloadFile(path)
         setMessage("Requested '$path' from the computer.", isError = false)
+    }
+
+    /**
+     * Upload a file the user picked to the desktop's shared folder.
+     *
+     * The bytes are read on an IO dispatcher and streamed in chunks; the desktop is the authority on
+     * where the file may be written, so a path outside its shared folder is refused by the agent.
+     */
+    fun uploadToDesktop(file: java.io.File, remotePath: String? = null) {
+        if (!desktopConnected) {
+            setMessage("Connect to the desktop before uploading a file.", isError = true)
+            return
+        }
+        if (!file.isFile) {
+            setMessage("That file could not be read.", isError = true)
+            return
+        }
+        viewModelScope.launch {
+            val bytes = runCatching { file.readBytes() }.getOrElse {
+                setMessage("Could not read ${file.name}: ${it.message ?: "unknown error"}", isError = true)
+                return@launch
+            }
+            val target = remotePath ?: "${mutableState.value.remotePath.trimEnd('.', '/')}/${file.name}".replace("//", "/")
+            setMessage("Uploading ${file.name} (${bytes.size / 1024} KB)…", isError = false)
+            desktopClient.uploadFile(target, bytes).fold(
+                onSuccess = { setMessage("Uploaded ${file.name} to $target.", isError = false) },
+                onFailure = { setMessage("Upload failed: ${it.message ?: "unknown error"}", isError = true) },
+            )
+        }
     }
 
     /**
@@ -459,6 +577,12 @@ class RemoteControlViewModel @Inject constructor(
                 remoteEntries = message.entries,
                 message = if (message.entries.isEmpty()) "No files in ${message.path}."
                 else "${message.entries.size} item(s) in ${message.path}.",
+                messageIsError = false,
+            )
+            is ClipboardValue -> mutableState.value = current.copy(
+                desktopClipboard = if (message.available) message.text else null,
+                message = if (message.available) "Received the desktop clipboard (${message.text.length} characters)."
+                else "The desktop clipboard holds no text.",
                 messageIsError = false,
             )
             is ProtocolError -> mutableState.value = current.copy(

@@ -16,6 +16,9 @@ import com.opendroid.ai.remote.protocol.FileList
 import com.opendroid.ai.remote.protocol.FileListRequest
 import com.opendroid.ai.remote.protocol.FileUploadBegin
 import com.opendroid.ai.remote.protocol.FrameCodec
+import com.opendroid.ai.remote.protocol.ClipboardGet
+import com.opendroid.ai.remote.protocol.ClipboardSet
+import com.opendroid.ai.remote.protocol.ClipboardValue
 import com.opendroid.ai.remote.protocol.Heartbeat
 import com.opendroid.ai.remote.protocol.HeartbeatAck
 import com.opendroid.ai.remote.protocol.Hello
@@ -58,6 +61,8 @@ data class PairedDesktop(
     val deviceId: String,
     val serverName: String,
     val secret: ByteArray,
+    /** The certificate fingerprint recorded at pairing; null for a plain-TCP pairing. */
+    val certificateFingerprint: String? = null,
 ) {
     override fun equals(other: Any?): Boolean =
         other is PairedDesktop && host == other.host && port == other.port && deviceId == other.deviceId
@@ -78,6 +83,12 @@ interface PairedDesktopStore {
  * It speaks the same [RemoteProtocol] as the agent, so a mismatch is impossible to ship. Pairing and
  * authentication happen on a background dispatcher; a frame listener delivers screen frames and
  * control replies to the UI. Nothing here blocks the main thread.
+ *
+ * Transport is chosen by [RemoteTlsMode]:
+ *  - [RemoteTlsMode.Pinned] is the default and the only mode that should cross an untrusted
+ *    network. The agent's self-signed certificate is pinned by SHA-256 fingerprint, so no CA is
+ *    needed and an impostor on the path cannot complete the handshake.
+ *  - [RemoteTlsMode.Plain] exists for a loopback or trusted-LAN first test, and the UI warns.
  */
 class RemoteDesktopClient(
     private val store: PairedDesktopStore,
@@ -91,9 +102,36 @@ class RemoteDesktopClient(
     private val running = AtomicBoolean(false)
     private val pendingReplies = ConcurrentHashMap<String, (RemoteMessage) -> Unit>()
 
+    /** A download in progress, so chunks can be collected until the final one arrives. */
+    private class DownloadTarget(var transferId: String?, val path: String) {
+        val bytes = java.io.ByteArrayOutputStream()
+        var done = false
+    }
+
+    @Volatile
+    private var downloadTarget: DownloadTarget? = null
+
+    /** Called with the full bytes of a completed download, and the path it came from. */
+    @Volatile
+    var onDownloadComplete: (path: String, bytes: ByteArray) -> Unit = { _, _ -> }
+
+    /** Called after each chunk so the UI can show progress on a large transfer. */
+    @Volatile
+    var onDownloadProgress: (path: String, bytesReceived: Long) -> Unit = { _, _ -> }
+
     @Volatile
     var state: DesktopSessionState = DesktopSessionState.Idle
         private set
+
+    /**
+     * How this client reaches the desktop. Set before [connect].
+     *
+     * A paired desktop carries the certificate fingerprint recorded at pairing, so the screen
+     * switches this to [RemoteTlsMode.Pinned] automatically; a first pairing uses whatever the user
+     * was shown on the desktop.
+     */
+    @Volatile
+    var tlsMode: RemoteTlsMode = RemoteTlsMode.Plain
 
     /** The device id this phone presents; stable across connections so the desktop recognises it. */
     val deviceId: String = store.load().firstOrNull()?.deviceId ?: UUID.randomUUID().toString()
@@ -112,7 +150,7 @@ class RemoteDesktopClient(
     ): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             onState(DesktopSessionState.Connecting.also { state = it })
-            val sock = Socket().apply { connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS) }
+            val sock = RemoteTransport.open(host, port, tlsMode)
             socket = sock
             val inStream = sock.getInputStream()
             val outStream = sock.getOutputStream()
@@ -165,7 +203,13 @@ class RemoteDesktopClient(
         // Both sides derive the same secret from the code and both nonces; the server nonce
         // travelled in its hello acknowledgement.
         val secret = RemoteCrypto.deriveSecret(code, clientNonce, ack.nonce)
-        store.save(PairedDesktop(host, port, deviceId, ack.serverName, secret))
+        val fingerprint = (socket as? javax.net.ssl.SSLSocket)?.let { tls ->
+            runCatching {
+                tls.session.peerCertificates.firstOrNull()
+                    ?.let { fingerprintOf(it as java.security.cert.X509Certificate) }
+            }.getOrNull()
+        }
+        store.save(PairedDesktop(host, port, deviceId, ack.serverName, secret, fingerprint))
         return true
     }
 
@@ -201,16 +245,43 @@ class RemoteDesktopClient(
                     if (message is HeartbeatAck) {
                         pendingReplies.remove("heartbeat")?.invoke(message)
                     }
+                    if (message is FileDownloadBegin) {
+                        // The agent chooses the transfer id, so the pending download adopts it here.
+                        downloadTarget?.transferId = message.transferId
+                    }
                     onMessage(message)
                 }
-                RemoteProtocol.FRAME_FILE_CHUNK -> onMessage(
-                    ProtocolError("file_chunk", "File transfer is handled by the transfer helper")
-                )
+                RemoteProtocol.FRAME_FILE_CHUNK -> {
+                    val chunk = FileChunkCodec.decode(frame)
+                    onIncomingChunk(chunk)
+                }
             }
         }
         running.set(false)
         val reason = "The desktop closed the connection"
         onState(DesktopSessionState.Closed(reason).also { state = it })
+    }
+
+    /**
+     * Accumulates an incoming download.
+     *
+     * The agent sends a [FileDownloadBegin] with the size, then chunks, with the final chunk marked
+     * `last`. The bytes are held until complete so a truncated transfer is never handed on as if it
+     * were the whole file.
+     */
+    private fun onIncomingChunk(chunk: FileChunkCodec.FileChunk) {
+        val target = downloadTarget ?: return
+        if (target.transferId != null && target.transferId != chunk.transferId) return
+        synchronized(target) {
+            if (target.done) return
+            target.bytes.write(chunk.data)
+            onDownloadProgress(target.path, target.bytes.size().toLong())
+            if (chunk.last) {
+                target.done = true
+                downloadTarget = null
+                onDownloadComplete(target.path, target.bytes.toByteArray())
+            }
+        }
     }
 
     // ---- Commands ----
@@ -227,11 +298,75 @@ class RemoteDesktopClient(
 
     fun listFiles(path: String) = write(FileListRequest(path))
 
-    fun downloadFile(path: String) = write(FileDownloadRequest(path))
+    /**
+     * Ask for a file. The bytes arrive as chunks and are delivered to [onDownloadComplete] once the
+     * final chunk lands; a failed transfer reports through [FileTransferEnd] on [onMessage].
+     */
+    fun downloadFile(path: String) {
+        downloadTarget = DownloadTarget(transferId = null, path = path)
+        write(FileDownloadRequest(path))
+    }
 
-    fun uploadFile(path: String, size: Long, transferId: String) = write(FileUploadBegin(path, size, transferId))
+    /**
+     * Upload [bytes] to the desktop.
+     *
+     * The agent opens the destination on [FileUploadBegin], then accepts chunks until the final one
+     * is marked. Chunks are sent from the caller's dispatcher so a large file does not stall the
+     * frame listener.
+     */
+    suspend fun uploadFile(
+        path: String,
+        bytes: ByteArray,
+        transferId: String = UUID.randomUUID().toString().take(16),
+        chunkSize: Int = 128 * 1024,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (bytes.size > MAX_UPLOAD_BYTES) {
+            return@withContext Result.failure(
+                IllegalArgumentException("The file is larger than the ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB limit"),
+            )
+        }
+        write(FileUploadBegin(path, bytes.size.toLong(), transferId))
+        var offset = 0
+        var sequence = 0
+        while (offset < bytes.size) {
+            val end = minOf(offset + chunkSize, bytes.size)
+            val last = end == bytes.size
+            val slice = bytes.copyOfRange(offset, end)
+            val stream = output ?: return@withContext Result.failure(
+                IllegalStateException("The desktop connection closed during the upload"),
+            )
+            synchronized(this@RemoteDesktopClient) {
+                FrameCodec.write(
+                    stream,
+                    FileChunkCodec.encode(FileChunkCodec.FileChunk(transferId, sequence++, last, slice)),
+                )
+            }
+            offset = end
+        }
+        if (bytes.isEmpty()) {
+            val stream = output ?: return@withContext Result.failure(
+                IllegalStateException("The desktop connection closed during the upload"),
+            )
+            synchronized(this@RemoteDesktopClient) {
+                FrameCodec.write(
+                    stream,
+                    FileChunkCodec.encode(FileChunkCodec.FileChunk(transferId, 0, true, ByteArray(0))),
+                )
+            }
+        }
+        Result.success(Unit)
+    }
 
     fun sendHeartbeat() = write(Heartbeat(clock(), clock()))
+
+    /** Push this phone's clipboard to the desktop. Oversized text is refused, not truncated. */
+    fun setClipboard(text: String): Boolean {
+        if (text.length > ClipboardSet.CLIPBOARD_TEXT_LIMIT) return false
+        write(ClipboardSet(text))
+        return true
+    }
+
+    fun requestClipboard() = write(ClipboardGet())
 
     /** Revoke this desktop on the phone side; the desktop is told so it can forget the pairing. */
     fun revoke() {
@@ -268,5 +403,7 @@ class RemoteDesktopClient(
 
     private companion object {
         const val CONNECT_TIMEOUT_MS = 10_000
+        /** A phone-side ceiling, so a mistaken selection cannot exhaust memory or the desktop disk. */
+        const val MAX_UPLOAD_BYTES = 512L * 1024 * 1024
     }
 }

@@ -196,6 +196,21 @@ class DesktopSession(
             beginUpload(message)
             null
         }
+        is ClipboardGet -> {
+            val text = controller.readClipboard()
+            send(ClipboardValue(text.orEmpty(), text != null))
+            null
+        }
+        is ClipboardSet -> {
+            if (!config.allowInput) {
+                send(ProtocolError("clipboard_disabled", "clipboard sync is disabled on this agent"))
+            } else if (message.text.length > ClipboardSet.CLIPBOARD_TEXT_LIMIT) {
+                send(ProtocolError("clipboard_too_large", "clipboard text exceeds ${ClipboardSet.CLIPBOARD_TEXT_LIMIT} characters"))
+            } else {
+                controller.writeClipboard(message.text)
+            }
+            null
+        }
         is ProtocolError -> SessionOutcome(pairedClient?.deviceId, "client error ${message.code}")
         else -> {
             send(ProtocolError("unexpected_message", "Message ${message::class.simpleName} is not valid after authentication"))
