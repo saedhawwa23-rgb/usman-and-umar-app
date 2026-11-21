@@ -2,6 +2,32 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.12.3] - 2026-11-21
+
+### Fixed
+
+- **Remote-desktop file transfer never worked** - the client discarded every incoming
+  `FRAME_FILE_CHUNK`, so uploads and downloads both completed without moving a byte. Downloads now
+  accumulate chunks and uploads stream out, and completion is reported through a real callback
+  instead of being assumed.
+- **TLS pinning was never exercised by a real handshake** - the pinning tests now run against a
+  genuine `SSLServerSocket`, so a wrong certificate actually fails the connection.
+
+### Changed
+
+- **The TLS test identity is generated per run.** A PKCS12 keystore holding a private key was
+  committed as a test resource; it is gone, and no key material is stored in the repository.
+
+### Tests
+
+- The transfer integration test moves 400 KB across the 128 KB chunk boundary and compares the
+  bytes against the file the agent wrote to disk, rather than asserting on a callback count.
+- Fixed a suite-order bug: Robolectric leaves JVM-wide reflection state behind, which made the
+  JDK's own TLS handshake fail with `module java.base does not "opens java.net"` whenever the full
+  suite ran. Opening `java.net` for the test JVM makes socket and TLS tests order-independent.
+- The transfer test closes its connection in a `finally` block. A blocking socket read cannot be
+  cancelled, so an assertion failure used to hang the suite indefinitely instead of failing it.
+
 ## [3.12.2] - 2026-11-21
 
 ### Fixed
