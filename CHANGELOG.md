@@ -2,7 +2,7 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
-## [Unreleased] - 2026-11-21
+## [3.12.2] - 2026-11-21
 
 ### Fixed
 

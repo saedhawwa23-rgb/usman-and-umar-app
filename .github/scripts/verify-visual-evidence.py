@@ -82,7 +82,7 @@ def verify(directory: Path, version: str, screens: tuple[str, ...], min_width: i
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--directory", required=True, type=Path)
-    parser.add_argument("--version", required=True, help="expected version label, e.g. 3.12.1")
+    parser.add_argument("--version", required=True, help="expected version label, e.g. 3.12.2")
     parser.add_argument("--screens", required=True, help="comma-separated screen names")
     parser.add_argument("--min-width", type=int, default=200)
     parser.add_argument("--min-height", type=int, default=200)
