@@ -224,8 +224,8 @@ object ActionSchema {
         ),
         ActionDefinition(
             name = "RECORD_SCREEN",
-            description = "Records the screen for a duration",
-            params = listOf(ParamDefinition("duration", ParamType.STRING, false, "Duration in seconds", defaultValue = "30")),
+            description = "Screen recording is unavailable in this build: no MediaProjection capture service is bundled",
+            params = emptyList(),
             examples = listOf("record screen", "screen record"),
             category = ActionCategory.SYSTEM
         ),

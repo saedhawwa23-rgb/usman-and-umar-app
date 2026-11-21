@@ -2,6 +2,18 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [Unreleased] - 2026-11-21
+
+### Fixed
+
+- **`RECORD_SCREEN` no longer fakes success** - the action returned
+  `ActionResult(true, "Screen recording started (simulated)")` without recording anything. It now
+  returns a failure that names the missing capability, because the app bundles no MediaProjection
+  capture service. Its `ActionDefinition` also advertised a `duration` parameter that no code read;
+  the parameter list is now empty, so the schema matches what the action can do.
+- **`RecordScreenActionTest`** - two tests pin the honest behaviour. Both fail against the previous
+  implementation and pass against the fix, so the fake cannot return unnoticed.
+
 ## [3.12.1] - 2026-11-12
 
 The Web AI platform center becomes verifiable evidence rather than a claim: both the on-device

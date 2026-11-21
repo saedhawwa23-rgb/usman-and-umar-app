@@ -751,8 +751,12 @@ class SystemActions @Inject constructor(
     private class RecordScreenAction : Action {
         override val name: String = "RECORD_SCREEN"
         override suspend fun execute(params: Map<String, String>, context: Context): ActionResult {
-            val start = params["start"]?.toBoolean() ?: true
-            return ActionResult(true, if (start) "Screen recording started (simulated)" else "Screen recording stopped (simulated)", null)
+            // The app has no MediaProjection capture service, so this action cannot
+            // record anything. Report that plainly instead of claiming success.
+            return ActionResult.Failure(
+                errorMsg = "Screen recording is not available in this build. No MediaProjection capture " +
+                    "service is bundled, so nothing was recorded."
+            )
         }
     }
 
