@@ -78,6 +78,16 @@ class InternetGatewayController(private val context: Context) {
 
         val current = _state.value
         val allowed = GatewayConfig.allowedIps(current.mode == Mode.FULL, current.splitRoutes)
+        // An empty route set would build a tunnel that carries nothing while the UI showed it up.
+        // That is the "connected but useless" state this feature exists to avoid.
+        if (allowed.isEmpty()) {
+            _state.value = current.copy(
+                running = false,
+                error = "Split mode has no destinations to route. Add at least one network, or " +
+                    "switch on \"Route everything\" to send all traffic through the computer.",
+            )
+            return false
+        }
         Log.i(TAG, "starting gateway endpoint=${peer.endpoint} mode=${current.mode} routes=${allowed.size}")
 
         _state.value = current.copy(

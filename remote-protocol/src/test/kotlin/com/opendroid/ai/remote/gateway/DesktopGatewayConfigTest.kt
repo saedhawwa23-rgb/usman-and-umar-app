@@ -56,4 +56,24 @@ class DesktopGatewayConfigTest {
             .removePrefix("PrivateKey = ").trim()
         assertFalse("private key leaked in toString", p.toString().contains(privateKey))
     }
+
+    @Test
+    fun `the desktop config starts a resolver on the address the phone uses for DNS`() {
+        // The phone renders "DNS = 10.66.0.1". If nothing serves DNS there, every lookup fails
+        // while the tunnel still reports itself up.
+        val config = DesktopGatewayConfig.provision(phonePublicKey = null).configText
+        assertTrue(
+            "no resolver is started on the tunnel DNS address",
+            config.contains("PostUp = dnsmasq") &&
+                config.contains(GatewayConfig.DESKTOP_DNS),
+        )
+        assertTrue("the resolver is never stopped", config.contains("PostDown = "))
+    }
+
+    @Test
+    fun `the desktop config tells the owner to enable forwarding and NAT`() {
+        val config = DesktopGatewayConfig.provision(phonePublicKey = null).configText
+        assertTrue("forwarding hint missing", config.contains("ip_forward=1"))
+        assertTrue("NAT hint missing", config.contains("masquerade"))
+    }
 }
