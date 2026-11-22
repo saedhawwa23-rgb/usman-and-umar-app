@@ -13,6 +13,7 @@ import com.opendroid.ai.core.remote.RemoteControlCoordinator
 import com.opendroid.ai.core.remote.RemoteRisk
 import com.opendroid.ai.core.remote.RemoteSession
 import com.opendroid.ai.core.remote.RemoteTlsMode
+import com.opendroid.ai.core.remote.gateway.ExitIpVerifier
 import com.opendroid.ai.core.remote.RemoteTransportController
 import com.opendroid.ai.remote.protocol.AppEntry
 import com.opendroid.ai.remote.protocol.AppLaunchResult
@@ -48,6 +49,7 @@ class RemoteControlViewModel @Inject constructor(
     private val internetSharing: com.opendroid.ai.core.remote.InternetSharingController,
     private val gateway: com.opendroid.ai.core.remote.gateway.InternetGatewayController,
     private val gatewayKeys: com.opendroid.ai.core.remote.gateway.GatewayKeyStore,
+    private val exitIpVerifier: com.opendroid.ai.core.remote.gateway.ExitIpVerifier,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
 
@@ -103,6 +105,12 @@ class RemoteControlViewModel @Inject constructor(
         val gatewayNeedsPermission: Boolean = false,
         /** This phone's public key, shown so it can be pasted into the desktop's config. */
         val gatewayPhonePublicKey: String? = null,
+        /** Exit IP measured with the tunnel down, or null before a check has run. */
+        val gatewayExitIpBefore: String? = null,
+        /** Exit IP measured with the tunnel up; differs from [gatewayExitIpBefore] when routing works. */
+        val gatewayExitIpAfter: String? = null,
+        val gatewayExitIpError: String? = null,
+        val gatewayExitIpChecking: Boolean = false,
     )
 
     private val mutableState = MutableStateFlow(
@@ -281,6 +289,9 @@ class RemoteControlViewModel @Inject constructor(
             }
         }
 
+        // A baseline is only meaningful while the tunnel is down, so take it before starting.
+        if (mutableState.value.gatewayExitIpBefore == null) captureGatewayExitBaseline()
+
         val started = gateway.start(peer, desktop.serverName)
         val gs = gateway.state.value
         mutableState.value = mutableState.value.copy(
@@ -313,6 +324,68 @@ class RemoteControlViewModel @Inject constructor(
             gatewayNeedsPermission = false,
         )
         setMessage("Gateway is off. All apps use this phone's own connection again.", isError = false)
+    }
+
+    /**
+     * Record the exit IP with the tunnel down, so a later reading can be compared against it.
+     *
+     * Without a baseline a changed address proves nothing.
+     */
+    fun captureGatewayExitBaseline() {
+        if (mutableState.value.gatewayExitIpChecking) return
+        mutableState.value = mutableState.value.copy(
+            gatewayExitIpChecking = true,
+            gatewayExitIpError = null,
+            gatewayExitIpAfter = null,
+        )
+        viewModelScope.launch {
+            when (val result = exitIpVerifier.fetch()) {
+                is ExitIpVerifier.Result.Success -> mutableState.value = mutableState.value.copy(
+                    gatewayExitIpBefore = result.ip,
+                    gatewayExitIpChecking = false,
+                )
+                is ExitIpVerifier.Result.Failure -> mutableState.value = mutableState.value.copy(
+                    gatewayExitIpError = result.reason,
+                    gatewayExitIpChecking = false,
+                )
+            }
+        }
+    }
+
+    /**
+     * Re-read the exit IP with the tunnel up and compare it with the baseline.
+     *
+     * A tunnel that is up and handshaking still routes nothing if the desktop does not forward, so
+     * this is the only check that answers "does my traffic actually leave through the computer".
+     */
+    fun verifyGatewayExit() {
+        if (mutableState.value.gatewayExitIpChecking) return
+        mutableState.value = mutableState.value.copy(gatewayExitIpChecking = true, gatewayExitIpError = null)
+        viewModelScope.launch {
+            when (val result = exitIpVerifier.fetch()) {
+                is ExitIpVerifier.Result.Success -> {
+                    val before = mutableState.value.gatewayExitIpBefore
+                    val problem = when {
+                        before == null ->
+                            "No baseline was recorded before the tunnel started, so the address cannot " +
+                                "be compared. Stop the gateway, record the baseline, then try again."
+                        !ExitIpVerifier.changed(before, result.ip) ->
+                            "The exit address is unchanged, so traffic is still leaving through this " +
+                                "phone. The tunnel is up but the computer is not forwarding it."
+                        else -> null
+                    }
+                    mutableState.value = mutableState.value.copy(
+                        gatewayExitIpAfter = result.ip,
+                        gatewayExitIpChecking = false,
+                        gatewayExitIpError = problem,
+                    )
+                }
+                is ExitIpVerifier.Result.Failure -> mutableState.value = mutableState.value.copy(
+                    gatewayExitIpError = result.reason,
+                    gatewayExitIpChecking = false,
+                )
+            }
+        }
     }
 
     /** Pull live tunnel counters for the status card. */

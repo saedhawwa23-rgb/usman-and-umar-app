@@ -19,18 +19,31 @@ class GatewayConfigTest {
     }
 
     @Test
-    fun `split tunnel keeps loopback and the tunnel subnet local`() {
+    fun `split tunnel routes only what was asked for`() {
         val ips = GatewayConfig.allowedIps(fullTunnel = false, extraRoutes = listOf("1.1.1.1/32"))
-        assertTrue("requested route missing", ips.contains("1.1.1.1/32"))
-        assertTrue("loopback must stay local", ips.contains("127.0.0.0/8"))
-        assertTrue("tunnel subnet must stay local", ips.contains("10.66.0.0/24"))
-        assertFalse("split tunnel must not claim the default route", ips.contains("0.0.0.0/0"))
+        assertEquals(listOf("1.1.1.1/32"), ips)
     }
 
     @Test
-    fun `split tunnel with no routes still protects the local ranges`() {
-        val ips = GatewayConfig.allowedIps(fullTunnel = false)
-        assertEquals(GatewayConfig.SPLIT_TUNNEL_EXCLUDED.toSet(), ips.toSet())
+    fun `split tunnel never routes local or tunnel ranges through the tunnel`() {
+        // AllowedIPs is the route table, so anything listed here is sent through the tunnel.
+        // Loopback and the tunnel's own subnet must stay out of it or local traffic breaks.
+        val ips = GatewayConfig.allowedIps(
+            fullTunnel = false,
+            extraRoutes = listOf("127.0.0.0/8", "10.66.0.0/24", "::1/128", "8.8.8.8/32"),
+        )
+        assertEquals(listOf("8.8.8.8/32"), ips)
+    }
+
+    @Test
+    fun `split tunnel with no routes carries nothing`() {
+        assertTrue(GatewayConfig.allowedIps(fullTunnel = false).isEmpty())
+    }
+
+    @Test
+    fun `split tunnel does not claim the default route`() {
+        val ips = GatewayConfig.allowedIps(fullTunnel = false, extraRoutes = listOf("8.8.8.8/32"))
+        assertFalse("split tunnel must not claim the default route", ips.contains("0.0.0.0/0"))
     }
 
     @Test

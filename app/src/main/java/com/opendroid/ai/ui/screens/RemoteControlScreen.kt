@@ -654,6 +654,25 @@ private fun GatewayCard(
                     modifier = Modifier.weight(1f),
                 )
             }
+            // A tunnel can be "up" and still route nothing. Only a changed exit address shows that
+            // the phone's traffic actually left through the computer.
+            SectionHeading("Exit check", subtitle = "Proves traffic leaves through the computer")
+            Text(
+                "Before: ${state.gatewayExitIpBefore ?: "not recorded"}",
+                color = colors.textSecondary, fontSize = 11.sp,
+            )
+            Text(
+                "Now: ${state.gatewayExitIpAfter ?: "not checked yet"}",
+                color = if (state.gatewayExitIpError == null) colors.electricBlue else colors.accentRed,
+                fontSize = 11.sp,
+            )
+            state.gatewayExitIpError?.let { Text(it, color = colors.accentRed, fontSize = 11.sp) }
+            BrandOutlineButton(
+                text = if (state.gatewayExitIpChecking) "Checking…" else "Verify exit address",
+                onClick = { viewModel.verifyGatewayExit() },
+                enabled = !state.gatewayExitIpChecking,
+                modifier = Modifier.fillMaxWidth(),
+            )
         } else {
             state.gatewayError?.let { Text(it, color = colors.accentRed, fontSize = 12.sp) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

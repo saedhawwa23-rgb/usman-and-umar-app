@@ -101,7 +101,14 @@ class InternetSharingTest {
             assertTrue("the origin must have received the request", reply.contains("ORIGIN-SAW: GET /through-proxy"))
             assertTrue("the reply must arrive intact", reply.contains("200 OK"))
         }
-        val stats = proxy.stats()
+        // The upstream counter is bumped by the pump thread after the client already has the
+        // reply, so a single sample can race it. Poll briefly instead of asserting instantly.
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+        var stats = proxy.stats()
+        while (stats.bytesFromPhone <= 0 && System.nanoTime() < deadline) {
+            Thread.sleep(10)
+            stats = proxy.stats()
+        }
         assertEquals("exactly one tunnel should have been opened", 1, stats.totalOpened)
         assertTrue("bytes from the phone must be counted", stats.bytesFromPhone > 0)
         assertTrue("bytes back to the phone must be counted", stats.bytesToPhone > 0)

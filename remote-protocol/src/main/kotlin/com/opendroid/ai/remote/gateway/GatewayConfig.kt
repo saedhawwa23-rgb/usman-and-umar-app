@@ -29,11 +29,12 @@ object GatewayConfig {
     val FULL_TUNNEL_ALLOWED_IPS: List<String> = listOf("0.0.0.0/0", "::/0")
 
     /**
-     * Loopback and the private ranges stay on the phone.
+     * Ranges that must never be routed into the tunnel in split mode.
      *
-     * Without this, `adb`-style local services and the phone's own hotspot clients would be routed
-     * into the tunnel and stop working. The tunnel's own subnet is excluded too so WireGuard's
-     * outer packets do not try to go through the tunnel they carry.
+     * WireGuard's `AllowedIPs` is the route table, not an exclusion list: a range listed there is
+     * sent *through* the tunnel. Listing loopback or the tunnel's own subnet would therefore push
+     * local traffic into the tunnel and break it, so these are filtered out of the split set
+     * instead of being added to it.
      */
     val SPLIT_TUNNEL_EXCLUDED: List<String> = listOf(
         "127.0.0.0/8",
@@ -48,11 +49,16 @@ object GatewayConfig {
      *
      * @param fullTunnel route everything through the desktop.
      * @param extraRoutes caller-supplied destinations to add in split mode, already in CIDR form.
+     * @return routes to send through the tunnel. Split mode returns only the caller's routes, minus
+     *   any that would break local traffic; it can be empty, which means the tunnel would carry
+     *   nothing and the caller should refuse to start it.
      */
     fun allowedIps(fullTunnel: Boolean, extraRoutes: List<String> = emptyList()): List<String> {
         if (fullTunnel) return FULL_TUNNEL_ALLOWED_IPS
-        val routes = extraRoutes.map { it.trim() }.filter { it.isNotEmpty() }
-        return (routes + SPLIT_TUNNEL_EXCLUDED).distinct()
+        return extraRoutes
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && it !in SPLIT_TUNNEL_EXCLUDED }
+            .distinct()
     }
 
     /**

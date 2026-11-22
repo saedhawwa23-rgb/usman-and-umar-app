@@ -340,6 +340,11 @@ object AppModule {
     ): com.opendroid.ai.core.remote.gateway.InternetGatewayController =
         com.opendroid.ai.core.remote.gateway.InternetGatewayController(context.applicationContext)
 
+    @Provides
+    @Singleton
+    fun provideExitIpVerifier(): com.opendroid.ai.core.remote.gateway.ExitIpVerifier =
+        com.opendroid.ai.core.remote.gateway.ExitIpVerifier()
+
     /**
      * Gateway credentials get their own preferences file and Keystore alias so the WireGuard
      * private key cannot be confused with, or overwritten by, the pairing and authorization records.
