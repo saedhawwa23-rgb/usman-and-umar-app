@@ -37,6 +37,43 @@ All notable changes to USMAN AND UMAR are recorded here.
   the Android proxy path and the agent's `java.awt` screen capture were not exercised end to end.
   The agent also needs a real desktop to run at all.
 
+### Full-tunnel internet gateway (WireGuard)
+
+Adds a real `VpnService` tunnel on top of the existing SOCKS5 sharing, so the phone can route
+**all** its traffic through the paired computer instead of only apps pointed at the proxy.
+
+- **Desktop publishes a WireGuard identity.** The agent generates an X25519 key pair on first run
+  and stores the private half in `agent-gateway.key` (`0600` beside the client store). Only the
+  public key is printed at startup and sent to the phone in `HelloAck`. It also writes a
+  `agent-gateway.conf` `wg-quick` template for the owner to load into the desktop's own WireGuard
+  client; the app never enables NAT or forwarding on the desktop itself.
+- **Phone key storage.** `GatewayKeyStore` keeps the phone's private key in the existing
+  Keystore-backed secret store, under its own alias and preferences file. There is no plaintext
+  fallback: if the Keystore is unavailable the gateway refuses to start rather than writing the key
+  to disk.
+- **`GatewayTunnelService`** is a real `VpnService` hosting the WireGuard Go backend. Full tunnel
+  uses `0.0.0.0/0, ::/0` with DNS pinned to the desktop; split tunnel narrows `AllowedIPs`.
+- **Kill switch.** `engageKillSwitch()` now stops the gateway as well as every other remote path,
+  and the tunnel is torn down rather than left half-up, so traffic never silently falls back to the
+  phone's own connection.
+- **X25519 in-house.** `remote-protocol` carries an RFC 7748 implementation with the published test
+  vectors, so the desktop half needs no extra dependency.
+
+### Fixed
+
+- **A gateway peer keyed to a previous computer was reused.** `startGateway` loaded whatever peer
+  was stored, even when the selected desktop had a different public key or endpoint. WireGuard
+  reports such a mismatch only as a handshake that never completes, so the UI showed "starting"
+  forever. The stored peer is now reused only when its desktop key and endpoint still match.
+
+### Notes
+
+- Not verified here: anything requiring a phone. `VpnService` consent, the TUN device, real packet
+  flow, and kill-switch behaviour under a live tunnel all need a physical device. The desktop half
+  also needs a real WireGuard client and NAT rules, which are the owner's to configure.
+- The `docs/remote/remote-internet-status.md` "BLOCKED" note predates this change and is updated
+  accordingly.
+
 ## [3.12.3] - 2026-11-21
 
 ### Fixed

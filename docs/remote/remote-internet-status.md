@@ -1,82 +1,59 @@
 # Remote internet through the school desktop — status and design
 
-This is the one part of the directive that is **BLOCKED**, and it is blocked for a reason that no
-amount of app code can fix. This document records exactly what exists, what does not, and what a
-working implementation would require. Nothing here is a mockup: there is no VPN code in the app,
-because a VPN that does not actually route traffic is worse than none.
+This document used to say the feature was **BLOCKED** because "there is no VPN code in the app".
+That is no longer true: as of 3.13.0 the app ships a real `VpnService` gateway. This page now
+records what exists, what it still depends on, and what has not been verified.
 
-## Why it is blocked
+## What exists now
 
-Three independent things must all be true for the phone's traffic to leave through the school
-network. Only the first is under our control.
-
-| Requirement | State | Notes |
+| Part | State | Where |
 |---|---|---|
-| Android side: a `VpnService` that captures packets and forwards them to the desktop | **NOT IMPLEMENTED** | No `VpnService`, no `BIND_VPN_SERVICE`, no `android.net.VpnService` permission exists in the manifest. This is real work, not a small change. |
-| Desktop side: an internet gateway that accepts forwarded packets, NATs them, and returns replies | **NOT IMPLEMENTED** | Requires WireGuard or an equivalent tunnel plus `iptables`/`nftables` NAT rules with administrator rights on the desktop. |
-| Permission to use the school network this way | **UNKNOWN, NOT OURS TO GRANT** | Routing a phone's traffic through a school machine is the school's decision. It needs the administrator's approval and must comply with the school's acceptable-use policy. |
+| Phone: `VpnService` + WireGuard Go backend | **IMPLEMENTED, not device-verified** | `app/.../core/remote/gateway/GatewayTunnelService.kt` |
+| Phone: encrypted peer/private-key storage | **IMPLEMENTED, unit-tested** | `app/.../core/remote/gateway/GatewayKeyStore.kt` |
+| Phone: full/split tunnel switch, kill switch | **IMPLEMENTED, unit-tested** | `RemoteControlViewModel.startGateway/stopGateway`, `engageKillSwitch` |
+| Desktop: publishes its WireGuard public key | **IMPLEMENTED, unit-tested** | `desktop-agent/.../GatewayIdentityFile.kt`, `HelloAck` |
+| Desktop: `wg-quick` config template | **IMPLEMENTED** (template only) | `remote-protocol/.../gateway/DesktopGatewayConfig.kt` |
+| Desktop: actually NATs the phone's traffic | **NOT DONE — owner's step** | needs `iptables`/`nftables` and admin rights |
+| Permission to use the school network this way | **STILL NOT OURS TO GRANT** | see below |
 
-The third item is the decisive one. Even a technically perfect tunnel would be doing something the
-school may prohibit, and the directive itself says to respect firewall, administrator and school
-network permissions. I cannot verify those permissions, so I am not shipping a tunnel that assumes
-them.
+## What the app does, precisely
 
-## What a correct implementation looks like
+The phone half is complete: it establishes a TUN device, runs the WireGuard userspace stack against
+it, routes `0.0.0.0/0` and `::/0` (full tunnel) or a narrower `AllowedIPs` list (split tunnel),
+pins DNS to the desktop's tunnel address, and tears the tunnel down rather than leaving it half-up.
 
-This is the design I would build, with the honest scope of each part.
+The desktop half is deliberately partial. The agent generates the key pair, advertises the public
+key to the phone, and writes a `wg-quick` config the owner can load into the desktop's own
+WireGuard client. It does **not** run `iptables`, enable IP forwarding, or reconfigure the machine's
+network — that needs administrator rights the app does not have and should not take on its own.
 
+So the remaining desktop work is a one-time manual step:
+
+```bash
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo iptables -t nat -A POSTROUTING -o <uplink> -j MASQUERADE
+sudo wg-quick up ./agent-gateway.conf
 ```
-   phone (Android)                    school desktop                    internet
-   +--------------+    tunnel        +----------------+   NAT        +---------+
-   | VpnService   |  (WireGuard,     | wg0 interface  |  (iptables)  |  ...    |
-   | TUN device   |  UDP 51820)      | IP forwarding  |              |         |
-   | packet loop  | <==============> | DNS forwarder  | <==========> |         |
-   +--------------+                  +----------------+              +---------+
-```
 
-1. **Transport: WireGuard.** Chosen because it is open source, small, auditable, and available for
-   both Android (the official app's kernel/userspace code) and every desktop OS. The peer keys are
-   generated per pairing, exactly like the remote-control pairing already implemented, and the
-   desktop's public key is the only thing the phone needs beyond its address.
+Until that is done, the tunnel comes up and the phone routes traffic into it, but nothing forwards
+those packets onward. That failure is silent at the network level, which is why the desktop step is
+called out here rather than left implicit.
 
-2. **Android side.** A `VpnService` that calls `Builder.addRoute("0.0.0.0", 0)` for a full tunnel or
-   specific prefixes for a split tunnel, sets `addDnsServer(...)` to the desktop's forwarder,
-   establishes the TUN device, and runs the WireGuard userspace stack against it. `setBlocking(true)`
-   and a fail-closed design: if the tunnel drops, traffic stops rather than falling back to the
-   carrier network, which is what leak protection means.
+## The permission question is unchanged
 
-3. **Desktop side.** `wg-quick` brings up `wg0` with the phone as an allowed peer. Then:
-   - `net.ipv4.ip_forward=1` to forward packets.
-   - `iptables -t nat -A POSTROUTING -o <uplink> -j MASQUERADE` to NAT them out.
-   - A DNS forwarder bound to the tunnel address, so DNS goes through the tunnel and cannot leak.
-   - `iptables` forwarding rules that accept only the tunnel interface and drop everything else.
+Routing a phone's traffic through a school machine is the school's decision, not the app's. It needs
+the network administrator's approval and must comply with the acceptable-use policy. The app
+implements the mechanism; it cannot grant the permission, and shipping the mechanism is not a claim
+that using it is allowed.
 
-4. **Full tunnel vs split tunnel.** Full tunnel is `AllowedIPs = 0.0.0.0/0` on the phone and
-   `addRoute("0.0.0.0", 0)`. Split tunnel is a narrower `AllowedIPs` list plus matching routes, so
-   only chosen destinations use the school network.
+## What has not been verified
 
-5. **Leak protection and monitoring.** DNS is forced to the tunnel address; if the tunnel is down the
-   VPN is torn down rather than left half-configured. The app would show the tunnel state, the bytes
-   transferred, and the exit address, and it would verify the exit by fetching a public address
-   service through the tunnel and comparing it to the desktop's own external address.
+No physical device was available while this was written. Unverified:
 
-## Why I did not write the app half anyway
+- `VpnService.prepare()` consent and the TUN device on a real phone.
+- Whether packets actually traverse the tunnel end to end.
+- Kill-switch behaviour while a tunnel is live.
+- The desktop's `wg-quick` template against a real WireGuard client.
 
-A `VpnService` that builds a TUN device but has no gateway to send packets to is a mockup that would
-show "connected" while routing nothing. The directive explicitly forbids simulated success. The
-desktop gateway also cannot be tested here: this container has no second network path, no
-administrator rights over a school network, and no phone. Every claim about "traffic actually exits
-through the school network" would be unverifiable, so I make none.
-
-## What I need to proceed
-
-1. Written confirmation from the school's network administrator that routing the phone's traffic
-   through the desktop is permitted, with any conditions (which ports, which subnets, whether DNS is
-   allowed).
-2. A decision on full tunnel or split tunnel, and which destinations the split tunnel should carry.
-3. The desktop's platform (Windows, Linux or macOS), because the gateway setup differs. Windows
-   would need the WireGuard for Windows client plus `New-NetNat` or an equivalent; Linux uses the
-   `iptables` rules above.
-
-With those, the Android `VpnService` and the desktop gateway are both buildable and testable. Until
-then this item stays BLOCKED, not partially done.
+Everything in the "IMPLEMENTED, unit-tested" rows above is covered by unit tests that run in CI;
+none of it has been exercised on hardware.

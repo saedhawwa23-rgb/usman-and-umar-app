@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -31,7 +32,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.opendroid.ai.core.remote.PairedDesktop
 import com.opendroid.ai.core.remote.RemoteSessionState
 import com.opendroid.ai.remote.protocol.FileEntry
 import com.opendroid.ai.ui.components.BrandOutlineButton
@@ -565,6 +569,142 @@ private fun RemoteGatewayTab(
  * The proxy is loopback only, so the address shown here cannot be reached from the network the
  * phone is on. That is deliberate: it means only this phone can use the tunnel.
  */
+/**
+ * Full-tunnel gateway controls.
+ *
+ * This is the mode that makes every app leave through the computer rather than only a browser
+ * pointed at a proxy. It needs Android's VPN consent, so the first attempt launches the system
+ * dialog and the same button retries afterwards.
+ */
+@Composable
+private fun GatewayCard(
+    state: RemoteControlViewModel.UiState,
+    viewModel: RemoteControlViewModel,
+    desktop: PairedDesktop?,
+) {
+    val colors = AppTheme.colors
+    val consent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            desktop?.let { viewModel.startGateway(it, state.gatewayFullTunnel) }
+        } else {
+            viewModel.clearGatewayError()
+        }
+    }
+
+    PlatformCard(
+        title = "Send all traffic through the computer",
+        subtitle = "Full-tunnel mode for every app, not just a browser",
+        status = if (state.gatewayRunning) "On" to PlatformStatus.HEALTHY else "Off" to PlatformStatus.IDLE,
+    ) {
+        Text(
+            "With this on, Android routes every app through a private tunnel to the paired " +
+                "computer, which forwards it to the internet. Use it when this phone has no usable " +
+                "connection of its own.",
+            color = colors.textSecondary, fontSize = 12.sp,
+        )
+
+        if (desktop == null) {
+            Text(
+                "Pair a computer in the Gateway tab first.",
+                color = colors.textSecondary, fontSize = 12.sp,
+            )
+            return@PlatformCard
+        }
+
+        if (desktop.gatewayPublicKey.isNullOrBlank()) {
+            Text(
+                "This computer has not offered a gateway key yet. The browser proxy above still " +
+                    "works; full-tunnel mode needs the updated desktop agent.",
+                color = colors.accentRed, fontSize = 12.sp,
+            )
+            return@PlatformCard
+        }
+
+        if (state.gatewayRunning) {
+            SectionHeading("Tunnel", subtitle = "Live counters from the tunnel")
+            Text(
+                "Through ${state.gatewayDesktopName ?: desktop.serverName} at ${state.gatewayEndpoint ?: "…"}",
+                color = colors.electricBlue, fontSize = 13.sp,
+            )
+            val seconds = ((System.currentTimeMillis() - state.gatewayConnectedSinceMs) / 1000).coerceAtLeast(0)
+            Text(
+                "Up ${formatDuration(seconds)} · down ${state.gatewayBytesIn / 1024} KB · " +
+                    "up ${state.gatewayBytesOut / 1024} KB",
+                color = colors.textSecondary, fontSize = 11.sp,
+            )
+            Text(
+                if (state.gatewayLastHandshakeMs > 0) {
+                    "The computer answered ${formatDuration((System.currentTimeMillis() - state.gatewayLastHandshakeMs) / 1000)} ago."
+                } else {
+                    "Waiting for the first reply from the computer."
+                },
+                color = colors.textSecondary, fontSize = 11.sp,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BrandOutlineButton(
+                    text = "Refresh",
+                    onClick = { viewModel.refreshGatewayStats() },
+                    enabled = true,
+                    modifier = Modifier.weight(1f),
+                )
+                BrandOutlineButton(
+                    text = "Turn off",
+                    onClick = { viewModel.stopGateway() },
+                    enabled = true,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        } else {
+            state.gatewayError?.let { Text(it, color = colors.accentRed, fontSize = 12.sp) }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Column(Modifier.weight(1f)) {
+                    Text("Route everything", color = colors.textPrimary, fontSize = 13.sp)
+                    Text(
+                        "All apps use the computer's connection.",
+                        color = colors.textSecondary, fontSize = 11.sp,
+                    )
+                }
+                Switch(
+                    checked = state.gatewayFullTunnel,
+                    onCheckedChange = { full ->
+                        viewModel.setGatewayMode(full)
+                    },
+                )
+            }
+            Button(
+                onClick = {
+                    val intent = viewModel.gatewayConsentIntent()
+                    if (intent != null) consent.launch(intent)
+                    else viewModel.startGateway(desktop, state.gatewayFullTunnel)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !state.killSwitchActive,
+            ) { Text("START GATEWAY") }
+            if (state.killSwitchActive) {
+                Text(
+                    "Remote features are off because the kill switch is engaged.",
+                    color = colors.textSecondary, fontSize = 11.sp,
+                )
+            }
+            state.gatewayPhonePublicKey?.let { key ->
+                SectionHeading("This phone's key", subtitle = "Paste it into the computer's gateway config")
+                Text(key, color = colors.textPrimary, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+private fun formatDuration(totalSeconds: Long): String {
+    val h = totalSeconds / 3600
+    val m = (totalSeconds % 3600) / 60
+    val s = totalSeconds % 60
+    return when {
+        h > 0 -> "${h}h ${m}m"
+        m > 0 -> "${m}m ${s}s"
+        else -> "${s}s"
+    }
+}
+
 @Composable
 private fun RemoteInternetSharingTab(
     state: RemoteControlViewModel.UiState,
@@ -655,6 +795,8 @@ private fun RemoteInternetSharingTab(
             }
         }
     }
+
+    GatewayCard(state, viewModel, desktop)
 
     PlatformCard(
         title = "On the computer",

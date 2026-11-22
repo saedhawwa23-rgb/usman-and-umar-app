@@ -30,6 +30,9 @@ class KeystorePairedDesktopStore(
                     deviceId = obj.getString("deviceId"),
                     serverName = obj.optString("serverName", obj.getString("host")),
                     secret = Base64.getDecoder().decode(secret),
+                    certificateFingerprint = obj.optString("fingerprint", "").ifEmpty { null },
+                    gatewayPublicKey = obj.optString("gatewayPublicKey", "").ifEmpty { null },
+                    gatewayPort = obj.optInt("gatewayPort", 0).takeIf { it > 0 },
                 )
             }
         } catch (_: Exception) {
@@ -56,7 +59,12 @@ class KeystorePairedDesktopStore(
                     .put("port", desktop.port)
                     .put("deviceId", desktop.deviceId)
                     .put("serverName", desktop.serverName)
-                    .put("secret", Base64.getEncoder().encodeToString(desktop.secret)),
+                    .put("secret", Base64.getEncoder().encodeToString(desktop.secret))
+                    .apply {
+                        desktop.certificateFingerprint?.let { put("fingerprint", it) }
+                        desktop.gatewayPublicKey?.let { put("gatewayPublicKey", it) }
+                        desktop.gatewayPort?.let { put("gatewayPort", it) }
+                    },
             )
         }
         secrets.write(KEY, array.toString().toByteArray(Charsets.UTF_8))

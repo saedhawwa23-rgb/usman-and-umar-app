@@ -63,6 +63,14 @@ data class PairedDesktop(
     val secret: ByteArray,
     /** The certificate fingerprint recorded at pairing; null for a plain-TCP pairing. */
     val certificateFingerprint: String? = null,
+    /**
+     * The desktop's WireGuard public key, published when it offers internet sharing.
+     * Null for older agents, which leaves the full-tunnel gateway unavailable but the SOCKS
+     * proxy path working.
+     */
+    val gatewayPublicKey: String? = null,
+    /** The desktop's WireGuard listen port; null falls back to the default. */
+    val gatewayPort: Int? = null,
 ) {
     override fun equals(other: Any?): Boolean =
         other is PairedDesktop && host == other.host && port == other.port && deviceId == other.deviceId
@@ -172,6 +180,11 @@ class RemoteDesktopClient(
                     ?: return@withContext fail(onState, "This desktop is not paired yet. Enter the pairing code shown on the desktop.")
                 val authenticated = authenticate(inStream, outStream, known, onState)
                 if (!authenticated) return@withContext Result.failure(IllegalStateException(state.toString()))
+                // The desktop may have published its gateway key after this phone paired, so pick
+                // up whatever it now advertises rather than requiring a re-pair.
+                if (ack.gatewayPublicKey != known.gatewayPublicKey || ack.gatewayPort != known.gatewayPort) {
+                    store.save(known.copy(gatewayPublicKey = ack.gatewayPublicKey, gatewayPort = ack.gatewayPort))
+                }
             }
 
             running.set(true)
@@ -209,7 +222,13 @@ class RemoteDesktopClient(
                     ?.let { fingerprintOf(it as java.security.cert.X509Certificate) }
             }.getOrNull()
         }
-        store.save(PairedDesktop(host, port, deviceId, ack.serverName, secret, fingerprint))
+        store.save(
+            PairedDesktop(
+                host, port, deviceId, ack.serverName, secret, fingerprint,
+                gatewayPublicKey = ack.gatewayPublicKey,
+                gatewayPort = ack.gatewayPort,
+            )
+        )
         return true
     }
 

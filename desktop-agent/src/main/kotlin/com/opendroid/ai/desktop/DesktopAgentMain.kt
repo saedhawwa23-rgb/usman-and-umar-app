@@ -31,12 +31,25 @@ fun main(args: Array<String>) {
     val store = ClientStore(File(options.storePath))
     val pairing = PairingController()
     val controller = DesktopController()
+
+    // The gateway identity is created on first run and reused afterwards, so a phone that has
+    // already been told this computer's public key keeps working across restarts.
+    val gateway = if (options.shareInternet) {
+        GatewayIdentityFile(File(options.storePath).absoluteFile.parentFile?.let {
+            File(it, "agent-gateway.key")
+        } ?: File("agent-gateway.key")).loadOrCreate()
+    } else {
+        null
+    }
+
     val config = AgentConfig(
         serverName = options.serverName,
         port = options.port,
         fileRoot = File(options.fileRoot).canonicalFile,
         allowFileTransfer = !options.noFiles,
         allowInput = !options.noInput,
+        gatewayPublicKey = gateway?.publicKeyBase64,
+        gatewayPort = if (gateway != null) options.sharePort else null,
     )
 
     val serverSocket = options.tls?.let { createTlsServer(it, options.port) }
@@ -79,6 +92,21 @@ fun main(args: Array<String>) {
     } else {
         println("  internet sharing: disabled (--no-share-internet)")
         null
+    }
+
+    if (gateway != null) {
+        // The public key is safe to print; the private key stays in agent-gateway.key.
+        println("  gateway key : ${gateway.publicKeyBase64}")
+        println("  WireGuard   : run this computer's WireGuard app with a config whose [Peer] uses")
+        println("                the phone's public key from the app's Gateway card.")
+        val provisioned = com.opendroid.ai.remote.gateway.DesktopGatewayConfig
+            .provision(null, options.sharePort)
+        val configFile = File(options.storePath).absoluteFile.parentFile?.let {
+            File(it, "agent-gateway.conf")
+        } ?: File("agent-gateway.conf")
+        runCatching { configFile.writeText(provisioned.configText) }
+            .onSuccess { println("                A template was written to ${configFile.absolutePath}") }
+            .onFailure { println("                WARNING: could not write the config template: ${it.message}") }
     }
 
     val pool = Executors.newFixedThreadPool(config.maxClients)

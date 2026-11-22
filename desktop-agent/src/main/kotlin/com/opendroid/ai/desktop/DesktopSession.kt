@@ -18,6 +18,12 @@ data class AgentConfig(
     val allowFileTransfer: Boolean = true,
     val allowInput: Boolean = true,
     val maxClients: Int = 4,
+    /**
+     * The desktop's WireGuard public key, advertised to paired phones so they can build the
+     * full-tunnel gateway. Null when the owner has turned the gateway off.
+     */
+    val gatewayPublicKey: String? = null,
+    val gatewayPort: Int? = null,
 )
 
 /** The result of handling one connection, for the log line. */
@@ -64,7 +70,17 @@ class DesktopSession(
 
             val known = store.find(hello.deviceId)
             handshakeNonce = RemoteCrypto.newNonce()
-            send(HelloAck(RemoteProtocol.VERSION, store.serverId, config.serverName, handshakeNonce, known != null))
+            send(
+                HelloAck(
+                    RemoteProtocol.VERSION,
+                    store.serverId,
+                    config.serverName,
+                    handshakeNonce,
+                    known != null,
+                    gatewayPublicKey = config.gatewayPublicKey,
+                    gatewayPort = config.gatewayPort,
+                )
+            )
 
             val authenticated = if (known != null) authenticate(input, known, hello)
             else pair(input, hello)

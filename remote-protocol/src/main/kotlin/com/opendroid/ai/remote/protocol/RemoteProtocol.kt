@@ -117,6 +117,15 @@ data class HelloAck(
     val serverName: String,
     val nonce: String,
     val paired: Boolean,
+    /**
+     * The desktop's WireGuard public key when it offers the full-tunnel gateway.
+     *
+     * Optional so a phone and an older agent still pair: null means the browser-proxy path is the
+     * only way to share the desktop's internet.
+     */
+    val gatewayPublicKey: String? = null,
+    /** The desktop's WireGuard listen port, when [gatewayPublicKey] is present. */
+    val gatewayPort: Int? = null,
 ) : RemoteMessage()
 
 /** First-time pairing. The code is the short-lived secret the owner reads off the desktop. */

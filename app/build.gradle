@@ -237,6 +237,9 @@ dependencies {
     // PDFBox's JPX filter calls this optional decoder. Package it at runtime so
     // release/R8 builds retain JPEG-2000 PDF image support on supported ABIs.
     runtimeOnly 'com.gemalto.jp2:jp2-android:1.0.3'
+    // WireGuard userspace tunnel: full-tunnel internet sharing without an NDK build.
+    // Apache-2.0, actively maintained, and ships prebuilt armv7/arm64/x86 native libs.
+    implementation 'com.wireguard.android:tunnel:1.0.20260102'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
     implementation 'androidx.activity:activity-compose:1.13.0'

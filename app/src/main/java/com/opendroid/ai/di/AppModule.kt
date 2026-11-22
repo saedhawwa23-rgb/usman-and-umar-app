@@ -335,6 +335,31 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideInternetGatewayController(
+        @ApplicationContext context: Context,
+    ): com.opendroid.ai.core.remote.gateway.InternetGatewayController =
+        com.opendroid.ai.core.remote.gateway.InternetGatewayController(context.applicationContext)
+
+    /**
+     * Gateway credentials get their own preferences file and Keystore alias so the WireGuard
+     * private key cannot be confused with, or overwritten by, the pairing and authorization records.
+     */
+    @Provides
+    @Singleton
+    fun provideGatewayKeyStore(@ApplicationContext context: Context): com.opendroid.ai.core.remote.gateway.GatewayKeyStore =
+        com.opendroid.ai.core.remote.gateway.GatewayKeyStore(
+            KeystoreSecretBytesStore(
+                KeystoreSecretRecords(
+                    storage = SharedPreferencesSecretRecordStorage(
+                        context.applicationContext.getSharedPreferences(GATEWAY_PREFERENCES, Context.MODE_PRIVATE)
+                    ),
+                    cipher = AndroidKeyStoreAeadCipher(GATEWAY_KEY_ALIAS),
+                )
+            )
+        )
+
+    @Provides
+    @Singleton
     fun provideAgentToolEnvironment(environment: AndroidAgentToolEnvironment): AgentToolEnvironment =
         environment
 
@@ -365,4 +390,6 @@ object AppModule {
     private const val DESKTOP_KEY_ALIAS = "opendroid_remote_desktop_key"
     private const val AUTH_PREFERENCES = "authorization_secure"
     private const val AUTH_KEY_ALIAS = "opendroid_authorization_key"
+    private const val GATEWAY_PREFERENCES = "gateway_secure"
+    private const val GATEWAY_KEY_ALIAS = "opendroid_gateway_key"
 }

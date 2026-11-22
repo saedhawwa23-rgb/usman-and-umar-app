@@ -46,6 +46,8 @@ class RemoteControlViewModel @Inject constructor(
     private val desktopClient: RemoteDesktopClient,
     private val desktopStore: PairedDesktopStore,
     private val internetSharing: com.opendroid.ai.core.remote.InternetSharingController,
+    private val gateway: com.opendroid.ai.core.remote.gateway.InternetGatewayController,
+    private val gatewayKeys: com.opendroid.ai.core.remote.gateway.GatewayKeyStore,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
 
@@ -88,6 +90,19 @@ class RemoteControlViewModel @Inject constructor(
         val sharingRequests: Long = 0,
         val sharingBytes: Long = 0,
         val sharingError: String? = null,
+        // Internet gateway: full-tunnel VPN so every app leaves through the paired desktop
+        val gatewayRunning: Boolean = false,
+        val gatewayFullTunnel: Boolean = true,
+        val gatewayEndpoint: String? = null,
+        val gatewayDesktopName: String? = null,
+        val gatewayBytesIn: Long = 0,
+        val gatewayBytesOut: Long = 0,
+        val gatewayConnectedSinceMs: Long = 0,
+        val gatewayLastHandshakeMs: Long = 0,
+        val gatewayError: String? = null,
+        val gatewayNeedsPermission: Boolean = false,
+        /** This phone's public key, shown so it can be pasted into the desktop's config. */
+        val gatewayPhonePublicKey: String? = null,
     )
 
     private val mutableState = MutableStateFlow(
@@ -219,6 +234,118 @@ class RemoteControlViewModel @Inject constructor(
         )
     }
 
+    /**
+     * Start the full-tunnel gateway through [desktop].
+     *
+     * Refused while the kill switch is engaged, and refused with a specific reason when the phone
+     * still has no VPN consent or the desktop has not published its gateway key. A half-started
+     * tunnel would black-hole the phone's traffic, so every precondition is checked first.
+     */
+    fun startGateway(desktop: PairedDesktop, fullTunnel: Boolean = true) {
+        if (mutableState.value.killSwitchActive) {
+            setMessage("Internet sharing is disabled by the kill switch.", isError = true)
+            return
+        }
+        gateway.setMode(
+            if (fullTunnel) com.opendroid.ai.core.remote.gateway.InternetGatewayController.Mode.FULL
+            else com.opendroid.ai.core.remote.gateway.InternetGatewayController.Mode.SPLIT,
+        )
+
+        // A peer minted for a different computer (or for a key the desktop has since rotated)
+        // would never handshake, and WireGuard reports that only as silence. Rebuild it instead.
+        val expectedEndpoint =
+            "${desktop.host}:${desktop.gatewayPort ?: com.opendroid.ai.remote.gateway.GatewayConfig.DEFAULT_LISTEN_PORT}"
+        val stored = gatewayKeys.load()?.takeIf {
+            it.desktopPublicKey == desktop.gatewayPublicKey && it.endpoint == expectedEndpoint
+        }
+        val peer = when {
+            stored != null -> stored
+            desktop.gatewayPublicKey.isNullOrBlank() -> {
+                setMessage(
+                    "This computer has not published a gateway key yet. Update the desktop agent " +
+                        "and re-pair, then try again.",
+                    isError = true,
+                )
+                return
+            }
+            else -> {
+                // First use on this phone: mint the phone key and keep the desktop's public half.
+                val generated = com.opendroid.ai.core.remote.gateway.GatewayKeys.generate()
+                val created = com.opendroid.ai.remote.gateway.GatewayPeer(
+                    privateKey = generated.privateKeyBase64,
+                    desktopPublicKey = desktop.gatewayPublicKey!!,
+                    endpoint = expectedEndpoint,
+                )
+                gatewayKeys.save(created)
+                created
+            }
+        }
+
+        val started = gateway.start(peer, desktop.serverName)
+        val gs = gateway.state.value
+        mutableState.value = mutableState.value.copy(
+            gatewayRunning = gs.running,
+            gatewayFullTunnel = fullTunnel,
+            gatewayEndpoint = gs.endpoint,
+            gatewayDesktopName = gs.desktopName,
+            gatewayError = gs.error,
+            gatewayNeedsPermission = gs.needsPermission,
+            gatewayPhonePublicKey = runCatching {
+                com.opendroid.ai.core.remote.gateway.GatewayKeys.publicKeyOf(peer.privateKey)
+            }.getOrNull(),
+        )
+        if (started) {
+            setMessage("Internet gateway is starting through ${desktop.serverName}.", isError = false)
+        } else {
+            setMessage(gs.error ?: "The gateway could not start.", isError = true)
+        }
+    }
+
+    fun stopGateway() {
+        gateway.stop()
+        mutableState.value = mutableState.value.copy(
+            gatewayRunning = false,
+            gatewayBytesIn = 0,
+            gatewayBytesOut = 0,
+            gatewayConnectedSinceMs = 0,
+            gatewayLastHandshakeMs = 0,
+            gatewayError = null,
+            gatewayNeedsPermission = false,
+        )
+        setMessage("Gateway is off. All apps use this phone's own connection again.", isError = false)
+    }
+
+    /** Pull live tunnel counters for the status card. */
+    fun refreshGatewayStats() {
+        if (!mutableState.value.gatewayRunning) return
+        val gs = gateway.state.value
+        mutableState.value = mutableState.value.copy(
+            gatewayRunning = gs.running,
+            gatewayBytesIn = gs.bytesIn,
+            gatewayBytesOut = gs.bytesOut,
+            gatewayConnectedSinceMs = gs.connectedSinceMs,
+            gatewayLastHandshakeMs = gs.lastHandshakeMs,
+            gatewayError = gs.error,
+        )
+    }
+
+    /** The consent dialog to show, or null when the OS has already granted VPN permission. */
+    fun gatewayConsentIntent(): android.content.Intent? = gateway.consentIntent()
+
+    /** Choose whether the tunnel carries everything or only the selected routes. */
+    fun setGatewayMode(fullTunnel: Boolean) {
+        mutableState.value = mutableState.value.copy(gatewayFullTunnel = fullTunnel)
+        gateway.setMode(
+            if (fullTunnel) com.opendroid.ai.core.remote.gateway.InternetGatewayController.Mode.FULL
+            else com.opendroid.ai.core.remote.gateway.InternetGatewayController.Mode.SPLIT,
+        )
+    }
+
+    fun clearGatewayError() {
+        gateway.clearError()
+        mutableState.value = mutableState.value.copy(gatewayError = null, gatewayNeedsPermission = false)
+    }
+
     /** The owner's answer to an inbound remote action. */
     fun approvePending() = approvalGate.decide(true)
 
@@ -337,12 +464,19 @@ class RemoteControlViewModel @Inject constructor(
         // Sharing must not outlive the kill switch: an open tunnel would keep carrying traffic
         // after the owner has asked every remote path to stop.
         internetSharing.stopForKillSwitch()
+        // The VPN is the widest remote path of all: it carries every app's traffic, so it goes down
+        // with the kill switch too.
+        gateway.stop()
         mutableState.value = mutableState.value.copy(
             pairingCode = null,
             pairingDeviceId = null,
             pairingExpiresAtMs = 0L,
             killSwitchActive = true,
             sharingRunning = false,
+            gatewayRunning = false,
+            gatewayBytesIn = 0,
+            gatewayBytesOut = 0,
+            gatewayConnectedSinceMs = 0,
             sharingProxyAddress = null,
             sharingDesktopName = null,
             sessions = coordinator.sessions(),
