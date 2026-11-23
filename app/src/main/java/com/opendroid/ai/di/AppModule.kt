@@ -342,6 +342,13 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideTailscaleDetector(
+        @ApplicationContext context: Context,
+    ): com.opendroid.ai.core.remote.TailscaleDetector =
+        com.opendroid.ai.core.remote.TailscaleDetector(context.applicationContext)
+
+    @Provides
+    @Singleton
     fun provideExitIpVerifier(): com.opendroid.ai.core.remote.gateway.ExitIpVerifier =
         com.opendroid.ai.core.remote.gateway.ExitIpVerifier()
 

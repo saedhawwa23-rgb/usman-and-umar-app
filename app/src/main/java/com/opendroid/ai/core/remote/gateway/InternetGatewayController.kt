@@ -76,6 +76,21 @@ class InternetGatewayController(private val context: Context) {
             return false
         }
 
+        // Android gives the VPN slot to one app at a time. Tailscale holds it whenever it is
+        // connected, so starting here would silently displace it (or fail) and the status card
+        // would still claim the tunnel is up. Refuse with the actual reason instead.
+        val tailscale = com.opendroid.ai.core.remote.TailscaleDetector(context).inspect()
+        if (tailscale.blocksGateway) {
+            _state.value = _state.value.copy(
+                running = false,
+                error = "Another VPN is already running, so this tunnel cannot start. Android " +
+                    "allows only one VPN at a time. Disconnect Tailscale first if you want to use " +
+                    "the USMAN AND UMAR gateway, or keep Tailscale connected and use it to reach " +
+                    "the computer instead.",
+            )
+            return false
+        }
+
         val current = _state.value
         val allowed = GatewayConfig.allowedIps(current.mode == Mode.FULL, current.splitRoutes)
         // An empty route set would build a tunnel that carries nothing while the UI showed it up.

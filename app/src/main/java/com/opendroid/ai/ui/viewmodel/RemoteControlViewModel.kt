@@ -50,6 +50,7 @@ class RemoteControlViewModel @Inject constructor(
     private val gateway: com.opendroid.ai.core.remote.gateway.InternetGatewayController,
     private val gatewayKeys: com.opendroid.ai.core.remote.gateway.GatewayKeyStore,
     private val exitIpVerifier: com.opendroid.ai.core.remote.gateway.ExitIpVerifier,
+    private val tailscaleDetector: com.opendroid.ai.core.remote.TailscaleDetector,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context,
 ) : ViewModel() {
 
@@ -111,6 +112,9 @@ class RemoteControlViewModel @Inject constructor(
         val gatewayExitIpAfter: String? = null,
         val gatewayExitIpError: String? = null,
         val gatewayExitIpChecking: Boolean = false,
+        /** What the phone can see about Tailscale; observed only, never controlled. */
+        val tailscale: com.opendroid.ai.core.remote.TailscaleDetector.State =
+            com.opendroid.ai.core.remote.TailscaleDetector.State(),
     )
 
     private val mutableState = MutableStateFlow(
@@ -386,6 +390,11 @@ class RemoteControlViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    /** Re-read Tailscale's state. The app observes it and never changes it. */
+    fun refreshTailscale() {
+        mutableState.value = mutableState.value.copy(tailscale = tailscaleDetector.inspect())
     }
 
     /** Pull live tunnel counters for the status card. */

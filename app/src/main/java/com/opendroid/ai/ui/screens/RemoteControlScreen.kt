@@ -400,6 +400,7 @@ private fun RemoteGatewayTab(
     deviceStatus: Pair<String, PlatformStatus>,
 ) {
     val colors = AppTheme.colors
+    val context = androidx.compose.ui.platform.LocalContext.current
     var host by remember { mutableStateOf("") }
     var port by remember { mutableStateOf("8777") }
     var code by remember { mutableStateOf("") }
@@ -576,6 +577,79 @@ private fun RemoteGatewayTab(
  * pointed at a proxy. It needs Android's VPN consent, so the first attempt launches the system
  * dialog and the same button retries afterwards.
  */
+/**
+ * Reaching the computer from outside its own network.
+ *
+ * Tailscale runs as a separate app because Android gives the VPN slot to one app at a time and
+ * USMAN AND UMAR's gateway needs that same slot. This card explains the handoff plainly rather
+ * than implying the tailnet lives inside this app.
+ */
+@Composable
+private fun TailscaleCard(
+    state: RemoteControlViewModel.UiState,
+    viewModel: RemoteControlViewModel,
+    desktop: PairedDesktop?,
+    onOpenTailscale: () -> Unit,
+) {
+    val colors = AppTheme.colors
+    val tailscale = state.tailscale
+    PlatformCard(
+        title = "Reach the computer from anywhere",
+        subtitle = "Uses the Tailscale app, not a built-in tunnel",
+        status = when {
+            tailscale.blocksGateway -> "VPN active" to PlatformStatus.HEALTHY
+            tailscale.installed -> "Installed" to PlatformStatus.IDLE
+            else -> "Not installed" to PlatformStatus.IDLE
+        },
+    ) {
+        Text(
+            "On the same Wi-Fi this app already reaches the computer. From home it needs a route " +
+                "in, and this app does not build one. Tailscale provides that route: install it on " +
+                "both devices, sign both into the same tailnet, then pair with the computer using " +
+                "its 100.x.y.z address below.",
+            color = colors.textSecondary, fontSize = 12.sp,
+        )
+        Text(tailscale.detail, color = colors.textPrimary, fontSize = 11.sp)
+        tailscale.tailnetAddress?.let { address ->
+            Text(
+                "This phone's tailnet address: $address",
+                color = colors.electricBlue, fontSize = 11.sp,
+            )
+        }
+
+        // The one limitation that cannot be worked around: two VpnService instances cannot coexist.
+        Text(
+            "Android allows one VPN at a time. While Tailscale is connected, the USMAN AND UMAR " +
+                "internet gateway cannot start, and while that gateway runs, Tailscale is off. " +
+                "Remote Desktop control is unaffected by either, because it uses an ordinary " +
+                "connection rather than the VPN slot.",
+            color = colors.textSecondary, fontSize = 11.sp,
+        )
+        if (desktop != null && tailscale.blocksGateway) {
+            Text(
+                "Tip: pair with ${desktop.host}:${desktop.port} as it is now, or replace the host " +
+                    "with the computer's tailnet address to use it from any network.",
+                color = colors.textSecondary, fontSize = 11.sp,
+            )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BrandOutlineButton(
+                text = "Re-check",
+                onClick = { viewModel.refreshTailscale() },
+                enabled = true,
+                modifier = Modifier.weight(1f),
+            )
+            BrandOutlineButton(
+                text = if (tailscale.installed) "Open Tailscale" else "Get Tailscale",
+                onClick = onOpenTailscale,
+                enabled = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
 @Composable
 private fun GatewayCard(
     state: RemoteControlViewModel.UiState,
@@ -730,6 +804,7 @@ private fun RemoteInternetSharingTab(
     viewModel: RemoteControlViewModel,
 ) {
     val colors = AppTheme.colors
+    val context = androidx.compose.ui.platform.LocalContext.current
     val desktop = state.pairedDesktops.firstOrNull()
 
     PlatformCard(
@@ -814,6 +889,28 @@ private fun RemoteInternetSharingTab(
             }
         }
     }
+
+    TailscaleCard(
+        state = state,
+        viewModel = viewModel,
+        desktop = desktop,
+        onOpenTailscale = {
+            // Hand off to the Tailscale app. This never starts or stops the VPN itself; it only
+            // opens the app the user already installed, or its store page when absent.
+            val pkg = if (state.tailscale.installed) "com.tailscale.ipn" else null
+            val intent = if (pkg != null) {
+                context.packageManager.getLaunchIntentForPackage(pkg)
+            } else {
+                android.content.Intent(
+                    android.content.Intent.ACTION_VIEW,
+                    android.net.Uri.parse("https://play.google.com/store/apps/details?id=com.tailscale.ipn"),
+                )
+            }
+            if (intent != null) {
+                runCatching { context.startActivity(intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            }
+        },
+    )
 
     GatewayCard(state, viewModel, desktop)
 
