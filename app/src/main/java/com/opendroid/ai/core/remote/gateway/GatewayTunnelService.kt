@@ -7,7 +7,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
-import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.opendroid.ai.remote.gateway.GatewayConfig
@@ -201,11 +200,9 @@ class GatewayTunnelService : VpnService() {
 
     private fun startForegroundNotification() {
         val manager = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager?.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Internet gateway", NotificationManager.IMPORTANCE_LOW),
-            )
-        }
+        manager?.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "Internet gateway", NotificationManager.IMPORTANCE_LOW),
+        )
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -223,12 +220,7 @@ class GatewayTunnelService : VpnService() {
     }
 
     private fun stopForegroundCompat() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-        } else {
-            @Suppress("DEPRECATION")
-            stopForeground(true)
-        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
     }
 
     private fun Intent.toPeer(): GatewayPeer? {

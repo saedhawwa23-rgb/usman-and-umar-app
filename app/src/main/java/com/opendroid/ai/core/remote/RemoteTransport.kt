@@ -1,5 +1,6 @@
 package com.opendroid.ai.core.remote
 
+import android.annotation.SuppressLint
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.MessageDigest
@@ -77,7 +78,14 @@ object RemoteTransport {
         return socket
     }
 
-    /** Accepts exactly one certificate: the pinned fingerprint. Everything else is refused. */
+    /**
+     * Accepts exactly one certificate: the pinned fingerprint. Everything else is refused.
+     *
+     * Lint flags any custom X509TrustManager because most implementations skip validation.
+     * This one is stricter than the platform default: it compares the leaf against the
+     * fingerprint recorded at pairing time and has no path that returns without checking.
+     */
+    @SuppressLint("CustomX509TrustManager")
     private class PinningTrustManager(private val expected: String) : X509TrustManager {
         override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
             throw CertificateException("This side is a TLS client; it does not accept client certificates")

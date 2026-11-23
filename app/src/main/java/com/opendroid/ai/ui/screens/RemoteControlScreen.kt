@@ -1,5 +1,7 @@
 package com.opendroid.ai.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,10 +16,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.PhoneAndroid
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -32,25 +34,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.opendroid.ai.core.remote.PairedDesktop
 import com.opendroid.ai.core.remote.RemoteSessionState
 import com.opendroid.ai.remote.protocol.FileEntry
 import com.opendroid.ai.ui.components.BrandOutlineButton
+import com.opendroid.ai.ui.components.ClipboardSyncRow
 import com.opendroid.ai.ui.components.EmptyState
 import com.opendroid.ai.ui.components.LiveDot
 import com.opendroid.ai.ui.components.MetricTile
 import com.opendroid.ai.ui.components.PlatformCard
 import com.opendroid.ai.ui.components.PlatformStatus
-import com.opendroid.ai.ui.components.SectionHeading
-import com.opendroid.ai.ui.components.SegmentedTabs
-import com.opendroid.ai.ui.components.StatusPill
-import com.opendroid.ai.ui.components.ClipboardSyncRow
 import com.opendroid.ai.ui.components.PlatformTab
 import com.opendroid.ai.ui.components.RemoteDesktopView
 import com.opendroid.ai.ui.components.RemoteKeyboardField
+import com.opendroid.ai.ui.components.SectionHeading
+import com.opendroid.ai.ui.components.SegmentedTabs
+import com.opendroid.ai.ui.components.StatusPill
 import com.opendroid.ai.ui.theme.AppTheme
 import com.opendroid.ai.ui.viewmodel.RemoteControlViewModel
 
@@ -903,7 +904,7 @@ private fun RemoteInternetSharingTab(
             } else {
                 android.content.Intent(
                     android.content.Intent.ACTION_VIEW,
-                    android.net.Uri.parse("https://play.google.com/store/apps/details?id=com.tailscale.ipn"),
+                    "https://play.google.com/store/apps/details?id=com.tailscale.ipn".toUri(),
                 )
             }
             if (intent != null) {
