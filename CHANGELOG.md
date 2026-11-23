@@ -2,6 +2,36 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.14.0] - 2026-11-23
+
+### Added
+
+- **Reaching the computer from outside its own network, with Tailscale.** A new Remote > Gateway
+  card detects the Tailscale app, reads this phone's tailnet address when one is readable, and
+  hands off to Tailscale (or its store page) instead of pretending to run a tailnet itself. Pairing
+  already accepts any host, so entering the computer's `100.x.y.z` address connects over the
+  tailnet without new connection code.
+- **Exit-node guidance.** The card explains approving the computer as a Tailscale exit node, so the
+  phone can leave through the school connection using Tailscale's own routing.
+
+### Fixed
+
+- **Two VPNs can no longer fight for one slot.** Android grants the VPN interface to a single app.
+  The internet gateway now refuses to start while another VPN is active and says why, instead of
+  starting a tunnel that cannot come up. The status card no longer implies that the app's gateway
+  and Tailscale can run at the same time; Remote Desktop control is unaffected, because it uses an
+  ordinary connection rather than the VPN slot.
+- **A split tunnel with no destinations is refused.** Starting split mode with an empty route set
+  produced a tunnel that carried nothing while the UI showed it as up. It now fails with an
+  explanation.
+- **Split-tunnel routing was inverted.** `GatewayConfig.allowedIps` returned the exclusion list as
+  the route table. Loopback and the tunnel subnet now stay local and the requested routes are
+  carried.
+- **The phone's DNS had nothing answering it.** The desktop gateway config now starts a resolver on
+  `10.66.0.1`, the address the phone renders as DNS.
+- **Exit address can be proven, not assumed.** A new verifier records the public address before and
+  after a tunnel starts, so "Connected" no longer stands in for evidence of routing.
+
 ## [3.13.0] - 2026-11-21
 
 ### Added
