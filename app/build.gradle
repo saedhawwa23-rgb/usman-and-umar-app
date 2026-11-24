@@ -136,7 +136,13 @@ android {
             // Robolectric leaves JVM-wide reflection state behind; on a later test the JDK's own
             // TLS handshake then fails with "module java.base does not opens java.net". Opening
             // java.net for the test JVM keeps socket and TLS tests order-independent.
-            all { it.jvmArgs '--add-opens=java.base/java.net=ALL-UNNAMED' }
+            // Robolectric's runtime artifacts are fetched outside Gradle's normal dependency
+            // resolver. Keep that fetch on Maven Central's canonical hostname, matching the
+            // repository used by Gradle, rather than Robolectric's repo1.maven.org default.
+            all {
+                it.jvmArgs '--add-opens=java.base/java.net=ALL-UNNAMED'
+                it.systemProperty 'robolectric.dependency.repo.url', 'https://repo.maven.apache.org/maven2/'
+            }
         }
     }
     sourceSets {

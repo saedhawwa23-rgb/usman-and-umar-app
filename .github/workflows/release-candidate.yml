@@ -62,6 +62,19 @@ jobs:
       - name: Run tests, lint, and signed R8 release build
         run: ./gradlew testDebugUnitTest :remote-protocol:test :desktop-agent:test lint assembleRelease --no-configuration-cache --stacktrace
 
+      - name: Upload unit-test reports for diagnosis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-release-test-reports
+          path: |
+            app/build/test-results/testDebugUnitTest/**/*.xml
+            app/build/reports/tests/testDebugUnitTest/**
+            remote-protocol/build/test-results/**/*.xml
+            desktop-agent/build/test-results/**/*.xml
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Verify APK metadata, signature, checksum, and ABIs
         env:
           ANDROID_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
@@ -78,6 +91,7 @@ jobs:
           "$aapt2" dump badging "$apk" | tee "$out/BADGING.txt"
           grep -F "versionName='$(sed -n 's/.*versionName "\(.*\)".*/\1/p' app/build.gradle | head -1)'" "$out/BADGING.txt"
           grep -F "versionCode='$(sed -n 's/.*versionCode \([0-9]*\).*/\1/p' app/build.gradle | head -1)'" "$out/BADGING.txt"
+          grep -F "sdkVersion:'28'" "$out/BADGING.txt"
           grep -F "targetSdkVersion:'36'" "$out/BADGING.txt"
           "$apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
           certs=$("$apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt")
@@ -111,7 +125,7 @@ jobs:
           script: bash "$GITHUB_WORKSPACE/.github/scripts/verify-release-on-emulator.sh"
 
       - name: Upload signed release candidate and evidence
-        if: always()
+        if: always() && hashFiles('dist/**') != ''
         uses: actions/upload-artifact@v4
         with:
           name: usman-and-umar-signed-release-candidate
