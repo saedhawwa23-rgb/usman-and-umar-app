@@ -87,6 +87,7 @@ jobs:
           apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
           mkdir -p "$out"
           test -s "$apk"
+          grep -F "namespace = 'com.opendroid.ai'" app/build.gradle
           test "$("$aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
           "$aapt2" dump badging "$apk" | tee "$out/BADGING.txt"
           grep -F "versionName='$(sed -n 's/.*versionName "\(.*\)".*/\1/p' app/build.gradle | head -1)'" "$out/BADGING.txt"
