@@ -34,7 +34,7 @@ fun main(args: Array<String>) {
 
     // The gateway identity is created on first run and reused afterwards, so a phone that has
     // already been told this computer's public key keeps working across restarts.
-    val gateway = if (options.shareInternet) {
+    val gateway = if (options.gatewayEnabled) {
         GatewayIdentityFile(File(options.storePath).absoluteFile.parentFile?.let {
             File(it, "agent-gateway.key")
         } ?: File("agent-gateway.key")).loadOrCreate()
@@ -49,7 +49,7 @@ fun main(args: Array<String>) {
         allowFileTransfer = !options.noFiles,
         allowInput = !options.noInput,
         gatewayPublicKey = gateway?.publicKeyBase64,
-        gatewayPort = if (gateway != null) options.sharePort else null,
+        gatewayPort = if (gateway != null) options.gatewayPort else null,
     )
 
     val serverSocket = options.tls?.let { createTlsServer(it, options.port) }
@@ -95,16 +95,29 @@ fun main(args: Array<String>) {
     }
 
     if (gateway != null) {
-        // The public key is safe to print; the private key stays in agent-gateway.key.
+        // The public key is safe to print. The generated config also contains the private key, so
+        // restrict it to the owner on filesystems that support POSIX permissions.
         println("  gateway key : ${gateway.publicKeyBase64}")
         println("  WireGuard   : run this computer's WireGuard app with a config whose [Peer] uses")
         println("                the phone's public key from the app's Gateway card.")
         val provisioned = com.opendroid.ai.remote.gateway.DesktopGatewayConfig
-            .provision(null, options.sharePort)
+            .provision(
+                phonePublicKey = null,
+                listenPort = options.gatewayPort,
+                desktopPrivateKeyBase64 = gateway.privateKeyBase64,
+            )
         val configFile = File(options.storePath).absoluteFile.parentFile?.let {
             File(it, "agent-gateway.conf")
         } ?: File("agent-gateway.conf")
-        runCatching { configFile.writeText(provisioned.configText) }
+        runCatching {
+            configFile.writeText(provisioned.configText)
+            runCatching {
+                java.nio.file.Files.setPosixFilePermissions(
+                    configFile.toPath(),
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"),
+                )
+            }
+        }
             .onSuccess { println("                A template was written to ${configFile.absolutePath}") }
             .onFailure { println("                WARNING: could not write the config template: ${it.message}") }
     }
@@ -174,6 +187,9 @@ data class AgentOptions(
     /** Serve a SOCKS5 proxy so paired phones can reach the internet through this machine. */
     val shareInternet: Boolean = true,
     val sharePort: Int = Socks5.DEFAULT_PORT,
+    /** Advertise a WireGuard gateway identity independently of the SOCKS proxy. */
+    val gatewayEnabled: Boolean = true,
+    val gatewayPort: Int = com.opendroid.ai.remote.gateway.GatewayConfig.DEFAULT_LISTEN_PORT,
 ) {
     companion object {
         val USAGE = """
@@ -189,6 +205,8 @@ data class AgentOptions(
           --no-files            do not allow file transfer
           --no-share-internet   do not serve the SOCKS5 proxy for paired phones
           --share-port <n>      SOCKS5 proxy port (default ${Socks5.DEFAULT_PORT})
+          --no-gateway          do not advertise a WireGuard gateway identity
+          --gateway-port <n>    WireGuard UDP listen port (default ${com.opendroid.ai.remote.gateway.GatewayConfig.DEFAULT_LISTEN_PORT})
           --help                show this message
         """.trimIndent()
 
@@ -203,6 +221,8 @@ data class AgentOptions(
             var help = false
             var shareInternet = true
             var sharePort = Socks5.DEFAULT_PORT
+            var gatewayEnabled = true
+            var gatewayPort = com.opendroid.ai.remote.gateway.GatewayConfig.DEFAULT_LISTEN_PORT
             var i = 0
             while (i < args.size) {
                 when (val arg = args[i]) {
@@ -219,6 +239,8 @@ data class AgentOptions(
                     "--no-files" -> noFiles = true
                     "--no-share-internet" -> shareInternet = false
                     "--share-port" -> sharePort = args.getOrNull(++i)?.toIntOrNull() ?: sharePort
+                    "--no-gateway" -> gatewayEnabled = false
+                    "--gateway-port" -> gatewayPort = args.getOrNull(++i)?.toIntOrNull() ?: gatewayPort
                     "--help", "-h" -> help = true
                     else -> if (arg.startsWith("--tls-password")) i++ // consumed with the keystore
                 }
@@ -226,7 +248,7 @@ data class AgentOptions(
             }
             return AgentOptions(
                 port, storePath, fileRoot, serverName, tls, noInput, noFiles, help,
-                shareInternet, sharePort,
+                shareInternet, sharePort, gatewayEnabled, gatewayPort,
             )
         }
     }

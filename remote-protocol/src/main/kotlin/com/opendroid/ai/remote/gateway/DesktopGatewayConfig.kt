@@ -30,9 +30,14 @@ object DesktopGatewayConfig {
      * @param phonePublicKey the phone's WireGuard public key, or null to write a placeholder the
      *   owner replaces after the phone has generated its key.
      * @param listenPort UDP port the desktop listens on.
+     * @param desktopPrivateKeyBase64 an existing desktop identity to reuse, or null to generate one.
      */
-    fun provision(phonePublicKey: String?, listenPort: Int = GatewayConfig.DEFAULT_LISTEN_PORT): Provisioned {
-        val privateKey = newPrivateKey()
+    fun provision(
+        phonePublicKey: String?,
+        listenPort: Int = GatewayConfig.DEFAULT_LISTEN_PORT,
+        desktopPrivateKeyBase64: String? = null,
+    ): Provisioned {
+        val privateKey = desktopPrivateKeyBase64?.takeIf { it.isNotBlank() } ?: newPrivateKey()
         val publicKey = X25519.publicKeyFromPrivateBase64(privateKey)
 
         val peerKey = phonePublicKey?.takeIf { it.isNotBlank() } ?: "<phone public key>"

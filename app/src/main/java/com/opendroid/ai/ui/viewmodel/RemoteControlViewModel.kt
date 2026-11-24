@@ -543,6 +543,9 @@ class RemoteControlViewModel @Inject constructor(
 
     fun engageKillSwitch() {
         val result = coordinator.engageKillSwitch()
+        // Stop accepting remote requests immediately; authentication rejection alone would leave
+        // the listener exposed and its status misleadingly marked as on.
+        transport.stopForKillSwitch()
         // Sharing must not outlive the kill switch: an open tunnel would keep carrying traffic
         // after the owner has asked every remote path to stop.
         internetSharing.stopForKillSwitch()
@@ -561,6 +564,8 @@ class RemoteControlViewModel @Inject constructor(
             gatewayConnectedSinceMs = 0,
             sharingProxyAddress = null,
             sharingDesktopName = null,
+            listening = transport.state.value.running,
+            listenPort = transport.state.value.port,
             sessions = coordinator.sessions(),
             message = (result as? RemoteControlCoordinator.StepResult.Success)?.message,
             messageIsError = false,

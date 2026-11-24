@@ -36,7 +36,17 @@ Every later connection authenticates with a stored secret, so the code is not ne
 | `--tls-password <pw>` | Keystore password. |
 | `--no-input` | Do not accept mouse or keyboard input. |
 | `--no-files` | Do not allow file transfer. |
+| `--share-port <n>` | SOCKS5 internet-sharing port. Default `1080`; independent of WireGuard. |
+| `--no-share-internet` | Disable the SOCKS5 proxy without disabling the WireGuard gateway identity. |
+| `--gateway-port <n>` | WireGuard UDP listen port advertised to the phone. Default `51820`. |
+| `--no-gateway` | Do not advertise or generate the desktop WireGuard gateway identity/config. |
 | `--help` | Show usage. |
+
+The WireGuard peer listens on UDP `--gateway-port`; allow that UDP port through the desktop and
+network firewalls and configure the phone to use a reachable endpoint. The desktop config template
+uses the same persisted key as the agent advertises. The agent does not enable IP forwarding or NAT:
+those require an authorized administrator to configure on the desktop, and the tunnel will not
+provide Internet egress until forwarding, masquerading, and DNS are configured and verified.
 
 ## TLS
 

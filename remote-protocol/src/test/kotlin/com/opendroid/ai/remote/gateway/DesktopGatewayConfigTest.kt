@@ -35,6 +35,24 @@ class DesktopGatewayConfigTest {
     }
 
     @Test
+    fun `config reuses an existing desktop identity rather than generating a different key`() {
+        val persistedPrivateKey = DesktopGatewayConfig.newPrivateKey()
+        val persistedPublicKey = X25519.publicKeyFromPrivateBase64(persistedPrivateKey)
+
+        val p = DesktopGatewayConfig.provision(
+            phonePublicKey = null,
+            desktopPrivateKeyBase64 = persistedPrivateKey,
+        )
+
+        val configPrivateKey = p.configText.lineSequence()
+            .first { it.startsWith("PrivateKey = ") }
+            .removePrefix("PrivateKey = ")
+            .trim()
+        assertEquals(persistedPrivateKey, configPrivateKey)
+        assertEquals(persistedPublicKey, p.publicKeyBase64)
+    }
+
+    @Test
     fun `keys are the right size and differ between runs`() {
         val a = DesktopGatewayConfig.provision(null)
         val b = DesktopGatewayConfig.provision(null)
