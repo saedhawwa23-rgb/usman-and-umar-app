@@ -126,8 +126,8 @@ jobs:
           arch: x86_64
           target: google_apis
           force-avd-creation: true
-          cores: 2
-          ram-size: 2048M
+          cores: 4
+          ram-size: 4096M
           emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
           emulator-boot-timeout: 2400
           disable-spellchecker: true

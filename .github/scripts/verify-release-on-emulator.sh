@@ -8,7 +8,25 @@ mkdir -p "$evidence"
 
 # This is a disposable GitHub Actions emulator, not a user's device. Clear only this CI install so
 # the first-run onboarding path is deterministic; no physical/user installation is touched.
-adb install --no-streaming -r "$apk"
+package_manager_ready=false
+for _ in $(seq 1 60); do
+  if adb shell cmd package list packages >/dev/null 2>&1; then
+    package_manager_ready=true
+    break
+  fi
+  sleep 5
+done
+if [[ "$package_manager_ready" != true ]]; then
+  adb logcat -d -b all > "$evidence/EMULATOR_LOGCAT_PACKAGE_NOT_READY.txt" || true
+  adb shell dumpsys meminfo > "$evidence/EMULATOR_MEMINFO_PACKAGE_NOT_READY.txt" 2>&1 || true
+  echo "Package manager did not become ready after emulator boot" >&2
+  exit 1
+fi
+if ! adb install --no-streaming -r "$apk"; then
+  adb logcat -d -b all > "$evidence/EMULATOR_LOGCAT_INSTALL_FAILURE.txt" || true
+  adb shell dumpsys meminfo > "$evidence/EMULATOR_MEMINFO_INSTALL_FAILURE.txt" 2>&1 || true
+  exit 1
+fi
 adb shell pm clear "$package" | tee "$evidence/EMULATOR_DATA_RESET.txt"
 adb shell pm path "$package" | tee "$evidence/INSTALL_PACKAGE_PATH.txt"
 
