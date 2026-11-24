@@ -8,7 +8,7 @@ mkdir -p "$evidence"
 
 # This is a disposable GitHub Actions emulator, not a user's device. Clear only this CI install so
 # the first-run onboarding path is deterministic; no physical/user installation is touched.
-adb install -r "$apk"
+adb install --no-streaming -r "$apk"
 adb shell pm clear "$package" | tee "$evidence/EMULATOR_DATA_RESET.txt"
 adb shell pm path "$package" | tee "$evidence/INSTALL_PACKAGE_PATH.txt"
 
@@ -82,13 +82,19 @@ import sys
 import xml.etree.ElementTree as ET
 needle, path = sys.argv[1:]
 root = ET.parse(path).getroot()
+matches = []
 for node in root.iter():
     if needle in node.attrib.get("text", "") or needle in node.attrib.get("content-desc", ""):
         bounds = re.fullmatch(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.attrib.get("bounds", ""))
         if bounds:
             x1, y1, x2, y2 = map(int, bounds.groups())
-            print((x1 + x2) // 2, (y1 + y2) // 2)
-            raise SystemExit(0)
+            matches.append(((y1 + y2) // 2, (x1 + x2) // 2))
+if matches:
+    # Prefer bottom-most matching text: action buttons and bottom navigation items can share
+    # labels with top-bar headings or other screen content.
+    y, x = max(matches)
+    print(x, y)
+    raise SystemExit(0)
 raise SystemExit(f"Could not locate visible UI text to click: {needle}")
 PY
   )

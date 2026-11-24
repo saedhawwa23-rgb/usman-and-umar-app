@@ -114,6 +114,9 @@ jobs:
           sha256sum "$out/USMAN-AND-UMAR-v$(sed -n 's/.*versionName "\(.*\)".*/\1/p' app/build.gradle | head -1)-release-candidate.apk" | tee "$out/SHA256SUMS.txt"
           printf 'commit=%s\nbranch=%s\n' "$(git rev-parse HEAD)" "$GITHUB_REF_NAME" > "$out/BUILD_METADATA.txt"
 
+      - name: Stop Gradle daemons before emulator test
+        run: ./gradlew --stop
+
       - name: Install and verify release APK on API 36 emulator
         uses: reactivecircus/android-emulator-runner@v2
         env:
@@ -123,8 +126,8 @@ jobs:
           arch: x86_64
           target: google_apis
           force-avd-creation: true
-          cores: 4
-          ram-size: 4096M
+          cores: 2
+          ram-size: 2048M
           emulator-options: -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
           emulator-boot-timeout: 2400
           disable-spellchecker: true
