@@ -179,6 +179,17 @@ jobs:
         if: ${{ inputs.reuse_from_run_id == '' }}
         run: ./gradlew --stop
 
+      - name: Verify Android emulator binary and add it to PATH
+        shell: bash
+        run: |
+          set -euo pipefail
+          emulator_bin="$ANDROID_HOME/emulator/emulator"
+          if [[ ! -f "$emulator_bin" || ! -x "$emulator_bin" ]]; then
+            echo "Android emulator binary is missing or not executable: $emulator_bin" >&2
+            exit 1
+          fi
+          printf '%s\n' "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
+
       - name: Enable and verify KVM acceleration
         shell: bash
         run: |
@@ -196,7 +207,7 @@ jobs:
             echo '/dev/kvm is not both readable and writable by the runner.' >&2
             exit 1
           fi
-          if ! accel_output=$(emulator -accel-check 2>&1); then
+          if ! accel_output=$("$ANDROID_HOME/emulator/emulator" -accel-check 2>&1); then
             printf '%s\n' "$accel_output" >&2
             echo 'emulator -accel-check failed; refusing to start without KVM.' >&2
             exit 1
