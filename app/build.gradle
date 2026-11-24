@@ -137,11 +137,12 @@ android {
             // TLS handshake then fails with "module java.base does not opens java.net". Opening
             // java.net for the test JVM keeps socket and TLS tests order-independent.
             // Robolectric's runtime artifacts are fetched outside Gradle's normal dependency
-            // resolver. Keep that fetch on Maven Central's canonical hostname, matching the
-            // repository used by Gradle, rather than Robolectric's repo1.maven.org default.
+            // resolver. The canonical Maven Central hostname returned HTTP 429 for its large
+            // android-all-instrumented runtime jar in GitHub Actions, so use Google's public
+            // Maven Central mirror for these direct Robolectric downloads.
             all {
                 it.jvmArgs '--add-opens=java.base/java.net=ALL-UNNAMED'
-                it.systemProperty 'robolectric.dependency.repo.url', 'https://repo.maven.apache.org/maven2/'
+                it.systemProperty 'robolectric.dependency.repo.url', 'https://maven-central.storage-download.googleapis.com/maven2/'
             }
         }
     }
