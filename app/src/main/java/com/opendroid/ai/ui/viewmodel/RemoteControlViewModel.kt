@@ -609,7 +609,16 @@ class RemoteControlViewModel @Inject constructor(
         // trusted local network, so plain TCP is used and the message says so.
         activeDesktopHost = host.trim()
         activeDesktopPort = port
-        mutableState.value = mutableState.value.copy(desktopInputAuthorized = false, clipboardSyncEnabled = false)
+        mutableState.value = mutableState.value.copy(
+            desktopInputAuthorized = false,
+            clipboardSyncEnabled = false,
+            desktopStreaming = false,
+            lastScreenFrame = null,
+            desktopScreenWidth = 0,
+            desktopScreenHeight = 0,
+            desktopMonitorCount = 1,
+            desktopMonitor = 0,
+        )
         desktopClient.tlsMode = certificateFingerprint
             ?.takeIf { it.isNotBlank() }
             ?.let { RemoteTlsMode.Pinned(it) }
@@ -620,7 +629,14 @@ class RemoteControlViewModel @Inject constructor(
                 port = port,
                 pairingCode = code.trim().uppercase(),
                 onState = ::onDesktopState,
-                onScreenFrame = { frame -> mutableState.value = mutableState.value.copy(lastScreenFrame = frame) },
+                onScreenFrame = { frame ->
+                    mutableState.value = mutableState.value.copy(
+                        desktopStreaming = true,
+                        lastScreenFrame = frame,
+                        desktopScreenWidth = frame.width,
+                        desktopScreenHeight = frame.height,
+                    )
+                },
                 onMessage = ::onDesktopMessage,
             )
         }
@@ -635,7 +651,16 @@ class RemoteControlViewModel @Inject constructor(
         if (desktopConnected) return
         activeDesktopHost = host.trim()
         activeDesktopPort = port
-        mutableState.value = mutableState.value.copy(desktopInputAuthorized = false, clipboardSyncEnabled = false)
+        mutableState.value = mutableState.value.copy(
+            desktopInputAuthorized = false,
+            clipboardSyncEnabled = false,
+            desktopStreaming = false,
+            lastScreenFrame = null,
+            desktopScreenWidth = 0,
+            desktopScreenHeight = 0,
+            desktopMonitorCount = 1,
+            desktopMonitor = 0,
+        )
         val known = desktopStore.load().firstOrNull { it.host == host.trim() && it.port == port }
         desktopClient.tlsMode = known?.certificateFingerprint
             ?.let { RemoteTlsMode.Pinned(it) }
@@ -646,7 +671,14 @@ class RemoteControlViewModel @Inject constructor(
                 port = port,
                 pairingCode = null,
                 onState = ::onDesktopState,
-                onScreenFrame = { frame -> mutableState.value = mutableState.value.copy(lastScreenFrame = frame) },
+                onScreenFrame = { frame ->
+                    mutableState.value = mutableState.value.copy(
+                        desktopStreaming = true,
+                        lastScreenFrame = frame,
+                        desktopScreenWidth = frame.width,
+                        desktopScreenHeight = frame.height,
+                    )
+                },
                 onMessage = ::onDesktopMessage,
             )
         }
@@ -658,6 +690,11 @@ class RemoteControlViewModel @Inject constructor(
             desktopInputAuthorized = false,
             clipboardSyncEnabled = false,
             desktopStreaming = false,
+            lastScreenFrame = null,
+            desktopScreenWidth = 0,
+            desktopScreenHeight = 0,
+            desktopMonitorCount = 1,
+            desktopMonitor = 0,
             message = "Disconnected from the desktop.",
             messageIsError = false,
         )
@@ -899,11 +936,19 @@ class RemoteControlViewModel @Inject constructor(
         mutableState.value = when (newState) {
             is DesktopSessionState.Connected -> current.copy(
                 desktopConnected = true,
+                desktopStreaming = true,
+                desktopMonitor = 0,
+                lastScreenFrame = null,
                 desktopInputAuthorized = false,
                 desktopName = newState.serverName,
                 message = "Connected to ${newState.serverName}.",
                 messageIsError = false,
-            )
+            ).also {
+                // ScreenInfo is sent by the agent immediately after authentication. Requesting the
+                // stream here makes connection itself enter the live-view path; the UI shows a
+                // waiting surface until that metadata and the first real frame arrive.
+                desktopClient.requestScreen(AUTO_STREAM_WIDTH, AUTO_STREAM_QUALITY, 0)
+            }
             is DesktopSessionState.Connecting -> current.copy(
                 message = "Connecting to the desktop…",
                 messageIsError = false,
@@ -977,5 +1022,10 @@ class RemoteControlViewModel @Inject constructor(
 
     private fun setMessage(text: String, isError: Boolean) {
         mutableState.value = mutableState.value.copy(message = text, messageIsError = isError)
+    }
+
+    private companion object {
+        const val AUTO_STREAM_WIDTH = 1280
+        const val AUTO_STREAM_QUALITY = 65
     }
 }

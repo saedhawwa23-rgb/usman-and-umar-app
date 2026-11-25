@@ -26,6 +26,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -80,6 +81,12 @@ fun RemoteControlScreen(viewModel: RemoteControlViewModel = hiltViewModel()) {
     var host by remember { mutableStateOf("") }
     var tab by remember { mutableIntStateOf(0) }
     val colors = AppTheme.colors
+
+    // Open the real live-view surface as soon as the desktop connection succeeds. This effect only
+    // runs on connection transitions, so the owner can switch tabs freely afterwards.
+    LaunchedEffect(state.desktopConnected) {
+        if (state.desktopConnected) tab = 5
+    }
 
     val activeSessions = state.sessions.count { it.isLive }
     val gatewayStatus = when {
@@ -560,7 +567,7 @@ private fun RemoteGatewayTab(
             state.lastScreenFrame?.let { frame ->
                 Text("Live capture: ${frame.width}×${frame.height} ${frame.format}, ${frame.data.size / 1024} KB", color = colors.textSecondary, fontSize = 11.sp)
             }
-            if (state.desktopStreaming || state.lastScreenFrame != null) {
+            if (shouldRenderRemoteDesktop(state)) {
                 RemoteDesktopView(frame = state.lastScreenFrame, monitorIndex = state.desktopMonitor, moveOnly = pointerMoveOnly, onInput = { viewModel.sendDesktopInput(it) })
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     OutlinedButton(onClick = { pointerMoveOnly = !pointerMoveOnly }, enabled = state.desktopInputAuthorized) {
@@ -664,6 +671,10 @@ private fun RemoteGatewayTab(
         ) { Text("ENGAGE KILL SWITCH") }
     }
 }
+
+/** The live surface is present as soon as a connection exists, even before its first frame. */
+internal fun shouldRenderRemoteDesktop(state: RemoteControlViewModel.UiState): Boolean =
+    state.desktopConnected || state.desktopStreaming || state.lastScreenFrame != null
 
 /** Send AWT key codes in press order and release them in reverse order. */
 private fun sendDesktopKeys(viewModel: RemoteControlViewModel, keys: List<Int>) {
