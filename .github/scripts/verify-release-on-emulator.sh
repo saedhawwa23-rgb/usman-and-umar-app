@@ -135,6 +135,9 @@ click_text "When is your birthday?"
 adb shell input text '01/15/1990'
 adb shell input keyevent 4
 capture_ui "ONBOARDING_PROFILE_ENTERED"
+# The primary button is below the fold on the small CI emulator; scroll it into the visible viewport.
+adb shell input swipe 160 575 160 220 450
+sleep 1
 click_text "Let's Go"
 wait_for_text "Permissions Setup" "ONBOARDING_PERMISSION_PROMPT"
 click_text "Grant Permissions"
