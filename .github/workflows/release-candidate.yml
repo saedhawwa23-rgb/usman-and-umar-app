@@ -98,9 +98,9 @@ jobs:
             echo "Refusing APK from branch $source_branch; expected $GITHUB_REF_NAME" >&2
             exit 1
           }
-          changed_files=$(git diff --name-only "$source_commit"..HEAD -- . ':(exclude).github/workflows/release-candidate.yml')
+          changed_files=$(git diff --name-only "$source_commit"..HEAD -- . ':(exclude).github/workflows/release-candidate.yml' ':(exclude).github/scripts/verify-release-on-emulator.sh')
           if [[ -n "$changed_files" ]]; then
-            echo 'Refusing APK reuse because tracked files other than this workflow changed since the APK source commit:' >&2
+            echo 'Refusing APK reuse because application or build-source files changed since the APK source commit:' >&2
             printf '%s\n' "$changed_files" >&2
             exit 1
           fi

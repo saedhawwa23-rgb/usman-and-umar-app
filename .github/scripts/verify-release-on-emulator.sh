@@ -62,7 +62,8 @@ PY
 }
 
 wait_for_text() {
-  local needle="$1" name="$2" xml="$evidence/${name}.xml"
+  local needle="$1" name="$2"
+  local xml="$evidence/${name}.xml"
   for _ in $(seq 1 60); do
     capture_ui "$name"
     if ui_has_text "$needle" "$xml"; then
@@ -76,7 +77,8 @@ wait_for_text() {
 }
 
 wait_for_absent_text() {
-  local needle="$1" name="$2" xml="$evidence/${name}.xml"
+  local needle="$1" name="$2"
+  local xml="$evidence/${name}.xml"
   for _ in $(seq 1 30); do
     capture_ui "$name"
     if ! ui_has_text "$needle" "$xml"; then
