@@ -17,8 +17,8 @@ android {
         applicationId "com.usmanandumar.app"
         minSdk 28
         targetSdk 36
-        versionCode 45
-        versionName "3.14.0"
+        versionCode 46
+        versionName "3.14.1-remote-live-view"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {

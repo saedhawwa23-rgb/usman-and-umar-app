@@ -2,6 +2,24 @@
 
 All notable changes to USMAN AND UMAR are recorded here.
 
+## [3.14.1-remote-live-view] - 2026-11-25
+
+### Added
+
+- **Automatic live desktop view after connection.** The Android client now requests the real desktop
+  screen stream immediately after authentication, opens the live-view surface, displays a waiting
+  state until the first frame arrives, and reflects screen metadata and frame dimensions.
+
+### Fixed
+
+- **Stale desktop frames are cleared.** Starting, reconnecting, or ending a desktop session now
+  clears the previous desktop image and monitor metadata instead of leaving an old frame visible.
+
+### Notes
+
+- JVM tests, Android lint, debug packaging, and unsigned release/R8 packaging passed locally.
+- Physical Android-to-desktop pairing and external-network testing remain pending hardware access.
+
 ## [3.14.0] - 2026-11-23
 
 ### Added
