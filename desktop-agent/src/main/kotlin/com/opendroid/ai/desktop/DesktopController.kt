@@ -30,7 +30,7 @@ interface DesktopControllerContract {
     fun captureScreen(maxWidth: Int, quality: Int, monitor: Int = 0): CapturedFrame
     fun monitorCount(): Int
     fun screenSize(): java.awt.Dimension
-    fun mouseMove(x: Int, y: Int)
+    fun mouseMove(x: Int, y: Int, monitor: Int = 0, screenWidth: Int = 0, screenHeight: Int = 0)
     fun mouseDown(button: Int)
     fun mouseUp(button: Int)
     fun mouseWheel(amount: Int)
@@ -118,9 +118,17 @@ class DesktopController(
 
     // ---- Input injection ----
 
-    override fun mouseMove(x: Int, y: Int) {
-        val size = screenSize()
-        robot.mouseMove(x.coerceIn(0, size.width - 1), y.coerceIn(0, size.height - 1))
+    override fun mouseMove(x: Int, y: Int, monitor: Int, screenWidth: Int, screenHeight: Int) {
+        val devices = GraphicsEnvironment.getLocalGraphicsEnvironment().screenDevices
+        val bounds = devices.getOrNull(monitor)?.defaultConfiguration?.bounds ?: devices.first().defaultConfiguration.bounds
+        // Stream coordinates may be downscaled; map them back to native pixels before injection.
+        val nativeX = if (screenWidth > 0) x.toLong() * bounds.width / screenWidth else x.toLong()
+        val nativeY = if (screenHeight > 0) y.toLong() * bounds.height / screenHeight else y.toLong()
+        // A secondary display can have a negative origin in virtual desktop coordinates.
+        robot.mouseMove(
+            bounds.x + nativeX.toInt().coerceIn(0, bounds.width - 1),
+            bounds.y + nativeY.toInt().coerceIn(0, bounds.height - 1),
+        )
     }
 
     override fun mouseDown(button: Int) = robot.mousePress(maskFor(button))
@@ -148,33 +156,35 @@ class DesktopController(
     override fun keyUp(keyCode: Int) = robot.keyRelease(keyCode)
 
     /**
-     * Types a string by pressing the keys AWT can resolve for each character. Characters with no
-     * key mapping (some emoji, some non-Latin scripts) are skipped rather than being silently
-     * mistyped as a different character.
+     * Types text through a real clipboard paste so Unicode, accents and line breaks survive key-layout
+     * differences. The desktop's previous clipboard contents are restored after the paste is handled.
      */
     override fun typeText(text: String): Int {
-        var typed = 0
-        for (char in text) {
-            val code = keyCodeFor(char) ?: continue
-            val shift = char.isUpperCase() || char in SHIFTED_CHARS
-            try {
-                if (shift) robot.keyPress(KeyEvent.VK_SHIFT)
-                robot.keyPress(code)
-                robot.keyRelease(code)
-                if (shift) robot.keyRelease(KeyEvent.VK_SHIFT)
-                typed++
-            } catch (_: IllegalArgumentException) {
-                // The platform rejected the key; skip it rather than aborting the whole string.
-            }
+        if (text.isEmpty()) return 0
+        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+        val previous = runCatching { clipboard.getContents(null) }.getOrNull()
+        val modifier = if (System.getProperty("os.name", "").lowercase().contains("mac")) {
+            KeyEvent.VK_META
+        } else {
+            KeyEvent.VK_CONTROL
         }
-        return typed
-    }
-
-    private fun keyCodeFor(char: Char): Int? = when {
-        char in 'a'..'z' -> KeyEvent.VK_A + (char - 'a')
-        char in 'A'..'Z' -> KeyEvent.VK_A + (char - 'A')
-        char in '0'..'9' -> KeyEvent.VK_0 + (char - '0')
-        else -> NAMED_KEYS[char]
+        return try {
+            clipboard.setContents(StringSelection(text), null)
+            robot.keyPress(modifier)
+            try {
+                robot.keyPress(KeyEvent.VK_V)
+                robot.keyRelease(KeyEvent.VK_V)
+            } finally {
+                robot.keyRelease(modifier)
+            }
+            robot.waitForIdle()
+            robot.delay(150)
+            text.length
+        } catch (_: Exception) {
+            0
+        } finally {
+            runCatching { clipboard.setContents(previous ?: StringSelection(""), null) }
+        }
     }
 
     // ---- Applications ----
@@ -203,22 +213,6 @@ class DesktopController(
         }
     }
 
-    private companion object {
-        val SHIFTED_CHARS = setOf('!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '{', '}', '|', ':', '"', '<', '>', '?', '~')
-        val NAMED_KEYS = mapOf(
-            ' ' to KeyEvent.VK_SPACE, '\n' to KeyEvent.VK_ENTER, '\t' to KeyEvent.VK_TAB,
-            '.' to KeyEvent.VK_PERIOD, ',' to KeyEvent.VK_COMMA, '-' to KeyEvent.VK_MINUS,
-            '=' to KeyEvent.VK_EQUALS, '/' to KeyEvent.VK_SLASH, '\\' to KeyEvent.VK_BACK_SLASH,
-            ';' to KeyEvent.VK_SEMICOLON, '\'' to KeyEvent.VK_QUOTE, '[' to KeyEvent.VK_OPEN_BRACKET,
-            ']' to KeyEvent.VK_CLOSE_BRACKET, '`' to KeyEvent.VK_BACK_QUOTE,
-            '!' to KeyEvent.VK_1, '@' to KeyEvent.VK_2, '#' to KeyEvent.VK_3, '$' to KeyEvent.VK_4,
-            '%' to KeyEvent.VK_5, '^' to KeyEvent.VK_6, '&' to KeyEvent.VK_7, '*' to KeyEvent.VK_8,
-            '(' to KeyEvent.VK_9, ')' to KeyEvent.VK_0, '_' to KeyEvent.VK_MINUS, '+' to KeyEvent.VK_EQUALS,
-            '{' to KeyEvent.VK_OPEN_BRACKET, '}' to KeyEvent.VK_CLOSE_BRACKET, '|' to KeyEvent.VK_BACK_SLASH,
-            ':' to KeyEvent.VK_SEMICOLON, '"' to KeyEvent.VK_QUOTE, '<' to KeyEvent.VK_COMMA,
-            '>' to KeyEvent.VK_PERIOD, '?' to KeyEvent.VK_SLASH, '~' to KeyEvent.VK_BACK_QUOTE,
-        )
-    }
 }
 
 data class CapturedFrame(

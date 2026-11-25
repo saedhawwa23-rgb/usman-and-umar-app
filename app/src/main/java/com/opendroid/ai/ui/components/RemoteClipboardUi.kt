@@ -25,9 +25,8 @@ import com.opendroid.ai.ui.theme.AppTheme
 /**
  * A text field that sends what the user types to the desktop as a text input event.
  *
- * Typing goes through the protocol's `text` event rather than a key code per character, so layouts,
- * dead keys and non-Latin scripts behave the way the desktop expects. The field clears after each
- * send, which keeps the phone keyboard and the desktop cursor in step.
+ * Typing goes through the protocol's `text` event. The agent uses a temporary clipboard paste for
+ * Unicode and restores the desktop clipboard afterward. The field clears after each send.
  */
 @Composable
 fun RemoteKeyboardField(onSend: (String) -> Unit, modifier: Modifier = Modifier) {

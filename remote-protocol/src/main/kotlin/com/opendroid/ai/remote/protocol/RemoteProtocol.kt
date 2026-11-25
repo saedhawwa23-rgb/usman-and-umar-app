@@ -183,6 +183,11 @@ data class InputEvent(
     val keyCode: Int = 0,
     val text: String = "",
     val wheel: Int = 0,
+    /** Zero-based display for coordinate-based mouse input; defaults preserve older clients. */
+    val monitor: Int = 0,
+    /** Pixel dimensions of the displayed frame used as the coordinate basis. */
+    val screenWidth: Int = 0,
+    val screenHeight: Int = 0,
 ) : RemoteMessage() {
     companion object {
         const val MOUSE_MOVE = "mouse_move"

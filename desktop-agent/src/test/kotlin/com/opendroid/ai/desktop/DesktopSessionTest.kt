@@ -32,12 +32,14 @@ class DesktopSessionTest {
     /** A controller whose capture is deterministic, so a display is not required. */
     private class FakeController : DesktopControllerContract {
         val input = mutableListOf<String>()
+        var lastMonitor = -1
+        var lastScreenSize = 0 to 0
         var launched: String? = null
         override fun captureScreen(maxWidth: Int, quality: Int, monitor: Int) =
             CapturedFrame(320, 240, "JPEG", 42L, byteArrayOf(1, 2, 3, 4))
         override fun monitorCount() = 1
         override fun screenSize() = java.awt.Dimension(1920, 1080)
-        override fun mouseMove(x: Int, y: Int) { input += "move($x,$y)" }
+        override fun mouseMove(x: Int, y: Int, monitor: Int, screenWidth: Int, screenHeight: Int) { lastMonitor = monitor; lastScreenSize = screenWidth to screenHeight; input += "move($x,$y)" }
         override fun mouseDown(button: Int) { input += "down($button)" }
         override fun mouseUp(button: Int) { input += "up($button)" }
         override fun mouseWheel(amount: Int) { input += "wheel($amount)" }
@@ -95,8 +97,22 @@ class DesktopSessionTest {
         // fail. The assertions that matter run on the messages received before that point.
         fun send(message: RemoteMessage) = runCatching { FrameCodec.write(output, RemoteCodec.encode(message)) }
         fun sendRaw(frame: Frame) = runCatching { FrameCodec.write(output, frame) }
-        fun receive(): RemoteMessage = RemoteCodec.decode(FrameCodec.read(input)!!)
+        fun receiveRaw(): RemoteMessage = RemoteCodec.decode(FrameCodec.read(input)!!)
+        fun receive(): RemoteMessage {
+            while (true) {
+                val message = receiveRaw()
+                if (message !is ScreenInfo) return message
+            }
+        }
         fun receiveFrame(): Frame = FrameCodec.read(input)!!
+        fun receiveScreenFrame(): Frame {
+            while (true) {
+                val frame = FrameCodec.read(input)!!
+                if (frame.type == RemoteProtocol.FRAME_SCREEN) return frame
+                if (frame.type == RemoteProtocol.FRAME_CONTROL && RemoteCodec.decode(frame) is ScreenInfo) continue
+                return frame
+            }
+        }
     }
 
     private fun hello(deviceId: String = "device-1") =
@@ -122,6 +138,25 @@ class DesktopSessionTest {
 
         assertEquals("device-1", outcome.deviceId)
         assertNotNull(store.find("device-1"))
+    }
+
+    @Test
+    fun `authenticated session publishes real screen dimensions and monitor count`() {
+        val store = ClientStore(File(tempRoot, "clients.json"))
+        val pairing = PairingController()
+        val code = pairing.open()
+        val session = session(store, FakeController(), pairing)
+        runSession(session) { client ->
+            client.send(hello())
+            client.receiveRaw() // hello acknowledgement
+            client.send(PairRequest(code, ""))
+            assertTrue((client.receiveRaw() as PairResult).accepted)
+            val info = client.receiveRaw() as ScreenInfo
+            assertEquals(1920, info.width)
+            assertEquals(1080, info.height)
+            assertEquals(1, info.monitorCount)
+            client.send(Disconnect("done"))
+        }
     }
 
     @Test
@@ -384,7 +419,7 @@ class DesktopSessionTest {
             client.receive()
             client.send(PairRequest(code, ""))
             client.receive()
-            client.send(InputEvent(InputEvent.MOUSE_MOVE, x = 100, y = 200))
+            client.send(InputEvent(InputEvent.MOUSE_MOVE, x = 100, y = 200, monitor = 0))
             client.send(InputEvent(InputEvent.MOUSE_DOWN, button = 1))
             client.send(InputEvent(InputEvent.MOUSE_UP, button = 1))
             client.send(InputEvent(InputEvent.TEXT, text = "hi"))
@@ -394,6 +429,25 @@ class DesktopSessionTest {
         assertTrue(controller.input.contains("move(100,200)"))
         assertTrue(controller.input.contains("down(1)"))
         assertTrue(controller.input.contains("text(hi)"))
+    }
+
+    @Test
+    fun `mouse movement preserves the selected monitor index`() {
+        val store = ClientStore(File(tempRoot, "clients.json"))
+        val pairing = PairingController()
+        val code = pairing.open()
+        val controller = FakeController()
+        val session = session(store, controller, pairing)
+        runSession(session) { client ->
+            client.send(hello())
+            client.receive()
+            client.send(PairRequest(code, ""))
+            client.receive()
+            client.send(InputEvent(InputEvent.MOUSE_MOVE, x = 12, y = 34, monitor = 2, screenWidth = 640, screenHeight = 360))
+            client.send(Disconnect("done"))
+        }
+        assertEquals(2, controller.lastMonitor)
+        assertEquals(640 to 360, controller.lastScreenSize)
     }
 
     @Test
@@ -614,7 +668,7 @@ class DesktopSessionTest {
             client.send(PairRequest(code, ""))
             client.receive()
             client.send(ScreenRequest(320, 60))
-            val frame = client.receiveFrame()
+            val frame = client.receiveScreenFrame()
             assertEquals(RemoteProtocol.FRAME_SCREEN, frame.type)
             val screen = ScreenFrameCodec.decode(frame)
             assertEquals(320, screen.width)

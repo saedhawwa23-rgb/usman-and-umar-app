@@ -45,7 +45,7 @@ class RemoteDesktopClientIntegrationTest {
             CapturedFrame(160, 120, "JPEG", 7L, byteArrayOf(1, 2, 3))
         override fun monitorCount() = 1
         override fun screenSize() = java.awt.Dimension(160, 120)
-        override fun mouseMove(x: Int, y: Int) { input += "move($x,$y)" }
+        override fun mouseMove(x: Int, y: Int, monitor: Int, screenWidth: Int, screenHeight: Int) { input += "move($x,$y)" }
         override fun mouseDown(button: Int) { input += "down($button)" }
         override fun mouseUp(button: Int) { input += "up($button)" }
         override fun mouseWheel(amount: Int) { input += "wheel($amount)" }

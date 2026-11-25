@@ -305,7 +305,7 @@ class RemoteDesktopClient(
 
     // ---- Commands ----
 
-    fun requestScreen(maxWidth: Int, quality: Int) = write(ScreenRequest(maxWidth, quality))
+    fun requestScreen(maxWidth: Int, quality: Int, monitor: Int = 0) = write(ScreenRequest(maxWidth, quality, monitor.coerceAtLeast(0)))
 
     fun stopScreen() = write(ScreenRequest(0, 0))
 

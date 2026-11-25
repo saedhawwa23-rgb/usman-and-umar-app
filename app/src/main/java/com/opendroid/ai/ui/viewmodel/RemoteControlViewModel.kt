@@ -26,6 +26,7 @@ import com.opendroid.ai.remote.protocol.InputEvent
 import com.opendroid.ai.remote.protocol.ProtocolError
 import com.opendroid.ai.remote.protocol.RemoteMessage
 import com.opendroid.ai.remote.protocol.ScreenFrameCodec
+import com.opendroid.ai.remote.protocol.ScreenInfo
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.util.UUID
 import javax.inject.Inject
@@ -72,6 +73,11 @@ class RemoteControlViewModel @Inject constructor(
         val desktopConnected: Boolean = false,
         val desktopName: String? = null,
         val desktopStreaming: Boolean = false,
+        val desktopInputAuthorized: Boolean = false,
+        val desktopMonitorCount: Int = 1,
+        val desktopMonitor: Int = 0,
+        val desktopScreenWidth: Int = 0,
+        val desktopScreenHeight: Int = 0,
         val lastScreenFrame: ScreenFrameCodec.ScreenFrame? = null,
         val desktopApplications: List<AppEntry> = emptyList(),
         /** The last clipboard text the desktop reported; null until asked for. */
@@ -184,6 +190,9 @@ class RemoteControlViewModel @Inject constructor(
     private val desktopConnected: Boolean get() = mutableState.value.desktopConnected
 
     private val pairedDesktops: List<PairedDesktop> get() = mutableState.value.pairedDesktops
+
+    @Volatile private var activeDesktopHost: String? = null
+    @Volatile private var activeDesktopPort: Int = 8777
 
     /** Turn the LAN listener on so a paired device can reach this phone. */
     fun startListening() {
@@ -543,6 +552,7 @@ class RemoteControlViewModel @Inject constructor(
 
     fun engageKillSwitch() {
         val result = coordinator.engageKillSwitch()
+        desktopClient.disconnect("kill switch engaged")
         // Stop accepting remote requests immediately; authentication rejection alone would leave
         // the listener exposed and its status misleadingly marked as on.
         transport.stopForKillSwitch()
@@ -557,6 +567,11 @@ class RemoteControlViewModel @Inject constructor(
             pairingDeviceId = null,
             pairingExpiresAtMs = 0L,
             killSwitchActive = true,
+            desktopConnected = false,
+            desktopStreaming = false,
+            desktopInputAuthorized = false,
+            clipboardSyncEnabled = false,
+            lastScreenFrame = null,
             sharingRunning = false,
             gatewayRunning = false,
             gatewayBytesIn = 0,
@@ -582,12 +597,19 @@ class RemoteControlViewModel @Inject constructor(
      * started; nothing is stored unless the agent accepts it.
      */
     fun pairWithDesktop(host: String, port: Int, code: String, certificateFingerprint: String? = null) {
+        if (mutableState.value.killSwitchActive) {
+            setMessage("Remote desktop access is disabled by the kill switch.", isError = true)
+            return
+        }
         if (desktopConnected) {
             setMessage("Disconnect the current desktop before pairing with another.", isError = true)
             return
         }
         // Pinning needs the fingerprint the desktop printed. Without one the user has chosen a
         // trusted local network, so plain TCP is used and the message says so.
+        activeDesktopHost = host.trim()
+        activeDesktopPort = port
+        mutableState.value = mutableState.value.copy(desktopInputAuthorized = false, clipboardSyncEnabled = false)
         desktopClient.tlsMode = certificateFingerprint
             ?.takeIf { it.isNotBlank() }
             ?.let { RemoteTlsMode.Pinned(it) }
@@ -606,7 +628,14 @@ class RemoteControlViewModel @Inject constructor(
 
     /** Connect to a desktop that has already been paired. */
     fun connectToDesktop(host: String, port: Int) {
+        if (mutableState.value.killSwitchActive) {
+            setMessage("Remote desktop access is disabled by the kill switch.", isError = true)
+            return
+        }
         if (desktopConnected) return
+        activeDesktopHost = host.trim()
+        activeDesktopPort = port
+        mutableState.value = mutableState.value.copy(desktopInputAuthorized = false, clipboardSyncEnabled = false)
         val known = desktopStore.load().firstOrNull { it.host == host.trim() && it.port == port }
         desktopClient.tlsMode = known?.certificateFingerprint
             ?.let { RemoteTlsMode.Pinned(it) }
@@ -626,19 +655,58 @@ class RemoteControlViewModel @Inject constructor(
     fun disconnectDesktop() {
         desktopClient.disconnect("disconnected from the phone")
         mutableState.value = mutableState.value.copy(
+            desktopInputAuthorized = false,
+            clipboardSyncEnabled = false,
             desktopStreaming = false,
             message = "Disconnected from the desktop.",
             messageIsError = false,
         )
     }
 
-    fun startDesktopStream(width: Int, quality: Int) {
+    fun startDesktopStream(width: Int, quality: Int, monitor: Int = mutableState.value.desktopMonitor) {
+        if (mutableState.value.killSwitchActive) return
         if (!desktopConnected) {
             setMessage("Connect to a desktop before viewing its screen.", isError = true)
             return
         }
-        desktopClient.requestScreen(width, quality)
-        mutableState.value = mutableState.value.copy(desktopStreaming = true)
+        val selected = monitor.coerceIn(0, (mutableState.value.desktopMonitorCount - 1).coerceAtLeast(0))
+        desktopClient.requestScreen(width.coerceIn(320, 7680), quality.coerceIn(1, 100), selected)
+        mutableState.value = mutableState.value.copy(desktopStreaming = true, desktopMonitor = selected)
+    }
+
+    fun selectDesktopMonitor(monitor: Int, width: Int, quality: Int) {
+        val selected = monitor.coerceIn(0, (mutableState.value.desktopMonitorCount - 1).coerceAtLeast(0))
+        mutableState.value = mutableState.value.copy(desktopMonitor = selected, lastScreenFrame = null)
+        if (desktopConnected && mutableState.value.desktopStreaming) startDesktopStream(width, quality, selected)
+    }
+
+    /** Local owner consent is required every time a desktop session is established. */
+    fun setDesktopInputAuthorized(enabled: Boolean) {
+        val current = mutableState.value
+        val authorized = enabled && current.desktopConnected && !current.killSwitchActive
+        mutableState.value = current.copy(
+            desktopInputAuthorized = authorized,
+            clipboardSyncEnabled = current.clipboardSyncEnabled && authorized,
+        )
+        setMessage(
+            if (authorized) "Remote input enabled for this session. The desktop agent can still refuse it."
+            else "Remote input disabled.",
+            isError = false,
+        )
+    }
+
+    fun reconnectDesktop() {
+        if (mutableState.value.killSwitchActive) return
+        val host = activeDesktopHost ?: return setMessage("No desktop endpoint is available to reconnect.", isError = true)
+        val port = activeDesktopPort
+        desktopClient.disconnect("reconnecting")
+        mutableState.value = mutableState.value.copy(
+            desktopConnected = false, desktopStreaming = false, desktopInputAuthorized = false, lastScreenFrame = null,
+        )
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(300)
+            connectToDesktop(host, port)
+        }
     }
 
     fun stopDesktopStream() {
@@ -647,14 +715,19 @@ class RemoteControlViewModel @Inject constructor(
     }
 
     fun sendDesktopInput(event: InputEvent) {
-        if (!desktopConnected) return
-        desktopClient.sendInput(event)
+        val current = mutableState.value
+        if (current.killSwitchActive || !current.desktopConnected || !current.desktopInputAuthorized) return
+        desktopClient.sendInput(event.copy(monitor = current.desktopMonitor))
     }
 
     // ---- Clipboard ----
 
     /** Ask the desktop for its current clipboard text. */
     fun requestDesktopClipboard() {
+        if (mutableState.value.killSwitchActive || !mutableState.value.desktopInputAuthorized) {
+            setMessage("Enable remote input for this session before reading the desktop clipboard.", isError = true)
+            return
+        }
         if (!desktopConnected) {
             setMessage("Connect to a desktop before syncing the clipboard.", isError = true)
             return
@@ -668,6 +741,10 @@ class RemoteControlViewModel @Inject constructor(
      * testable off-device.
      */
     fun sendToDesktopClipboard(text: String) {
+        if (mutableState.value.killSwitchActive || !mutableState.value.desktopInputAuthorized) {
+            setMessage("Enable remote input for this session before writing to the desktop clipboard.", isError = true)
+            return
+        }
         if (!desktopConnected) {
             setMessage("Connect to a desktop before syncing the clipboard.", isError = true)
             return
@@ -685,6 +762,10 @@ class RemoteControlViewModel @Inject constructor(
     }
 
     fun setClipboardSyncEnabled(enabled: Boolean) {
+        if (enabled && (!desktopConnected || !mutableState.value.desktopInputAuthorized || mutableState.value.killSwitchActive)) {
+            setMessage("Enable remote input and connect before turning on clipboard sync.", isError = true)
+            return
+        }
         mutableState.value = mutableState.value.copy(
             clipboardSyncEnabled = enabled,
             message = if (enabled) "Clipboard sync is on: text you copy here is sent to the desktop."
@@ -702,7 +783,10 @@ class RemoteControlViewModel @Inject constructor(
     }
 
     fun launchDesktopApplication(id: String) {
-        if (!desktopConnected) return
+        if (mutableState.value.killSwitchActive || !desktopConnected || !mutableState.value.desktopInputAuthorized) {
+            setMessage("Enable remote input for this session before launching desktop apps.", isError = true)
+            return
+        }
         desktopClient.launchApplication(id)
     }
 
@@ -713,6 +797,8 @@ class RemoteControlViewModel @Inject constructor(
         mutableState.value = mutableState.value.copy(
             pairedDesktops = emptyList(),
             desktopConnected = false,
+            desktopInputAuthorized = false,
+            clipboardSyncEnabled = false,
             desktopStreaming = false,
             lastScreenFrame = null,
             desktopApplications = emptyList(),
@@ -813,6 +899,7 @@ class RemoteControlViewModel @Inject constructor(
         mutableState.value = when (newState) {
             is DesktopSessionState.Connected -> current.copy(
                 desktopConnected = true,
+                desktopInputAuthorized = false,
                 desktopName = newState.serverName,
                 message = "Connected to ${newState.serverName}.",
                 messageIsError = false,
@@ -828,6 +915,8 @@ class RemoteControlViewModel @Inject constructor(
             is DesktopSessionState.Failed -> current.copy(
                 desktopConnected = false,
                 desktopStreaming = false,
+                desktopInputAuthorized = false,
+                clipboardSyncEnabled = false,
                 lastScreenFrame = null,
                 pairedDesktops = desktopStore.load(),
                 message = newState.reason,
@@ -836,6 +925,8 @@ class RemoteControlViewModel @Inject constructor(
             is DesktopSessionState.Closed -> current.copy(
                 desktopConnected = false,
                 desktopStreaming = false,
+                desktopInputAuthorized = false,
+                clipboardSyncEnabled = false,
                 lastScreenFrame = null,
                 message = newState.reason,
                 messageIsError = false,
@@ -847,6 +938,12 @@ class RemoteControlViewModel @Inject constructor(
     private fun onDesktopMessage(message: RemoteMessage) {
         val current = mutableState.value
         when (message) {
+            is ScreenInfo -> mutableState.value = current.copy(
+                desktopScreenWidth = message.width,
+                desktopScreenHeight = message.height,
+                desktopMonitorCount = message.monitorCount.coerceIn(1, 32),
+                desktopMonitor = current.desktopMonitor.coerceIn(0, message.monitorCount.coerceAtLeast(1) - 1),
+            )
             is AppList -> mutableState.value = current.copy(
                 desktopApplications = message.entries,
                 message = "${message.entries.size} application(s) on the desktop.",

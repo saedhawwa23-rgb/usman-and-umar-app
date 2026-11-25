@@ -41,7 +41,7 @@ class RemoteProtocolTest {
             Revoke("r"),
             Disconnect("bye"),
             ProtocolError("code", "msg"),
-            InputEvent(InputEvent.KEY_DOWN, keyCode = 65),
+            InputEvent(InputEvent.KEY_DOWN, keyCode = 65, monitor = 2, screenWidth = 640, screenHeight = 360),
             ScreenRequest(1280, 70, 1),
             ScreenInfo(1920, 1080, 2),
             AppListRequest(),

@@ -16,12 +16,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -39,6 +42,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.opendroid.ai.core.remote.PairedDesktop
 import com.opendroid.ai.core.remote.RemoteSessionState
 import com.opendroid.ai.remote.protocol.FileEntry
+import com.opendroid.ai.remote.protocol.InputEvent
 import com.opendroid.ai.ui.components.BrandOutlineButton
 import com.opendroid.ai.ui.components.ClipboardSyncRow
 import com.opendroid.ai.ui.components.EmptyState
@@ -406,7 +410,11 @@ private fun RemoteGatewayTab(
     var port by remember { mutableStateOf("8777") }
     var code by remember { mutableStateOf("") }
     var width by remember { mutableStateOf("1280") }
+    var quality by remember { mutableStateOf("65") }
     var fingerprint by remember { mutableStateOf("") }
+    var showInputConsent by remember { mutableStateOf(false) }
+    var fullscreen by remember { mutableStateOf(false) }
+    var pointerMoveOnly by remember { mutableStateOf(false) }
 
     PlatformCard(
         title = "Remote gateway (LAN listener)",
@@ -485,50 +493,110 @@ private fun RemoteGatewayTab(
             }
         }
         if (state.pairedDesktops.isNotEmpty()) {
-            Text(
-                "Paired: " + state.pairedDesktops.joinToString { "${it.serverName} (${it.host}:${it.port})" },
-                color = colors.textSecondary, fontSize = 12.sp,
-            )
+            Text("Paired desktops (authenticated reconnect; no new code needed):", color = colors.textSecondary, fontSize = 12.sp)
+            state.pairedDesktops.forEach { desktop ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("${desktop.serverName} (${desktop.host}:${desktop.port})", color = colors.textSecondary, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { viewModel.connectToDesktop(desktop.host, desktop.port) }, enabled = !state.desktopConnected) { Text("CONNECT") }
+                }
+            }
         }
         if (state.desktopConnected) {
-            Text("Connected to ${state.desktopName ?: "the desktop"}.", color = colors.emerald, fontSize = 12.sp)
-            OutlinedTextField(
-                value = width, onValueChange = { width = it.filter(Char::isDigit) },
-                label = { Text("Screen width in pixels") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column {
+                    Text("Connected: ${state.desktopName ?: "desktop"}", color = colors.emerald, fontSize = 12.sp)
+                    Text(
+                        if (state.desktopStreaming) "LIVE · ${state.lastScreenFrame?.let { "${it.width}×${it.height}" } ?: "starting stream"} · monitor ${state.desktopMonitor + 1}/${state.desktopMonitorCount}"
+                        else "Session connected · screen stream stopped",
+                        color = colors.textSecondary, fontSize = 11.sp,
+                    )
+                }
+                OutlinedButton(onClick = { viewModel.reconnectDesktop() }) { Text("RECONNECT") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(onClick = { showInputConsent = true }) {
+                    Text(if (state.desktopInputAuthorized) "DISABLE INPUT" else "ENABLE INPUT")
+                }
+                Text(
+                    if (state.desktopInputAuthorized) "Remote input authorized for this session"
+                    else "Screen is view-only until you approve input",
+                    color = if (state.desktopInputAuthorized) colors.emerald else colors.textSecondary,
+                    fontSize = 11.sp, modifier = Modifier.weight(1f),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = width, onValueChange = { width = it.filter(Char::isDigit).take(4) },
+                    label = { Text("Stream width (px)") }, singleLine = true, modifier = Modifier.weight(1f),
+                )
+                OutlinedTextField(
+                    value = quality, onValueChange = { quality = it.filter(Char::isDigit).take(3) },
+                    label = { Text("JPEG quality 1–100") }, singleLine = true, modifier = Modifier.weight(1f),
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Monitor ${state.desktopMonitor + 1} of ${state.desktopMonitorCount}", color = colors.textPrimary, fontSize = 12.sp)
+                OutlinedButton(
+                    onClick = { viewModel.selectDesktopMonitor(state.desktopMonitor - 1, width.toIntOrNull() ?: 1280, quality.toIntOrNull() ?: 65) },
+                    enabled = state.desktopMonitor > 0,
+                ) { Text("PREVIOUS") }
+                OutlinedButton(
+                    onClick = { viewModel.selectDesktopMonitor(state.desktopMonitor + 1, width.toIntOrNull() ?: 1280, quality.toIntOrNull() ?: 65) },
+                    enabled = state.desktopMonitor + 1 < state.desktopMonitorCount,
+                ) { Text("NEXT") }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (state.desktopStreaming) {
                     OutlinedButton(onClick = { viewModel.stopDesktopStream() }) { Text("STOP VIEWING") }
                 } else {
-                    Button(onClick = { viewModel.startDesktopStream(width.toIntOrNull() ?: 1280, 60) }) {
-                        Text("VIEW SCREEN")
-                    }
+                    Button(onClick = { viewModel.startDesktopStream(width.toIntOrNull() ?: 1280, quality.toIntOrNull() ?: 65) }) { Text("VIEW SCREEN") }
+                }
+                if (state.desktopStreaming) {
+                    OutlinedButton(onClick = { viewModel.startDesktopStream(width.toIntOrNull() ?: 1280, quality.toIntOrNull() ?: 65) }) { Text("APPLY SETTINGS") }
+                    OutlinedButton(onClick = { fullscreen = true }) { Text("FULLSCREEN") }
                 }
                 OutlinedButton(onClick = { viewModel.listDesktopApplications() }) { Text("LIST APPS") }
             }
             state.lastScreenFrame?.let { frame ->
-                Text(
-                    "Last frame: ${frame.width}x${frame.height} ${frame.format}, ${frame.data.size / 1024} KB",
-                    color = colors.textSecondary, fontSize = 12.sp,
-                )
+                Text("Live capture: ${frame.width}×${frame.height} ${frame.format}, ${frame.data.size / 1024} KB", color = colors.textSecondary, fontSize = 11.sp)
             }
             if (state.desktopStreaming || state.lastScreenFrame != null) {
-                RemoteDesktopView(
-                    frame = state.lastScreenFrame,
-                    onInput = { viewModel.sendDesktopInput(it) },
-                )
-                Text(
-                    "Tap to click, drag to move, long press for right click.",
-                    color = colors.textSecondary, fontSize = 11.sp,
-                )
-                RemoteKeyboardField(onSend = { text ->
-                    viewModel.sendDesktopInput(
-                        com.opendroid.ai.remote.protocol.InputEvent(
-                            com.opendroid.ai.remote.protocol.InputEvent.TEXT,
-                            text = text,
-                        )
+                RemoteDesktopView(frame = state.lastScreenFrame, monitorIndex = state.desktopMonitor, moveOnly = pointerMoveOnly, onInput = { viewModel.sendDesktopInput(it) })
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(onClick = { pointerMoveOnly = !pointerMoveOnly }, enabled = state.desktopInputAuthorized) {
+                        Text(if (pointerMoveOnly) "MOVE ONLY: ON" else "CLICK/DRAG MODE")
+                    }
+                    Text(
+                        if (pointerMoveOnly) "Drag or tap moves the cursor without clicking." else "Tap click · double-tap double-click · hold right-click · drag selects/moves.",
+                        color = colors.textSecondary, fontSize = 11.sp,
                     )
-                })
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { viewModel.sendDesktopInput(InputEvent(InputEvent.MOUSE_WHEEL, wheel = -3)) }, enabled = state.desktopInputAuthorized) { Text("SCROLL UP") }
+                    OutlinedButton(onClick = { viewModel.sendDesktopInput(InputEvent(InputEvent.MOUSE_WHEEL, wheel = 3)) }, enabled = state.desktopInputAuthorized) { Text("SCROLL DOWN") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = { sendDesktopKeys(viewModel, listOf(17, 67)) }, enabled = state.desktopInputAuthorized) { Text("CTRL+C") }
+                    OutlinedButton(onClick = { sendDesktopKeys(viewModel, listOf(17, 86)) }, enabled = state.desktopInputAuthorized) { Text("CTRL+V") }
+                    OutlinedButton(onClick = { sendDesktopKeys(viewModel, listOf(18, 9)) }, enabled = state.desktopInputAuthorized) { Text("ALT+TAB") }
+                    OutlinedButton(onClick = { sendDesktopKeys(viewModel, listOf(17, 18, 127)) }, enabled = state.desktopInputAuthorized) { Text("CTRL+ALT+DEL") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("←" to 37, "↑" to 38, "↓" to 40, "→" to 39).forEach { (label, key) ->
+                        OutlinedButton(onClick = { sendDesktopKeys(viewModel, listOf(key)) }, enabled = state.desktopInputAuthorized) { Text(label) }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = { sendDesktopKeys(viewModel, listOf(9)) }, enabled = state.desktopInputAuthorized) { Text("TAB") }
+                    OutlinedButton(onClick = { sendDesktopKeys(viewModel, listOf(10)) }, enabled = state.desktopInputAuthorized) { Text("ENTER") }
+                    OutlinedButton(onClick = { sendDesktopKeys(viewModel, listOf(27)) }, enabled = state.desktopInputAuthorized) { Text("ESC") }
+                    OutlinedButton(onClick = { sendDesktopKeys(viewModel, listOf(8)) }, enabled = state.desktopInputAuthorized) { Text("⌫") }
+                }
+                if (state.desktopInputAuthorized) {
+                    RemoteKeyboardField(onSend = { text -> viewModel.sendDesktopInput(InputEvent(InputEvent.TEXT, text = text)) })
+                } else {
+                    Text("Approve remote input above to use text, keyboard shortcuts, mouse and application launch.", color = colors.textSecondary, fontSize = 11.sp)
+                }
             }
             ClipboardSyncRow(
                 desktopClipboard = state.desktopClipboard,
@@ -538,13 +606,45 @@ private fun RemoteGatewayTab(
                 onToggleSync = { viewModel.setClipboardSyncEnabled(it) },
             )
             state.desktopApplications.take(10).forEach { app ->
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text(app.name, color = colors.textPrimary, fontSize = 12.sp)
-                    TextButton(onClick = { viewModel.launchDesktopApplication(app.id) }) { Text("START") }
+                    TextButton(onClick = { viewModel.launchDesktopApplication(app.id) }, enabled = state.desktopInputAuthorized) { Text("START") }
+                }
+            }
+        }
+        if (showInputConsent) {
+            AlertDialog(
+                onDismissRequest = { showInputConsent = false },
+                title = { Text(if (state.desktopInputAuthorized) "Disable remote input?" else "Allow remote desktop input?") },
+                text = { Text("Paired desktops can reconnect without a new code. Screen viewing is separate from control: mouse, keyboard, text and app-launch actions remain blocked until you approve them for this connection. The desktop owner must also have enabled input in the agent; its --no-input setting always refuses control.") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.setDesktopInputAuthorized(!state.desktopInputAuthorized)
+                        showInputConsent = false
+                    }) { Text(if (state.desktopInputAuthorized) "DISABLE" else "ALLOW THIS SESSION") }
+                },
+                dismissButton = { TextButton(onClick = { showInputConsent = false }) { Text("CANCEL") } },
+            )
+        }
+        if (fullscreen && state.desktopStreaming) {
+            Dialog(onDismissRequest = { fullscreen = false }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+                Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                        Text("${state.desktopName ?: "Desktop"} · monitor ${state.desktopMonitor + 1}", color = colors.textPrimary)
+                        TextButton(onClick = { fullscreen = false }) { Text("EXIT FULLSCREEN") }
+                    }
+                    RemoteDesktopView(
+                        frame = state.lastScreenFrame,
+                        modifier = Modifier.weight(1f),
+                        monitorIndex = state.desktopMonitor,
+                        moveOnly = pointerMoveOnly,
+                        onInput = { viewModel.sendDesktopInput(it) },
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { viewModel.sendDesktopInput(InputEvent(InputEvent.MOUSE_WHEEL, wheel = -3)) }, enabled = state.desktopInputAuthorized) { Text("SCROLL UP") }
+                        OutlinedButton(onClick = { viewModel.sendDesktopInput(InputEvent(InputEvent.MOUSE_WHEEL, wheel = 3)) }, enabled = state.desktopInputAuthorized) { Text("SCROLL DOWN") }
+                        TextButton(onClick = { viewModel.stopDesktopStream(); fullscreen = false }) { Text("STOP STREAM") }
+                    }
                 }
             }
         }
@@ -563,6 +663,12 @@ private fun RemoteGatewayTab(
             enabled = !state.killSwitchActive,
         ) { Text("ENGAGE KILL SWITCH") }
     }
+}
+
+/** Send AWT key codes in press order and release them in reverse order. */
+private fun sendDesktopKeys(viewModel: RemoteControlViewModel, keys: List<Int>) {
+    keys.forEach { viewModel.sendDesktopInput(InputEvent(InputEvent.KEY_DOWN, keyCode = it)) }
+    keys.asReversed().forEach { viewModel.sendDesktopInput(InputEvent(InputEvent.KEY_UP, keyCode = it)) }
 }
 
 /**

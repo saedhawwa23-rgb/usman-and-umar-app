@@ -87,6 +87,8 @@ class DesktopSession(
             val client = authenticated ?: return SessionOutcome(hello.deviceId, "authentication failed")
             pairedClient = client
             log("session authenticated for ${client.deviceName} (${client.deviceId})")
+            val screenSize = controller.screenSize()
+            send(ScreenInfo(screenSize.width, screenSize.height, controller.monitorCount()))
 
             return messageLoop(input)
         } catch (e: ProtocolException) {
@@ -242,7 +244,7 @@ class DesktopSession(
         }
         runCatching {
             when (event.kind) {
-                InputEvent.MOUSE_MOVE -> controller.mouseMove(event.x, event.y)
+                InputEvent.MOUSE_MOVE -> controller.mouseMove(event.x, event.y, event.monitor, event.screenWidth, event.screenHeight)
                 InputEvent.MOUSE_DOWN -> controller.mouseDown(event.button)
                 InputEvent.MOUSE_UP -> controller.mouseUp(event.button)
                 InputEvent.MOUSE_WHEEL -> controller.mouseWheel(event.wheel)
