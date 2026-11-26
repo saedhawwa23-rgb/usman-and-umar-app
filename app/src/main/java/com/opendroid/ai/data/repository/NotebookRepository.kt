@@ -167,7 +167,11 @@ class NotebookRepository @Inject constructor(
                     else -> source?.toString().orEmpty()
                 }.trim()
                 if (text.isNotBlank()) {
-                    val label = when (cellType) { "code" -> "Code", "markdown" -> "Markdown", else -> "Raw" }
+                    val label = when (cellType) {
+                        "code" -> "Code"
+                        "markdown" -> "Markdown"
+                        else -> "Raw"
+                    }
                     snippets += "$label cell ${i + 1}\n${redactSecrets(text).take(400)}"
                 }
             }
