@@ -34,14 +34,25 @@ data class NotebookRecord(
 
 data class NotebookImportResult(val notebook: NotebookEntity, val duplicate: Boolean)
 
+interface NotebookLibraryStore {
+    val notebooks: Flow<List<NotebookEntity>>
+    suspend fun ensureBuiltInNotebook()
+    suspend fun import(uri: Uri): Result<NotebookImportResult>
+    suspend fun getPreview(entity: NotebookEntity): Result<NotebookPreview>
+    suspend fun rename(id: String, name: String, description: String)
+    suspend fun delete(entity: NotebookEntity)
+    suspend fun markOpened(id: String)
+    suspend fun export(entity: NotebookEntity, destination: Uri): Result<Unit>
+}
+
 @Singleton
 class NotebookRepository @Inject constructor(
     private val dao: NotebookDao,
     @ApplicationContext private val context: Context,
-) {
-    val notebooks: Flow<List<NotebookEntity>> = dao.observeAll()
+) : NotebookLibraryStore {
+    override val notebooks: Flow<List<NotebookEntity>> = dao.observeAll()
 
-    suspend fun ensureBuiltInNotebook() = withContext(Dispatchers.IO) {
+    override suspend fun ensureBuiltInNotebook() = withContext(Dispatchers.IO) {
         val assetName = "USMAN_OPENSWARM_NODE.ipynb"
         val bytes = context.assets.open(assetName).use { it.readBytes() }
         val sha = sha256(bytes)
@@ -55,8 +66,9 @@ class NotebookRepository @Inject constructor(
             "application/x-ipynb+json", bytes.size.toLong(), sha, true, now, now))
     }
 
-    suspend fun import(uri: Uri): Result<NotebookImportResult> = withContext(Dispatchers.IO) {
-        runCatching {
+    override suspend fun import(uri: Uri): Result<NotebookImportResult> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(run {
             val resolver = context.contentResolver
             val displayName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
                 ?.use { cursor ->
@@ -83,36 +95,45 @@ class NotebookRepository @Inject constructor(
             } ?: error("The selected notebook could not be read. Check that the file provider is available and try again.")
             val preview = parsePreview(bytes)
             val sha = sha256(bytes)
-            dao.getBySha256(sha)?.let { return@runCatching NotebookImportResult(it, duplicate = true) }
-            val id = UUID.randomUUID().toString()
-            val target = notebookFile(id)
-            target.parentFile?.mkdirs()
-            target.writeBytes(bytes)
-            val now = System.currentTimeMillis()
-            val notebook = NotebookEntity(id, name, preview.previewText.lineSequence().firstOrNull().orEmpty().take(160), uri.toString(), target.path,
-                resolver.getType(uri) ?: "application/x-ipynb+json", bytes.size.toLong(), sha, false, now, now)
-            dao.upsert(notebook)
-            NotebookImportResult(notebook, duplicate = false)
+            val existing = dao.getBySha256(sha)
+            if (existing != null) {
+                NotebookImportResult(existing, duplicate = true)
+            } else {
+                val id = UUID.randomUUID().toString()
+                val target = notebookFile(id)
+                target.parentFile?.mkdirs()
+                target.writeBytes(bytes)
+                val now = System.currentTimeMillis()
+                val notebook = NotebookEntity(id, name, preview.previewText.lineSequence().firstOrNull().orEmpty().take(160), uri.toString(), target.path,
+                    resolver.getType(uri) ?: "application/x-ipynb+json", bytes.size.toLong(), sha, false, now, now)
+                dao.upsert(notebook)
+                NotebookImportResult(notebook, duplicate = false)
+            }
+            })
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            Result.failure(failure)
         }
     }
 
-    suspend fun getPreview(entity: NotebookEntity): Result<NotebookPreview> = withContext(Dispatchers.IO) {
+    override suspend fun getPreview(entity: NotebookEntity): Result<NotebookPreview> = withContext(Dispatchers.IO) {
         runCatching { parsePreview(File(entity.localPath).readBytes()) }
     }
 
-    suspend fun rename(id: String, name: String, description: String) {
+    override suspend fun rename(id: String, name: String, description: String) {
         val safeName = name.trim().removeSuffix(".ipynb").take(120).ifBlank { "Notebook" } + ".ipynb"
         dao.updateDetails(id, safeName, description.trim().take(500), System.currentTimeMillis())
     }
 
-    suspend fun delete(entity: NotebookEntity) = withContext(Dispatchers.IO) {
+    override suspend fun delete(entity: NotebookEntity) = withContext(Dispatchers.IO) {
         if (!entity.builtIn) File(entity.localPath).delete()
         dao.deleteById(entity.id)
     }
 
-    suspend fun markOpened(id: String) = dao.markOpened(id, System.currentTimeMillis())
+    override suspend fun markOpened(id: String) = dao.markOpened(id, System.currentTimeMillis())
 
-    suspend fun export(entity: NotebookEntity, destination: Uri): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun export(entity: NotebookEntity, destination: Uri): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val bytes = File(entity.localPath).readBytes()
             context.contentResolver.openOutputStream(destination)?.use { it.write(bytes) }

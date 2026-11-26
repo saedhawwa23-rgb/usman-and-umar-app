@@ -3,6 +3,8 @@ package com.opendroid.ai.di
 import android.content.Context
 import android.os.Build
 import com.opendroid.ai.core.security.AndroidProviderCredentialStore
+import com.opendroid.ai.data.repository.NotebookLibraryStore
+import com.opendroid.ai.data.repository.NotebookRepository
 import com.opendroid.ai.core.security.AndroidSensitiveMemoryStore
 import com.opendroid.ai.core.security.AndroidUserProfileStore
 import com.opendroid.ai.core.security.ProviderCredentialStore
@@ -70,6 +72,10 @@ object AppModule {
     fun provideContext(@ApplicationContext context: Context): Context {
         return context
     }
+
+    @Provides
+    @Singleton
+    fun provideNotebookLibraryStore(repository: NotebookRepository): NotebookLibraryStore = repository
 
     @Provides
     @Singleton

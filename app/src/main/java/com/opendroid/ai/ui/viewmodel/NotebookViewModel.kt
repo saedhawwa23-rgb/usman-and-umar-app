@@ -5,13 +5,17 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.opendroid.ai.data.db.entities.NotebookEntity
 import com.opendroid.ai.data.repository.NotebookPreview
-import com.opendroid.ai.data.repository.NotebookRepository
+import com.opendroid.ai.data.repository.NotebookLibraryStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -26,11 +30,14 @@ data class NotebookUiState(
 
 @HiltViewModel
 class NotebookViewModel @Inject constructor(
-    private val repository: NotebookRepository,
+    private val repository: NotebookLibraryStore,
 ) : ViewModel() {
     private val _state = MutableStateFlow(NotebookUiState())
     val state: StateFlow<NotebookUiState> = _state.asStateFlow()
     private val notebooks = repository.notebooks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val operationMutex = Mutex()
+    // runBusy is launched on viewModelScope's main dispatcher, so this count is main-thread confined.
+    private var pendingOperations = 0
 
     init {
         viewModelScope.launch {
@@ -88,8 +95,18 @@ class NotebookViewModel @Inject constructor(
 
     private fun runBusy(block: suspend () -> Unit) {
         viewModelScope.launch {
-            _state.value = _state.value.copy(busy = true, message = null, error = null)
-            try { block() } finally { _state.value = _state.value.copy(busy = false) }
+            pendingOperations++
+            _state.update { it.copy(busy = true, message = null, error = null) }
+            try {
+                operationMutex.withLock { block() }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                _state.update { it.copy(error = failure.message ?: "Notebook operation failed.") }
+            } finally {
+                pendingOperations--
+                _state.update { it.copy(busy = pendingOperations > 0) }
+            }
         }
     }
 }
