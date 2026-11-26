@@ -22,8 +22,10 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -47,6 +49,8 @@ import com.opendroid.ai.ui.components.BrandHeader
 import com.opendroid.ai.ui.components.PlatformCard
 import com.opendroid.ai.ui.theme.AppTheme
 import com.opendroid.ai.ui.viewmodel.NotebookViewModel
+import java.text.DateFormat
+import java.util.Date
 import java.util.Locale
 
 @Composable
@@ -57,6 +61,7 @@ fun NotebookLibraryScreen(
     val context = LocalContext.current
     val state by viewModel.state.collectAsState()
     var query by remember { mutableStateOf("") }
+    var sortByName by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<com.opendroid.ai.data.db.entities.NotebookEntity?>(null) }
     var deleteTarget by remember { mutableStateOf<com.opendroid.ai.data.db.entities.NotebookEntity?>(null) }
     var renameName by remember { mutableStateOf("") }
@@ -75,7 +80,7 @@ fun NotebookLibraryScreen(
     val filtered = state.notebooks.filter {
         query.isBlank() || it.name.lowercase(Locale.ROOT).contains(query.trim().lowercase(Locale.ROOT)) ||
             it.description.lowercase(Locale.ROOT).contains(query.trim().lowercase(Locale.ROOT))
-    }
+    }.let { matches -> if (sortByName) matches.sortedBy { it.name.lowercase(Locale.ROOT) } else matches }
 
     LaunchedEffect(state.message, state.error) {
         if (state.message != null || state.error != null) kotlinx.coroutines.delay(3500)
@@ -91,6 +96,9 @@ fun NotebookLibraryScreen(
                 icon = Icons.Default.UploadFile,
                 modifier = Modifier.weight(1f),
             )
+            IconButton(onClick = { sortByName = !sortByName }) {
+                Icon(Icons.Default.Sort, contentDescription = if (sortByName) "Sort by recently modified" else "Sort by name")
+            }
             IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Back") }
         }
         OutlinedTextField(
@@ -103,6 +111,12 @@ fun NotebookLibraryScreen(
         )
         state.message?.let { Text(it, color = AppTheme.colors.textSecondary, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
         state.error?.let { Text(it, color = AppTheme.colors.accentRed, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
+        if (state.busy) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.height(18.dp))
+                Text("Importing or saving notebook…", color = AppTheme.colors.textSecondary, fontSize = 12.sp)
+            }
+        }
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (filtered.isEmpty()) item {
                 PlatformCard(title = "No notebooks yet", subtitle = "Choose a .ipynb file from Android storage, Google Drive or another provider.", icon = Icons.Default.Description) {
@@ -112,7 +126,7 @@ fun NotebookLibraryScreen(
             items(filtered, key = { it.id }) { notebook ->
                 PlatformCard(
                     title = notebook.name,
-                    subtitle = if (notebook.builtIn) "Built-in OpenSwarm setup" else "Imported · ${notebook.sizeBytes / 1024} KB",
+                    subtitle = if (notebook.builtIn) "Built-in OpenSwarm setup" else "Imported · ${notebook.sizeBytes / 1024} KB · ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(notebook.updatedAtMillis))}",
                     icon = Icons.Default.Description,
                 ) {
                     Text(notebook.description.ifBlank { "No description" }, color = AppTheme.colors.textSecondary, fontSize = 12.sp)

@@ -12,6 +12,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.UUID
 import javax.inject.Inject
@@ -30,6 +31,8 @@ data class NotebookRecord(
     val entity: NotebookEntity,
     val preview: NotebookPreview,
 )
+
+data class NotebookImportResult(val notebook: NotebookEntity, val duplicate: Boolean)
 
 @Singleton
 class NotebookRepository @Inject constructor(
@@ -52,7 +55,7 @@ class NotebookRepository @Inject constructor(
             "application/x-ipynb+json", bytes.size.toLong(), sha, true, now, now))
     }
 
-    suspend fun import(uri: Uri): Result<NotebookEntity> = withContext(Dispatchers.IO) {
+    suspend fun import(uri: Uri): Result<NotebookImportResult> = withContext(Dispatchers.IO) {
         runCatching {
             val resolver = context.contentResolver
             val displayName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
@@ -66,18 +69,30 @@ class NotebookRepository @Inject constructor(
             require(name.lowercase().endsWith(".ipynb")) { "Choose a Jupyter Notebook (.ipynb) file." }
             require(displayName.second <= MAX_NOTEBOOK_BYTES || displayName.second < 0) { "Notebook is larger than 25 MB." }
             val bytes = resolver.openInputStream(uri)?.use { input ->
-                input.readBytes().also { require(it.size <= MAX_NOTEBOOK_BYTES) { "Notebook is larger than 25 MB." } }
-            } ?: error("The selected notebook could not be read.")
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1024)
+                var total = 0L
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    require(total <= MAX_NOTEBOOK_BYTES) { "Notebook is larger than 25 MB." }
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            } ?: error("The selected notebook could not be read. Check that the file provider is available and try again.")
             val preview = parsePreview(bytes)
             val sha = sha256(bytes)
-            dao.getBySha256(sha)?.let { return@runCatching it }
+            dao.getBySha256(sha)?.let { return@runCatching NotebookImportResult(it, duplicate = true) }
             val id = UUID.randomUUID().toString()
             val target = notebookFile(id)
             target.parentFile?.mkdirs()
             target.writeBytes(bytes)
             val now = System.currentTimeMillis()
-            NotebookEntity(id, name, preview.previewText.lineSequence().firstOrNull().orEmpty().take(160), uri.toString(), target.path,
-                resolver.getType(uri) ?: "application/x-ipynb+json", bytes.size.toLong(), sha, false, now, now).also { dao.upsert(it) }
+            val notebook = NotebookEntity(id, name, preview.previewText.lineSequence().firstOrNull().orEmpty().take(160), uri.toString(), target.path,
+                resolver.getType(uri) ?: "application/x-ipynb+json", bytes.size.toLong(), sha, false, now, now)
+            dao.upsert(notebook)
+            NotebookImportResult(notebook, duplicate = false)
         }
     }
 
@@ -109,27 +124,44 @@ class NotebookRepository @Inject constructor(
 
     private fun parsePreview(bytes: ByteArray): NotebookPreview {
         val root = JSONObject(String(bytes, Charsets.UTF_8))
+        require(root.optInt("nbformat", 0) > 0) { "This file is not a valid Jupyter notebook: nbformat is missing." }
         val cells = root.optJSONArray("cells") ?: error("This file is not a valid Jupyter notebook: cells are missing.")
         var code = 0
         var markdown = 0
         val snippets = mutableListOf<String>()
         for (i in 0 until cells.length()) {
-            val cell = cells.optJSONObject(i) ?: continue
-            when (cell.optString("cell_type")) {
-                "code" -> code++
-                "markdown" -> markdown++
-                else -> Unit
+            val cell = cells.optJSONObject(i) ?: error("This file contains an invalid Jupyter cell at position ${i + 1}.")
+            val cellType = cell.optString("cell_type")
+            require(cellType == "code" || cellType == "markdown" || cellType == "raw") {
+                "This file contains an unsupported Jupyter cell at position ${i + 1}."
             }
+            val source = cell.opt("source")
+            require(source is JSONArray || source is String) {
+                "This file contains an invalid source field in cell ${i + 1}."
+            }
+            when (cellType) { "code" -> code++; "markdown" -> markdown++; else -> Unit }
             if (snippets.size < 3) {
-                val source = cell.opt("source")
                 val text = when (source) {
                     is JSONArray -> (0 until source.length()).joinToString("") { source.optString(it) }
                     else -> source?.toString().orEmpty()
                 }.trim()
-                if (text.isNotBlank()) snippets += text.take(400)
+                if (text.isNotBlank()) {
+                    val label = when (cellType) { "code" -> "Code", "markdown" -> "Markdown", else -> "Raw" }
+                    snippets += "$label cell ${i + 1}\n${redactSecrets(text).take(400)}"
+                }
             }
         }
         return NotebookPreview(cells.length(), code, markdown, snippets.joinToString("\n\n"))
+    }
+
+    /** Keep the preview useful without rendering common inline credentials from executable source. */
+    private fun redactSecrets(source: String): String {
+        val assignment = Regex("(?i)(\\b(?:[A-Z0-9_]*(?:API[_-]?KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL)[A-Z0-9_]*)\\b\\s*[:=]\\s*)(['\"])(.*?)(\\2)")
+        return assignment.replace(source) { match -> "${match.groupValues[1]}${match.groupValues[2]}[REDACTED]${match.groupValues[4]}" }
+            .replace(Regex("(?i)(Bearer\\s+)[A-Za-z0-9._~+/-]{8,}")) { match ->
+                "${match.groupValues[1]}[REDACTED]"
+            }
+            .replace(Regex("\\bsk-[A-Za-z0-9_-]{12,}"), "[REDACTED KEY]")
     }
 
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")

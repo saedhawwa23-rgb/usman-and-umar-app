@@ -42,7 +42,14 @@ class NotebookViewModel @Inject constructor(
     fun import(uri: Uri) {
         runBusy {
             repository.import(uri).fold(
-                onSuccess = { imported -> _state.value = _state.value.copy(message = if (imported.builtIn) "Notebook already exists." else "Notebook imported.", error = null) },
+                onSuccess = { result ->
+                    val message = when {
+                        result.duplicate -> "This notebook is already in your library; the existing copy was kept."
+                        result.notebook.builtIn -> "Notebook already exists."
+                        else -> "Notebook imported and saved privately on this device."
+                    }
+                    _state.value = _state.value.copy(message = message, error = null)
+                },
                 onFailure = { _state.value = _state.value.copy(error = it.message ?: "Notebook import failed.") },
             )
         }
