@@ -65,6 +65,7 @@ object OpenDroidRoutes {
     const val REMOTE_CONTROL = "remote_control"
     const val PLUGIN_PLATFORM = "plugin_platform"
     const val AGENT_PLATFORMS = "agent_platforms"
+    const val NOTEBOOK_LIBRARY = "notebook_library"
     const val VISUAL_TASK_BAR = "visual_task_bar"
     const val VISUAL_TOOL_BAR = "visual_tool_bar"
 }
@@ -206,6 +207,9 @@ fun OpenDroidNavigation(
                 },
                 onNavigateToAgentPlatforms = {
                     navController.navigate(OpenDroidRoutes.AGENT_PLATFORMS)
+                },
+                onNavigateToNotebookLibrary = {
+                    navController.navigate(OpenDroidRoutes.NOTEBOOK_LIBRARY)
                 }
             )
         }
@@ -358,6 +362,13 @@ fun OpenDroidNavigation(
             AgentPlatformScreen(viewModel = hiltViewModel())
         }
 
+        composable(OpenDroidRoutes.NOTEBOOK_LIBRARY) {
+            NotebookLibraryScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
+            )
+        }
+
         // These routes are reachable only through MainActivity's debug-only visual-evidence
         // intent extra. They compose the same production screens and view models, but bypass
         // splash/onboarding so emulator evidence is deterministic and repeatable.
@@ -375,6 +386,7 @@ fun OpenDroidNavigation(
                 onTermux = {},
                 onUniversalAgent = {},
                 onOpenPluginPlatform = {},
+                onOpenNotebookLibrary = {},
             )
         }
     }
@@ -413,6 +425,7 @@ fun MainDashboard(
     onNavigateToRemoteControl: () -> Unit = {},
     onNavigateToPluginPlatform: () -> Unit = {},
     onNavigateToAgentPlatforms: () -> Unit = {},
+    onNavigateToNotebookLibrary: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -551,7 +564,8 @@ fun MainDashboard(
                         onTermux = onNavigateToTermux,
                         onUniversalAgent = onNavigateToUniversalAgent,
                         onOpenPluginPlatform = onNavigateToPluginPlatform,
-                        onOpenAgentPlatforms = onNavigateToAgentPlatforms
+                        onOpenAgentPlatforms = onNavigateToAgentPlatforms,
+                        onOpenNotebookLibrary = onNavigateToNotebookLibrary
                     )
                     Screen.Macros -> MacrosScreen(
                         viewModel = macroViewModel,

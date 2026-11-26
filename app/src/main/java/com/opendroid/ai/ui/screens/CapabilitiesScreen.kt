@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.SmartToy
@@ -65,6 +66,7 @@ fun CapabilitiesScreen(
     onUniversalAgent: () -> Unit,
     onOpenPluginPlatform: () -> Unit = {},
     onOpenAgentPlatforms: () -> Unit = {},
+    onOpenNotebookLibrary: () -> Unit = {},
 ) {
     val termuxViewModel: TermuxViewModel = hiltViewModel()
     val workspaceTaskViewModel: WorkspaceTaskViewModel = hiltViewModel()
@@ -86,6 +88,7 @@ fun CapabilitiesScreen(
         onUniversalAgent = onUniversalAgent,
         onOpenPluginPlatform = onOpenPluginPlatform,
         onOpenAgentPlatforms = onOpenAgentPlatforms,
+        onOpenNotebookLibrary = onOpenNotebookLibrary,
     )
 }
 
@@ -103,6 +106,7 @@ internal fun CapabilitiesScreenContent(
     onUniversalAgent: () -> Unit,
     onOpenPluginPlatform: () -> Unit,
     onOpenAgentPlatforms: () -> Unit = {},
+    onOpenNotebookLibrary: () -> Unit = {},
 ) {
     val sections = remember(context) { ToolBarModel.resolvedSections(context) }
     var selected by remember { mutableIntStateOf(0) }
@@ -142,6 +146,25 @@ internal fun CapabilitiesScreenContent(
             }
             items(section.entries, key = { it.id }) { entry ->
                 ToolEntryCard(entry = entry, onOpen = { open(entry.destination) })
+            }
+            item {
+                PlatformCard(
+                    title = "Notebook Library",
+                    subtitle = "Import and safely preview Jupyter notebooks",
+                    icon = Icons.Default.Description,
+                ) {
+                    Text(
+                        "Store notebooks privately, preview their structure, export copies, and continue with the connected OpenSwarm Colab workflow.",
+                        color = AppTheme.colors.textSecondary,
+                        fontSize = 12.sp,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    BrandButton(
+                        text = "Open Notebook Library",
+                        onClick = onOpenNotebookLibrary,
+                        icon = Icons.Default.Description,
+                    )
+                }
             }
             item {
                 Spacer(Modifier.height(4.dp))

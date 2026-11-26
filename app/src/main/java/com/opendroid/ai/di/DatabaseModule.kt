@@ -13,6 +13,7 @@ import com.opendroid.ai.data.db.dao.TaskHistoryDao
 import com.opendroid.ai.data.db.dao.WorkspaceTaskDao
 import com.opendroid.ai.data.db.dao.CloudServerDao
 import com.opendroid.ai.data.db.dao.GoogleDriveAccountDao
+import com.opendroid.ai.data.db.dao.NotebookDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -53,6 +54,7 @@ object DatabaseModule {
             OpenDroidDatabase.MIGRATION_12_13,
             OpenDroidDatabase.MIGRATION_13_14,
             OpenDroidDatabase.MIGRATION_14_15,
+            OpenDroidDatabase.MIGRATION_15_16,
         )
         .build()
     }
@@ -88,6 +90,10 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideGoogleDriveAccountDao(db: OpenDroidDatabase): GoogleDriveAccountDao = db.googleDriveAccountDao()
+
+    @Provides
+    @Singleton
+    fun provideNotebookDao(db: OpenDroidDatabase): NotebookDao = db.notebookDao()
 
     @Provides
     @Singleton

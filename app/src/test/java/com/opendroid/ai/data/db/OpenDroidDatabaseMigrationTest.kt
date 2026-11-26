@@ -345,6 +345,27 @@ class OpenDroidDatabaseMigrationTest {
     }
 
     @Test
+    fun `migration 15 to 16 adds notebook library without changing configured servers`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.deleteDatabase(TEST_DATABASE)
+        helper.createDatabase(databasePath, 15).use { db ->
+            db.execSQL("INSERT INTO cloud_servers (id,name,url,enabled,position,role) VALUES ('server-1','Colab','https://sample.loca.lt',1,0,'OPENSWARM')")
+        }
+        val migrated = helper.runMigrationsAndValidate(databasePath, 16, true, OpenDroidDatabase.MIGRATION_15_16)
+        migrated.execSQL("INSERT INTO notebooks (id,name,description,sourceUri,localPath,mimeType,sizeBytes,contentSha256,builtIn,createdAtMillis,updatedAtMillis,lastOpenedAtMillis) VALUES ('n1','sample.ipynb','Sample',NULL,'/data/sample.ipynb','application/x-ipynb+json',12,'sha-1',0,1,2,NULL)")
+        migrated.query("SELECT name, role FROM cloud_servers WHERE id='server-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Colab", cursor.getString(0))
+            assertEquals("OPENSWARM", cursor.getString(1))
+        }
+        migrated.query("SELECT name, sizeBytes FROM notebooks WHERE id='n1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("sample.ipynb", cursor.getString(0))
+            assertEquals(12L, cursor.getLong(1))
+        }
+    }
+
+    @Test
     fun `Room preserves ten Colab server rows and long tunnel URLs without truncation`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val providedTunnelUrls = listOf(
