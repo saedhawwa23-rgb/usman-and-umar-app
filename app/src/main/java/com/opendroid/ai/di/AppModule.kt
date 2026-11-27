@@ -2,6 +2,8 @@ package com.opendroid.ai.di
 
 import android.content.Context
 import android.os.Build
+import com.opendroid.ai.core.drive.GoogleDriveUploader
+import com.opendroid.ai.core.drive.NotebookDriveUploader
 import com.opendroid.ai.core.security.AndroidProviderCredentialStore
 import com.opendroid.ai.data.repository.NotebookLibraryStore
 import com.opendroid.ai.data.repository.NotebookRepository
@@ -76,6 +78,10 @@ object AppModule {
     @Provides
     @Singleton
     fun provideNotebookLibraryStore(repository: NotebookRepository): NotebookLibraryStore = repository
+
+    @Provides
+    @Singleton
+    fun provideNotebookDriveUploader(uploader: GoogleDriveUploader): NotebookDriveUploader = uploader
 
     @Provides
     @Singleton

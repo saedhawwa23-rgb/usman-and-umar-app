@@ -366,6 +366,7 @@ fun OpenDroidNavigation(
             NotebookLibraryScreen(
                 viewModel = hiltViewModel(),
                 onBack = { navController.popBackStack() },
+                onOpenDriveSettings = { navController.navigate(OpenDroidRoutes.GOOGLE_DRIVE) },
             )
         }
 

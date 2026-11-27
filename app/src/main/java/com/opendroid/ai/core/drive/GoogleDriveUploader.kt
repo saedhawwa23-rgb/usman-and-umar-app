@@ -34,7 +34,7 @@ class GoogleDriveUploader @Inject constructor(
     private val accountRepository: GoogleDriveAccountRepository,
     private val tokenProvider: GoogleDriveAccessTokenProvider,
     private val driveApi: GoogleDriveApi,
-) {
+) : NotebookDriveUploader {
     /** Refreshes each connected account's live Drive quota in parallel. */
     suspend fun refreshAllQuotas(): List<GoogleDriveAccountEntity> {
         val accounts = accountRepository.getAccounts()
@@ -90,6 +90,53 @@ class GoogleDriveUploader @Inject constructor(
                         driveApi.uploadTaskOutput(refreshedToken, filename, content)
                     }
                     return@withContext GoogleDriveUploadResult(candidate.account.email, url)
+                } catch (failure: DriveApiException) {
+                    val isQuotaExceeded = failure.statusCode == 403 && failure.reason.contains("quota", ignoreCase = true)
+                    if (!isQuotaExceeded) throw failure
+                    quotaFailure = failure
+                    accountRepository.updateQuotaError(candidate.account.id, "Drive reported that this account is out of storage.")
+                }
+            }
+            throw quotaFailure ?: IllegalStateException("No connected Google Drive account has enough storage.")
+        }
+
+    override suspend fun uploadNotebook(filename: String, contentBytes: ByteArray): GoogleDriveNotebookUploadResult =
+        withContext(Dispatchers.IO) {
+            val accounts = accountRepository.getAccounts()
+            require(accounts.isNotEmpty()) { "Add a Google account in Drive settings before uploading a notebook." }
+            val candidates = coroutineScope {
+                accounts.map { account ->
+                    async(Dispatchers.IO) {
+                        try {
+                            probe(account)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            if (failure is java.io.IOException && failure !is DriveApiException) throw failure
+                            accountRepository.updateQuotaError(account.id, safeFailureMessage(failure))
+                            null
+                        }
+                    }
+                }.awaitAll().filterNotNull()
+            }
+            val ranked = orderDriveCandidates(candidates)
+            check(ranked.isNotEmpty()) {
+                "Google Drive could not verify storage for any connected account. Reconnect an account or refresh storage, then retry."
+            }
+
+            var quotaFailure: Exception? = null
+            for (candidate in ranked) {
+                try {
+                    val result = try {
+                        driveApi.uploadNotebook(candidate.accessToken, filename, contentBytes)
+                    } catch (unauthorized: DriveApiException) {
+                        if (unauthorized.statusCode != 401) throw unauthorized
+                        tokenProvider.invalidate(candidate.account.email, candidate.accessToken)
+                        driveApi.uploadNotebook(tokenProvider.getAccessToken(candidate.account.email), filename, contentBytes)
+                    }
+                    return@withContext result.copy(accountEmail = candidate.account.email)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
                 } catch (failure: DriveApiException) {
                     val isQuotaExceeded = failure.statusCode == 403 && failure.reason.contains("quota", ignoreCase = true)
                     if (!isQuotaExceeded) throw failure

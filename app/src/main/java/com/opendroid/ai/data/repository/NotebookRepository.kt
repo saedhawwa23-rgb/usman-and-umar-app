@@ -39,6 +39,7 @@ interface NotebookLibraryStore {
     suspend fun ensureBuiltInNotebook()
     suspend fun import(uri: Uri): Result<NotebookImportResult>
     suspend fun getPreview(entity: NotebookEntity): Result<NotebookPreview>
+    suspend fun readNotebookBytes(entity: NotebookEntity): ByteArray
     suspend fun rename(id: String, name: String, description: String)
     suspend fun delete(entity: NotebookEntity)
     suspend fun markOpened(id: String)
@@ -119,6 +120,17 @@ class NotebookRepository @Inject constructor(
 
     override suspend fun getPreview(entity: NotebookEntity): Result<NotebookPreview> = withContext(Dispatchers.IO) {
         runCatching { parsePreview(File(entity.localPath).readBytes()) }
+    }
+
+    override suspend fun readNotebookBytes(entity: NotebookEntity): ByteArray = withContext(Dispatchers.IO) {
+        require(entity.name.lowercase().endsWith(".ipynb")) { "Choose a Jupyter Notebook (.ipynb) file." }
+        val file = File(entity.localPath)
+        require(file.isFile) { "The saved notebook file is missing. Re-import it before uploading." }
+        require(file.length() in 1..MAX_NOTEBOOK_BYTES) { "Notebook must be between 1 byte and 25 MB to upload." }
+        val bytes = file.readBytes()
+        require(bytes.size.toLong() <= MAX_NOTEBOOK_BYTES) { "Notebook is larger than 25 MB." }
+        parsePreview(bytes)
+        bytes
     }
 
     override suspend fun rename(id: String, name: String, description: String) {
