@@ -1,0 +1,40 @@
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+    id 'org.jetbrains.kotlin.plugin.serialization'
+    id 'application'
+}
+
+// The desktop companion agent. A plain JVM application: it uses java.awt.Robot for real screen
+// capture and input injection, so it runs unchanged on Windows, Linux and macOS.
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+kotlin {
+    jvmToolchain(21)
+}
+
+application {
+    mainClass = 'com.opendroid.ai.desktop.DesktopAgentMainKt'
+}
+
+dependencies {
+    implementation project(':remote-protocol')
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1'
+    implementation 'com.google.code.gson:gson:2.11.0'
+    testImplementation 'junit:junit:4.13.2'
+}
+
+// A runnable jar with dependencies, so the agent ships as one file per platform.
+tasks.register('fatJar', Jar) {
+    archiveBaseName = 'opendroid-desktop-agent'
+    archiveClassifier = 'all'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest { attributes 'Main-Class': 'com.opendroid.ai.desktop.DesktopAgentMainKt' }
+    from sourceSets.main.output
+    // Gradle 9 removed Configuration#get(); resolve lazily so the jar picks up runtime deps.
+    from({ configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) } })
+}
+
+tasks.withType(Test).configureEach { useJUnit() }

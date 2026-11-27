@@ -16,9 +16,9 @@ android {
     defaultConfig {
         applicationId "com.usmanandumar.app"
         minSdk 28
-        targetSdk 34
-        versionCode 23
-        versionName "3.0.0-cloud-ai"
+        targetSdk 36
+        versionCode 46
+        versionName "3.14.1-remote-live-view"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -34,6 +34,7 @@ android {
             project.hasProperty('RELEASE_KEY_ALIAS') &&
             project.hasProperty('RELEASE_KEY_PASSWORD') &&
             file("${rootProject.projectDir}/opendroid-release.keystore").exists()
+    def hasStableDebugKeystore = file("${rootProject.projectDir}/debug.keystore").exists()
 
     // Explicit opt-in for building release WITHOUT signing, so CI can exercise
     // R8/ProGuard (where reflection-dependent code breaks) without holding any
@@ -46,6 +47,16 @@ android {
     }
 
     signingConfigs {
+        if (hasStableDebugKeystore) {
+            debug {
+                storeFile file("${rootProject.projectDir}/debug.keystore")
+                storePassword project.findProperty('DEBUG_STORE_PASSWORD') ?: 'android'
+                keyAlias project.findProperty('DEBUG_KEY_ALIAS') ?: 'androiddebugkey'
+                keyPassword project.findProperty('DEBUG_KEY_PASSWORD') ?: 'android'
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
         if (hasSigningConfig) {
             release {
                 storeFile file("${rootProject.projectDir}/opendroid-release.keystore")
@@ -59,6 +70,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            if (hasStableDebugKeystore) {
+                signingConfig signingConfigs.debug
+            }
+        }
         release {
             minifyEnabled true
             shrinkResources = false
@@ -117,6 +133,17 @@ android {
             // their default value instead of throwing so those boundaries stay testable without
             // a Log double.
             returnDefaultValues = true
+            // Robolectric leaves JVM-wide reflection state behind; on a later test the JDK's own
+            // TLS handshake then fails with "module java.base does not opens java.net". Opening
+            // java.net for the test JVM keeps socket and TLS tests order-independent.
+            // Robolectric's runtime artifacts are fetched outside Gradle's normal dependency
+            // resolver. The canonical Maven Central hostname returned HTTP 429 for its large
+            // android-all-instrumented runtime jar in GitHub Actions, so use Google's public
+            // Maven Central mirror for these direct Robolectric downloads.
+            all {
+                it.jvmArgs '--add-opens=java.base/java.net=ALL-UNNAMED'
+                it.systemProperty 'robolectric.dependency.repo.url', 'https://maven-central.storage-download.googleapis.com/maven2/'
+            }
         }
     }
     sourceSets {
@@ -173,6 +200,7 @@ android {
     }
 }
 
+
 // AGP 9 removed `android { kotlinOptions { ... } }`. Under built-in Kotlin the
 // `kotlin { ... }` extension is registered by AGP itself (there is no
 // `org.jetbrains.kotlin.android` plugin any more) and carries the same compiler
@@ -195,6 +223,12 @@ room {
 }
 
 dependencies {
+    // The remote-control wire protocol, shared verbatim with the desktop agent so both sides
+    // cannot drift apart.
+    implementation project(':remote-protocol')
+    // The desktop agent is pulled in for unit tests only, so the Android client is exercised
+    // against the real session handler rather than a re-implementation of it.
+    testImplementation project(':desktop-agent')
     // AndroidX Core & Lifecycle
     // Core 1.19.0 merges the Kotlin extensions into androidx.core:core (making
     // core-ktx an empty compatibility artifact). The AGP 9.1+ half of that
@@ -202,6 +236,17 @@ dependencies {
     // bump this build has not taken; 1.18.0 stays until compileSdk moves to 37.
     implementation 'androidx.core:core-ktx:1.18.0'
     implementation 'androidx.documentfile:documentfile:1.0.1'
+    implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
+    // Keep PDFBox's Bouncy Castle APIs aligned and current; the inherited 1.72
+    // artifact triggers the dependency TrustAllX509TrustManager lint check.
+    implementation 'org.bouncycastle:bcprov-jdk15to18:1.86'
+    implementation 'org.bouncycastle:bcpkix-jdk15to18:1.86'
+    // PDFBox's JPX filter calls this optional decoder. Package it at runtime so
+    // release/R8 builds retain JPEG-2000 PDF image support on supported ABIs.
+    runtimeOnly 'com.gemalto.jp2:jp2-android:1.0.3'
+    // WireGuard userspace tunnel: full-tunnel internet sharing without an NDK build.
+    // Apache-2.0, actively maintained, and ships prebuilt armv7/arm64/x86 native libs.
+    implementation 'com.wireguard.android:tunnel:1.0.20260102'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
     implementation 'androidx.activity:activity-compose:1.13.0'
@@ -216,23 +261,25 @@ dependencies {
     implementation 'androidx.navigation:navigation-compose:2.9.8'
 
     // Room Database
-    implementation 'androidx.room:room-runtime:2.8.4'
-    implementation 'androidx.room:room-ktx:2.8.4'
+    implementation 'androidx.room:room-runtime:2.8.5'
+    implementation 'androidx.room:room-ktx:2.8.5'
     // KSP, not kapt: kapt is unsupported under AGP 9's built-in Kotlin. The
     // `kotlin-metadata-jvm` pin that kapt needed is gone with it - KSP reads the
     // Kotlin declarations directly instead of round-tripping through metadata.
-    ksp 'androidx.room:room-compiler:2.8.4'
+    ksp 'androidx.room:room-compiler:2.8.5'
 
     // WorkManager
-    implementation 'androidx.work:work-runtime-ktx:2.11.2'
+    implementation 'androidx.work:work-runtime-ktx:2.12.0'
 
     // DataStore Preferences
-    implementation 'androidx.datastore:datastore-preferences:1.1.1'
+    implementation 'androidx.datastore:datastore-preferences:1.3.0'
 
     // Hilt Dependency Injection
     implementation 'com.google.dagger:hilt-android:2.60.1'
     ksp 'com.google.dagger:hilt-compiler:2.60.1'
     implementation 'androidx.hilt:hilt-navigation-compose:1.1.0'
+    // Google Identity sign-in and the narrow Drive file-scope upload flow.
+    implementation 'com.google.android.gms:play-services-auth:21.3.0'
 
     // Networking
     // The OkHttp BOM is the single source of truth for every com.squareup.okhttp3
@@ -260,13 +307,19 @@ dependencies {
 
     // Testing
     testImplementation 'junit:junit:4.13.2'
-    testImplementation 'androidx.room:room-testing:2.8.4'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0'
+    testImplementation 'androidx.room:room-testing:2.8.5'
     testImplementation 'androidx.test:core:1.6.1'
     // Drives the real navigation graph (back stack, popUpTo) on the JVM.
     testImplementation 'androidx.navigation:navigation-testing:2.9.8'
     // Robolectric runs the Room migration tests on the JVM - no emulator, so
     // they live in src/test and run under the existing testDebugUnitTest.
     testImplementation 'org.robolectric:robolectric:4.16.1'
+    // Compose UI tests under Robolectric: renders the real Tool Bar and Task Bar screens on the
+    // JVM so their composition, navigation routing and availability labels are asserted in CI.
+    testImplementation platform('androidx.compose:compose-bom:2026.06.01')
+    testImplementation 'androidx.compose.ui:ui-test-junit4'
+    testImplementation 'androidx.compose.ui:ui-test-manifest'
     // Network-stack tests: MockWebServer (mockwebserver3 packages, JUnit-free core)
     // and okhttp-tls for building the throwaway certificates used by the TLS tests.
     testImplementation platform('com.squareup.okhttp3:okhttp-bom:5.4.0')
@@ -274,6 +327,7 @@ dependencies {
     testImplementation 'com.squareup.okhttp3:okhttp-tls'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+    androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.3.0'
     // ActivityScenario for the accessibility instrumentation tests (#105); launches
     // the debug-source-set probe activity in-process.
     androidTestImplementation 'androidx.test:core:1.6.1'

@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.view.accessibility.AccessibilityManager
 import androidx.test.platform.app.InstrumentationRegistry
 import com.opendroid.ai.accessibility.OpenDroidAccessibilityService
+import com.opendroid.ai.core.connector.KillSwitch
 
 /**
  * Enables/disables the real [OpenDroidAccessibilityService] from inside an
@@ -46,6 +47,7 @@ object AccessibilityServiceTestHarness {
         }
 
     fun enableService(timeoutMs: Long = 10_000): OpenDroidAccessibilityService {
+        KillSwitch.enable()
         shell("settings put secure enabled_accessibility_services $serviceComponent")
         shell("settings put secure accessibility_enabled 1")
 
@@ -58,6 +60,7 @@ object AccessibilityServiceTestHarness {
     }
 
     fun disableService() {
+        KillSwitch.disable()
         shell("settings put secure enabled_accessibility_services \"\"")
         shell("settings put secure accessibility_enabled 0")
         val deadline = SystemClock.uptimeMillis() + 5_000

@@ -19,6 +19,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
@@ -59,7 +60,14 @@ object OpenDroidRoutes {
     const val DISCOVERY = "discovery"
     const val GITHUB_DISCOVERY = "github_discovery"
     const val TERMUX = "termux"
+    const val GOOGLE_DRIVE = "google_drive"
     const val UNIVERSAL_AGENT = "universal_agent"
+    const val REMOTE_CONTROL = "remote_control"
+    const val PLUGIN_PLATFORM = "plugin_platform"
+    const val AGENT_PLATFORMS = "agent_platforms"
+    const val NOTEBOOK_LIBRARY = "notebook_library"
+    const val VISUAL_TASK_BAR = "visual_task_bar"
+    const val VISUAL_TOOL_BAR = "visual_tool_bar"
 }
 
 /**
@@ -82,11 +90,12 @@ fun NavHostController.navigateAfterOnboarding() {
 
 @Composable
 fun OpenDroidNavigation(
-    navController: NavHostController = rememberNavController()
+    navController: NavHostController = rememberNavController(),
+    startDestination: String? = null,
 ) {
     NavHost(
         navController = navController,
-        startDestination = OpenDroidRoutes.SPLASH,
+        startDestination = startDestination ?: OpenDroidRoutes.SPLASH,
         modifier = Modifier.fillMaxSize().background(AppTheme.colors.background),
         enterTransition = {
             fadeIn(animationSpec = tween(300)) + slideIntoContainer(
@@ -186,6 +195,21 @@ fun OpenDroidNavigation(
                 },
                 onNavigateToUniversalAgent = {
                     navController.navigate(OpenDroidRoutes.UNIVERSAL_AGENT)
+                },
+                onNavigateToGoogleDrive = {
+                    navController.navigate(OpenDroidRoutes.GOOGLE_DRIVE)
+                },
+                onNavigateToRemoteControl = {
+                    navController.navigate(OpenDroidRoutes.REMOTE_CONTROL)
+                },
+                onNavigateToPluginPlatform = {
+                    navController.navigate(OpenDroidRoutes.PLUGIN_PLATFORM)
+                },
+                onNavigateToAgentPlatforms = {
+                    navController.navigate(OpenDroidRoutes.AGENT_PLATFORMS)
+                },
+                onNavigateToNotebookLibrary = {
+                    navController.navigate(OpenDroidRoutes.NOTEBOOK_LIBRARY)
                 }
             )
         }
@@ -318,19 +342,67 @@ fun OpenDroidNavigation(
         composable(OpenDroidRoutes.UNIVERSAL_AGENT) {
             UniversalAgentScreen()
         }
+
+        composable(OpenDroidRoutes.GOOGLE_DRIVE) {
+            GoogleDriveSettingsScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable(OpenDroidRoutes.REMOTE_CONTROL) {
+            RemoteControlScreen(viewModel = hiltViewModel())
+        }
+
+        composable(OpenDroidRoutes.PLUGIN_PLATFORM) {
+            PluginPlatformScreen(viewModel = hiltViewModel())
+        }
+
+        composable(OpenDroidRoutes.AGENT_PLATFORMS) {
+            AgentPlatformScreen(viewModel = hiltViewModel())
+        }
+
+        composable(OpenDroidRoutes.NOTEBOOK_LIBRARY) {
+            NotebookLibraryScreen(
+                viewModel = hiltViewModel(),
+                onBack = { navController.popBackStack() },
+                onOpenDriveSettings = { navController.navigate(OpenDroidRoutes.GOOGLE_DRIVE) },
+            )
+        }
+
+        // These routes are reachable only through MainActivity's debug-only visual-evidence
+        // intent extra. They compose the same production screens and view models, but bypass
+        // splash/onboarding so emulator evidence is deterministic and repeatable.
+        composable(OpenDroidRoutes.VISUAL_TASK_BAR) {
+            WorkspaceTaskScreen(
+                viewModel = hiltViewModel(),
+                onOpenDriveSettings = {},
+            )
+        }
+
+        composable(OpenDroidRoutes.VISUAL_TOOL_BAR) {
+            CapabilitiesScreen(
+                onSearchAI = {},
+                onSearchGitHub = {},
+                onTermux = {},
+                onUniversalAgent = {},
+                onOpenPluginPlatform = {},
+                onOpenNotebookLibrary = {},
+            )
+        }
     }
 }
 
-sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
-    object Chat : Screen("chat", "Chat", Icons.Default.Chat)
-    object TaskManager : Screen("task_manager", "Tasks", Icons.Default.Assignment)
-    object Plan : Screen("plan", "Plan", Icons.Default.List)
-    object Memory : Screen("memory", "Memory", Icons.Default.Star)
-    object Social : Screen("social", "Social", Icons.Default.Share)
-    object Tools : Screen("tools", "Tools", Icons.Default.Extension)
-    object Macros : Screen("macros", "Macros", Icons.Default.Build)
-    object History : Screen("history", "Logs", Icons.Default.History)
-    object Settings : Screen("settings", "Settings", Icons.Default.Settings)
+sealed class Screen(val route: String, val title: String, val navLabel: String, val icon: ImageVector) {
+    object Chat : Screen("chat", "Chat", "Chat", Icons.Default.Chat)
+    object TaskManager : Screen("task_manager", "Tasks", "Tasks", Icons.Default.Assignment)
+    object Plan : Screen("plan", "Plan", "Plan", Icons.Default.List)
+    object Memory : Screen("memory", "Memory", "Mem", Icons.Default.Star)
+    object Social : Screen("social", "Social", "Social", Icons.Default.Share)
+    object Tools : Screen("tools", "Tools", "Tools", Icons.Default.Extension)
+    object Macros : Screen("macros", "Macros", "Macros", Icons.Default.Build)
+    object History : Screen("history", "Logs", "Logs", Icons.Default.History)
+    object Settings : Screen("settings", "Settings", "Set", Icons.Default.Settings)
 }
 
 @Composable
@@ -350,6 +422,11 @@ fun MainDashboard(
     onNavigateToGitHubDiscovery: () -> Unit = {},
     onNavigateToTermux: () -> Unit = {},
     onNavigateToUniversalAgent: () -> Unit = {},
+    onNavigateToGoogleDrive: () -> Unit = {},
+    onNavigateToRemoteControl: () -> Unit = {},
+    onNavigateToPluginPlatform: () -> Unit = {},
+    onNavigateToAgentPlatforms: () -> Unit = {},
+    onNavigateToNotebookLibrary: () -> Unit = {},
 ) {
     val context = LocalContext.current
 
@@ -431,8 +508,11 @@ fun MainDashboard(
                         },
                         label = {
                             Text(
-                                text = tab.title,
+                                text = tab.navLabel,
                                 fontSize = 10.sp,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
                                 color = if (isSelected) AppTheme.colors.textPrimary else AppTheme.colors.textSecondary,
                                 fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
                             )
@@ -465,8 +545,17 @@ fun MainDashboard(
                 label = "DashboardTabTransition"
             ) { tab ->
                 when (tab) {
-                    Screen.Chat -> ChatScreen(viewModel = chatViewModel)
-                    Screen.TaskManager -> WorkspaceTaskScreen(viewModel = workspaceTaskViewModel)
+                    Screen.Chat -> ChatScreen(
+                        viewModel = chatViewModel,
+                        onOpenProjects = { currentTab = Screen.TaskManager },
+                        onOpenRemote = onNavigateToRemoteControl,
+                        onOpenScheduled = onNavigateToRoutines,
+                        onOpenPlugins = onNavigateToPluginPlatform,
+                    )
+                    Screen.TaskManager -> WorkspaceTaskScreen(
+                        viewModel = workspaceTaskViewModel,
+                        onOpenDriveSettings = onNavigateToGoogleDrive,
+                    )
                     Screen.Plan -> PlanScreen(viewModel = planViewModel)
                     Screen.Memory -> MemoryScreen(viewModel = memoryViewModel)
                     Screen.Social -> SocialScreen(viewModel = socialViewModel)
@@ -474,7 +563,10 @@ fun MainDashboard(
                         onSearchAI = onNavigateToDiscovery,
                         onSearchGitHub = onNavigateToGitHubDiscovery,
                         onTermux = onNavigateToTermux,
-                        onUniversalAgent = onNavigateToUniversalAgent
+                        onUniversalAgent = onNavigateToUniversalAgent,
+                        onOpenPluginPlatform = onNavigateToPluginPlatform,
+                        onOpenAgentPlatforms = onNavigateToAgentPlatforms,
+                        onOpenNotebookLibrary = onNavigateToNotebookLibrary
                     )
                     Screen.Macros -> MacrosScreen(
                         viewModel = macroViewModel,
@@ -496,7 +588,8 @@ fun MainDashboard(
                         onNavigateToRoutines = onNavigateToRoutines,
                         onNavigateToDiscovery = onNavigateToDiscovery,
                         onNavigateToGitHubDiscovery = onNavigateToGitHubDiscovery,
-                        onNavigateToTermux = onNavigateToTermux
+                        onNavigateToTermux = onNavigateToTermux,
+                        onNavigateToGoogleDrive = onNavigateToGoogleDrive,
                     )
                 }
             }

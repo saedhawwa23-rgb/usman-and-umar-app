@@ -1,0 +1,243 @@
+name: Verify signed Android release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      reuse_from_run_id:
+        description: Optional prior run ID for safely reusing its verified signed APK
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-verify-upload:
+    name: Build, install-test, and upload signed release APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'emulator platform-tools platforms;android-36 build-tools;36.0.0 ndk;27.2.12479018 cmake;3.22.1'
+
+      - name: Set up Gradle
+        if: ${{ inputs.reuse_from_run_id == '' }}
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Configure permanent release signing identity
+        env:
+          RELEASE_KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          EXPECTED_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_KEYSTORE_B64" || { echo 'Missing ANDROID_RELEASE_KEYSTORE_BASE64'; exit 1; }
+          test -n "$RELEASE_STORE_PASSWORD" || { echo 'Missing ANDROID_RELEASE_STORE_PASSWORD'; exit 1; }
+          test -n "$RELEASE_KEY_ALIAS" || { echo 'Missing ANDROID_RELEASE_KEY_ALIAS'; exit 1; }
+          test -n "$RELEASE_KEY_PASSWORD" || { echo 'Missing ANDROID_RELEASE_KEY_PASSWORD'; exit 1; }
+          test -n "$EXPECTED_CERT_SHA256" || { echo 'Missing ANDROID_RELEASE_CERT_SHA256'; exit 1; }
+          printf '%s' "$RELEASE_KEYSTORE_B64" | tr -d '[:space:]' | base64 --decode > opendroid-release.keystore
+          chmod 600 opendroid-release.keystore
+          keytool -list -v -keystore opendroid-release.keystore \
+            -storepass "$RELEASE_STORE_PASSWORD" -alias "$RELEASE_KEY_ALIAS" > /tmp/release-key.txt
+          actual_cert=$(awk -F': ' '/SHA256:/{print $2; exit}' /tmp/release-key.txt | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')
+          expected_cert=$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')
+          test -n "$actual_cert" && test "$actual_cert" = "$expected_cert" || {
+            echo 'Release certificate fingerprint mismatch; refusing to sign.' >&2
+            exit 1
+          }
+          {
+            echo "ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD=$RELEASE_STORE_PASSWORD"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS=$RELEASE_KEY_ALIAS"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD=$RELEASE_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Download previously verified signed APK
+        if: ${{ inputs.reuse_from_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: usman-and-umar-signed-release-candidate
+          run-id: ${{ inputs.reuse_from_run_id }}
+          github-token: ${{ github.token }}
+          path: previous-release
+
+      - name: Validate reusable APK provenance and stage it
+        if: ${{ inputs.reuse_from_run_id != '' }}
+        env:
+          REUSE_FROM_RUN_ID: ${{ inputs.reuse_from_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata=previous-release/BUILD_METADATA.txt
+          apk=previous-release/USMAN-AND-UMAR-v3.14.0-release-candidate.apk
+          test -s "$metadata" && test -s "$apk"
+          source_commit=$(sed -n 's/^commit=//p' "$metadata" | head -1)
+          source_branch=$(sed -n 's/^branch=//p' "$metadata" | head -1)
+          if ! git merge-base --is-ancestor "$source_commit" HEAD; then
+            echo "Refusing APK from $source_commit: source commit is not an ancestor of current commit $(git rev-parse HEAD)." >&2
+            exit 1
+          fi
+          test "$source_branch" = "$GITHUB_REF_NAME" || {
+            echo "Refusing APK from branch $source_branch; expected $GITHUB_REF_NAME" >&2
+            exit 1
+          }
+          changed_files=$(git diff --name-only "$source_commit"..HEAD -- . ':(exclude).github/workflows/release-candidate.yml' ':(exclude).github/scripts/verify-release-on-emulator.sh')
+          if [[ -n "$changed_files" ]]; then
+            echo 'Refusing APK reuse because application or build-source files changed since the APK source commit:' >&2
+            printf '%s\n' "$changed_files" >&2
+            exit 1
+          fi
+          mkdir -p app/build/outputs/apk/release
+          cp "$apk" app/build/outputs/apk/release/app-release.apk
+          {
+            echo "APK_BUILD_COMMIT=$source_commit"
+            echo "APK_BUILD_BRANCH=$source_branch"
+            echo "APK_SOURCE_RUN_ID=$REUSE_FROM_RUN_ID"
+          } >> "$GITHUB_ENV"
+
+      - name: Run tests, lint, and signed R8 release build
+        if: ${{ inputs.reuse_from_run_id == '' }}
+        run: ./gradlew testDebugUnitTest :remote-protocol:test :desktop-agent:test lint assembleRelease --no-configuration-cache --stacktrace
+
+      - name: Upload unit-test reports for diagnosis
+        if: always() && inputs.reuse_from_run_id == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-release-test-reports
+          path: |
+            app/build/test-results/testDebugUnitTest/**/*.xml
+            app/build/reports/tests/testDebugUnitTest/**
+            remote-protocol/build/test-results/**/*.xml
+            desktop-agent/build/test-results/**/*.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Verify APK metadata, signature, checksum, and ABIs
+        env:
+          ANDROID_RELEASE_CERT_SHA256: ${{ secrets.ANDROID_RELEASE_CERT_SHA256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/release/app-release.apk
+          out=dist
+          aapt2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          apksigner="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          mkdir -p "$out"
+          test -s "$apk"
+          grep -F "namespace = 'com.opendroid.ai'" app/build.gradle
+          test "$("$aapt2" dump packagename "$apk")" = "com.usmanandumar.app"
+          "$aapt2" dump badging "$apk" | tee "$out/BADGING.txt"
+          grep -F "versionName='$(sed -n 's/.*versionName \"\(.*\)\".*/\1/p' app/build.gradle | head -1)'" "$out/BADGING.txt"
+          grep -F "versionCode='$(sed -n 's/.*versionCode \([0-9]*\).*/\1/p' app/build.gradle | head -1)'" "$out/BADGING.txt"
+          apkanalyzer="$(find "$ANDROID_HOME/cmdline-tools" -type f -name apkanalyzer -print -quit)"
+          test -x "$apkanalyzer"
+          min_sdk=$("$apkanalyzer" manifest min-sdk "$apk")
+          printf 'minSdkVersion=%s\n' "$min_sdk" | tee "$out/MIN_SDK.txt"
+          test "$min_sdk" = "28"
+          grep -F "targetSdkVersion:'36'" "$out/BADGING.txt"
+          "$apksigner" verify --verbose "$apk" | tee "$out/SIGNING_STATUS.txt"
+          certs=$("$apksigner" verify --print-certs "$apk" 2>&1 | tee "$out/SIGNING_CERTS.txt")
+          actual_cert=$(printf '%s\n' "$certs" | awk -F': ' '/certificate SHA-256 digest:/{print $2; exit}' | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')
+          expected_cert=$(printf '%s' "$ANDROID_RELEASE_CERT_SHA256" | tr -d '[:space:]:' | tr '[:upper:]' '[:lower:]')
+          test -n "$actual_cert" && test "$actual_cert" = "$expected_cert"
+          unzip -Z1 "$apk" | grep -q '^lib/armeabi-v7a/'
+          unzip -Z1 "$apk" | grep -q '^lib/arm64-v8a/'
+          unzip -Z1 "$apk" | grep -E '^lib/(armeabi-v7a|arm64-v8a)/' > "$out/ABI_LIBRARIES.txt"
+          keytool -list -v -keystore opendroid-release.keystore \
+            -storepass "$ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD" \
+            -alias "$ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS" \
+            | grep -E 'Alias name:|Valid from:|SHA256:' > "$out/SIGNING_KEY.txt"
+          cp "$apk" "$out/USMAN-AND-UMAR-v$(sed -n 's/.*versionName \"\(.*\)\".*/\1/p' app/build.gradle | head -1)-release-candidate.apk"
+          sha256sum "$out/USMAN-AND-UMAR-v$(sed -n 's/.*versionName \"\(.*\)\".*/\1/p' app/build.gradle | head -1)-release-candidate.apk" | tee "$out/SHA256SUMS.txt"
+          build_commit="${APK_BUILD_COMMIT:-$(git rev-parse HEAD)}"
+          build_branch="${APK_BUILD_BRANCH:-$GITHUB_REF_NAME}"
+          {
+            printf 'commit=%s\nbranch=%s\n' "$build_commit" "$build_branch"
+            if [[ -n "${APK_SOURCE_RUN_ID:-}" ]]; then
+              printf 'apk_source_run_id=%s\nverification_commit=%s\n' "$APK_SOURCE_RUN_ID" "$(git rev-parse HEAD)"
+            fi
+          } > "$out/BUILD_METADATA.txt"
+
+      - name: Stop Gradle daemons before emulator test
+        if: ${{ inputs.reuse_from_run_id == '' }}
+        run: ./gradlew --stop
+
+      - name: Verify Android emulator binary and add it to PATH
+        shell: bash
+        run: |
+          set -euo pipefail
+          emulator_bin="$ANDROID_HOME/emulator/emulator"
+          if [[ ! -f "$emulator_bin" || ! -x "$emulator_bin" ]]; then
+            echo "Android emulator binary is missing or not executable: $emulator_bin" >&2
+            exit 1
+          fi
+          printf '%s\n' "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
+
+      - name: Enable and verify KVM acceleration
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          if [[ ! -e /dev/kvm ]]; then
+            echo '/dev/kvm is unavailable; hardware acceleration is required. Refusing software/TCG mode.' >&2
+            exit 1
+          fi
+          ls -l /dev/kvm
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            echo '/dev/kvm is not both readable and writable by the runner.' >&2
+            exit 1
+          fi
+          if ! accel_output=$("$ANDROID_HOME/emulator/emulator" -accel-check 2>&1); then
+            printf '%s\n' "$accel_output" >&2
+            echo 'emulator -accel-check failed; refusing to start without KVM.' >&2
+            exit 1
+          fi
+          printf '%s\n' "$accel_output"
+          if ! grep -Eiq 'KVM.*installed and usable' <<< "$accel_output"; then
+            echo 'KVM was not reported as installed and usable; refusing software/TCG mode.' >&2
+            exit 1
+          fi
+
+      - name: Install and verify release APK on API 36 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          cores: 4
+          ram-size: 4096M
+          emulator-options: -accel on -no-window -noaudio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          emulator-boot-timeout: 600
+          disable-spellchecker: true
+          disable-animations: true
+          script: bash "$GITHUB_WORKSPACE/.github/scripts/verify-release-on-emulator.sh"
+
+      - name: Upload signed release candidate and evidence
+        if: always() && hashFiles('dist/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: usman-and-umar-signed-release-candidate
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30

@@ -12,12 +12,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
@@ -26,7 +25,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -42,6 +40,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.opendroid.ai.core.llm.ModelFetchOutcome
 import com.opendroid.ai.data.models.GitHubProject
+import com.opendroid.ai.ui.components.BrandButton
+import com.opendroid.ai.ui.components.BrandedBackHeader
+import com.opendroid.ai.ui.components.PlatformCard
+import com.opendroid.ai.ui.components.PlatformStatus
+import com.opendroid.ai.ui.components.SectionHeading
 import com.opendroid.ai.ui.theme.AppTheme
 import com.opendroid.ai.ui.viewmodel.DiscoveryViewModel
 
@@ -67,17 +70,19 @@ fun DiscoveryScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("DISCOVER EXTENSIONS", fontWeight = FontWeight.Bold) },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") } }
+            BrandedBackHeader(
+                title = if (tab == 0) "AI Providers" else "GitHub Explorer",
+                subtitle = if (tab == 0) "Live model catalogs · provider discovery" else "Search, inspect and manage repositories",
+                onBack = onBack,
+                icon = if (tab == 0) Icons.Default.AutoAwesome else Icons.Default.Code,
             )
         },
         containerColor = AppTheme.colors.background
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            TabRow(selectedTabIndex = tab) {
-                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("AI PROVIDERS") })
-                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("SEARCH GITHUB") })
+            TabRow(selectedTabIndex = tab, containerColor = AppTheme.colors.background, contentColor = AppTheme.colors.electricBlue) {
+                Tab(selected = tab == 0, onClick = { tab = 0 }, selectedContentColor = AppTheme.colors.electricBlue, unselectedContentColor = AppTheme.colors.textSecondary, text = { Text("AI PROVIDERS", fontWeight = FontWeight.SemiBold) })
+                Tab(selected = tab == 1, onClick = { tab = 1 }, selectedContentColor = AppTheme.colors.electricBlue, unselectedContentColor = AppTheme.colors.textSecondary, text = { Text("GITHUB", fontWeight = FontWeight.SemiBold) })
             }
             LazyColumn(
                 modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -93,11 +98,13 @@ fun DiscoveryScreen(
                         leadingIcon = { Icon(Icons.Default.Search, null) }
                     )
                     Spacer(Modifier.height(8.dp))
-                    Button(
+                    BrandButton(
+                        text = if (busy) "SEARCHING LIVE ENDPOINTS…" else if (tab == 0) "SEARCH PROVIDERS" else "SEARCH REPOSITORIES",
                         onClick = { if (tab == 0) viewModel.searchAI(query) else viewModel.searchGitHub(query) },
                         enabled = !busy,
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text(if (busy) "SEARCHING LIVE ENDPOINTS…" else "SEARCH") }
+                        modifier = Modifier.fillMaxWidth(),
+                        icon = Icons.Default.Search,
+                    )
                     if (message != null) {
                         Spacer(Modifier.height(8.dp))
                         Text(message!!, color = AppTheme.colors.textSecondary)
@@ -112,9 +119,17 @@ fun DiscoveryScreen(
                         )
                     }
                     items(aiResults, key = { it.provider }) { providerResult ->
-                        Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
-                            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Text(providerResult.provider, fontWeight = FontWeight.Bold)
+                        PlatformCard(
+                            title = providerResult.provider,
+                            subtitle = "Provider model catalog",
+                            icon = Icons.Default.AutoAwesome,
+                            status = when (providerResult.outcome) {
+                                is ModelFetchOutcome.Success -> "Live response" to PlatformStatus.HEALTHY
+                                is ModelFetchOutcome.NeedsCredentials -> "Setup needed" to PlatformStatus.WARNING
+                                is ModelFetchOutcome.Failed -> "Unavailable" to PlatformStatus.ERROR
+                            },
+                        ) {
+                            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 when (val outcome = providerResult.outcome) {
                                     is ModelFetchOutcome.Success -> {
                                         if (outcome.models.isEmpty()) Text("The provider returned no chat-capable models.", color = AppTheme.colors.textSecondary)
@@ -136,11 +151,10 @@ fun DiscoveryScreen(
                         }
                     }
                     if (savedProviders.isNotEmpty()) {
-                        item { Text("ADDED AI PROVIDERS", fontWeight = FontWeight.Bold) }
+                        item { SectionHeading("Added providers", subtitle = "Saved provider configurations") }
                         items(savedProviders, key = { it.id }) { provider ->
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Column(Modifier.weight(1f)) { Text(provider.displayName); Text(provider.model, color = AppTheme.colors.textSecondary) }
-                                OutlinedButton(onClick = { viewModel.useProvider(provider) }) { Text("USE") }
+                            PlatformCard(title = provider.displayName, subtitle = provider.model, icon = Icons.Default.AutoAwesome) {
+                                BrandButton(onClick = { viewModel.useProvider(provider) }, text = "USE PROVIDER", modifier = Modifier.fillMaxWidth())
                             }
                         }
                     }
@@ -148,18 +162,16 @@ fun DiscoveryScreen(
                     item {
                         OutlinedTextField(directUrl, { directUrl = it }, Modifier.fillMaxWidth(), label = { Text("Direct GitHub URL or owner/repository") }, singleLine = true)
                         Spacer(Modifier.height(8.dp))
-                        OutlinedButton(onClick = { viewModel.openRepository(directUrl) }, enabled = directUrl.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("LOOK UP REPOSITORY") }
+                        BrandButton(onClick = { viewModel.openRepository(directUrl) }, enabled = directUrl.isNotBlank(), modifier = Modifier.fillMaxWidth(), text = "LOOK UP REPOSITORY", icon = Icons.Default.Code)
                         Text("Search and lookup use the public GitHub REST API. Lookup is read-only; private repositories require an authenticated integration and are not represented as public results.", color = AppTheme.colors.textSecondary)
                     }
                     openedRepository?.let { project ->
                         item {
-                            Text("LOOKUP RESULT (NOT SAVED)", fontWeight = FontWeight.Bold)
+                            SectionHeading("Repository preview", subtitle = "Read-only lookup · not saved")
                             DiscoveryProjectCard(project, onOpen = {
                                 context.startActivity(Intent(Intent.ACTION_VIEW, project.htmlUrl.toUri()))
                             }, onAdd = { viewModel.addProject(project) }, onUse = { viewModel.useProject(project) })
-                            OutlinedButton(onClick = { viewModel.cloneRepository(project.cloneUrl) }, modifier = Modifier.fillMaxWidth()) {
-                                Text("CLONE TO TERMUX")
-                            }
+                            BrandButton(onClick = { viewModel.cloneRepository(project.cloneUrl) }, modifier = Modifier.fillMaxWidth(), text = "CLONE TO TERMUX", icon = Icons.Default.Terminal)
                         }
                     }
                     items(githubResults, key = { it.id }) { project ->
@@ -168,7 +180,7 @@ fun DiscoveryScreen(
                         }, onAdd = { viewModel.addProject(project) }, onUse = { viewModel.useProject(project) })
                     }
                     item {
-                        Text("SUPPORTED PROJECTS", fontWeight = FontWeight.Bold)
+                        SectionHeading("Saved projects", subtitle = "Repositories in your project library")
                         savedProjects.forEach { project ->
                             Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text(project.fullName, Modifier.weight(1f))
@@ -189,9 +201,12 @@ private fun DiscoveryProjectCard(
     onAdd: () -> Unit,
     onUse: () -> Unit
 ) {
-    Card(colors = CardDefaults.cardColors(containerColor = AppTheme.colors.surface)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(project.fullName, fontWeight = FontWeight.Bold)
+    PlatformCard(
+        title = project.fullName,
+        subtitle = project.language?.let { "GitHub repository · $it" } ?: "GitHub repository",
+        icon = Icons.Default.Code,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(project.description.ifBlank { "No description provided." }, color = AppTheme.colors.textSecondary)
             Text("★ ${project.stars}${project.language?.let { " • $it" } ?: ""}", color = AppTheme.colors.textSecondary)
             if (project.defaultBranch.isNotBlank()) Text("Default branch: ${project.defaultBranch} · Forks: ${project.forks} · Open issues: ${project.openIssues}", color = AppTheme.colors.textSecondary)

@@ -37,6 +37,7 @@ object ProviderCatalog {
         // OpenRouter's auto-router always resolves to a live model, so this seed
         // cannot be retired out from under the user.
         ProviderSpec("OpenRouter", "openrouter/auto"),
+        ProviderSpec("NVIDIA NIM", "nvidia/nemotron-3.5-bolt-e4b"),
         ProviderSpec("Together AI", "meta-llama/Llama-3-70b-chat-hf"),
         ProviderSpec("Cohere", "command-r-plus"),
         ProviderSpec("DeepSeek", "deepseek-chat"),
@@ -81,6 +82,7 @@ object ProviderCatalog {
             "Mistral AI",
             "Groq",
             "OpenRouter",
+            "NVIDIA NIM",
             "Together AI",
             "Cohere",
             "DeepSeek",

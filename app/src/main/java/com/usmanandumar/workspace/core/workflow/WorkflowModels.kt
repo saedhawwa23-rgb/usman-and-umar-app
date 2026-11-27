@@ -12,13 +12,23 @@ data class WorkflowStep(
     val requiresApproval: Boolean = false,
     val timeoutMs: Long = 30_000,
     val maxRetries: Int = 0,
+    /**
+     * Idempotency key for this step's external effect. When null the step id is used, so the key is
+     * stable across retries, resumes and phone restarts. A receipt is written before the tool runs,
+     * so an already-performed effect is not repeated.
+     */
+    val receiptKey: String? = null,
 ) {
     init {
         require(id.matches(Regex("[a-z0-9][a-z0-9._-]*"))) { "Workflow step IDs must be stable lowercase identifiers" }
         require(toolId.isNotBlank()) { "Workflow steps need a tool ID" }
         require(timeoutMs > 0) { "Workflow step timeout must be positive" }
         require(maxRetries in 0..5) { "Workflow retries must be bounded from 0 to 5" }
+        require(receiptKey == null || receiptKey.isNotBlank()) { "A step receipt key must not be blank" }
     }
+
+    /** The stable idempotency key for this step, defaulting to its id. */
+    fun effectiveReceiptKey(): String = receiptKey ?: id
 }
 
 @Serializable

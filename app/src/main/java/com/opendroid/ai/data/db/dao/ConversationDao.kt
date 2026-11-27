@@ -15,6 +15,24 @@ interface ConversationDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: ConversationEntity)
 
+    @Query("UPDATE conversations SET text = :text WHERE id = :messageId")
+    suspend fun updateMessageText(messageId: String, text: String)
+
+    @Query("UPDATE conversations SET imageBase64 = :imageBase64 WHERE id = :messageId")
+    suspend fun updateMessageImage(messageId: String, imageBase64: String)
+
+    @Query("UPDATE conversations SET deliveryState = :state, deliveryError = :error, deliveryRetryable = :retryable, deliveryTaskId = COALESCE(:taskId, deliveryTaskId) WHERE id = :messageId")
+    suspend fun updateMessageDelivery(
+        messageId: String,
+        state: String,
+        error: String?,
+        retryable: Boolean?,
+        taskId: String?,
+    )
+
+    @Query("UPDATE conversations SET deliveryRetryable = CASE WHEN deliveryState = 'QUEUED' THEN 1 ELSE 0 END, deliveryState = 'FAILED', deliveryError = :error WHERE sender = 'USER' AND deliveryState IN ('QUEUED', 'SENDING', 'SENT')")
+    suspend fun recoverInterruptedOutgoingMessages(error: String)
+
     @Query("DELETE FROM conversations")
     suspend fun clearAll()
 
@@ -25,6 +43,9 @@ interface ConversationDao {
     /** Newest-first, capped at [limit]; callers wanting chronological order should reverse it. */
     @Query("SELECT * FROM conversations WHERE sessionId = :sessionId ORDER BY timestamp DESC LIMIT :limit")
     suspend fun getLastMessagesForSession(sessionId: String, limit: Int): List<ConversationEntity>
+
+    @Query("SELECT * FROM conversations WHERE sessionId = :sessionId AND timestamp <= :timestamp ORDER BY timestamp DESC LIMIT :limit")
+    suspend fun getLastMessagesForSessionUpTo(sessionId: String, timestamp: Long, limit: Int): List<ConversationEntity>
 
     /** Deletes a single message by id, regardless of which session it belongs to. */
     @Query("DELETE FROM conversations WHERE id = :messageId")

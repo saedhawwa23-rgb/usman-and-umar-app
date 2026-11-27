@@ -1,14 +1,36 @@
 package com.opendroid.ai.ui.viewmodel
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import androidx.core.net.toUri
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.BatteryManager
+import android.os.Build
+import android.provider.Settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.opendroid.ai.core.agent.AgentLoop
 import com.opendroid.ai.core.agent.AgentState
+import com.opendroid.ai.core.agent.ChatToolCall
+import com.opendroid.ai.core.agent.AgentToolEnvironment
+import com.opendroid.ai.core.agent.AgentToolRegistry
 import com.opendroid.ai.core.agent.ChatErrorPrimaryAction
 import com.opendroid.ai.core.agent.ChatErrorUiState
 import com.opendroid.ai.core.agent.primaryAction
+import com.opendroid.ai.core.browser.sanitizeCloudDiagnostic
+import com.opendroid.ai.core.connector.UnifiedAgentLoop
+import com.opendroid.ai.core.connector.ConnectorApprovalCoordinator
+import com.opendroid.ai.core.connector.ConnectorInvocation
+import com.opendroid.ai.core.connector.ConnectorRisk
+import com.opendroid.ai.core.connector.ConnectorTool
+import com.opendroid.ai.core.connector.KillSwitch
+import com.opendroid.ai.core.connector.OpenSwarmToolCatalog
+import com.opendroid.ai.core.browser.CloudServerClient
 import com.opendroid.ai.data.models.AutoMode
+import com.opendroid.ai.data.models.ChatDeliveryState
 import com.opendroid.ai.data.models.ChatMessage
 import com.opendroid.ai.data.models.LLMConfig
 import com.opendroid.ai.data.models.resolvedAutoMode
@@ -16,33 +38,132 @@ import com.opendroid.ai.data.repository.ChatSession
 import com.opendroid.ai.data.repository.ConversationRepository
 import com.opendroid.ai.data.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import javax.inject.Inject
+import java.util.UUID
+import org.json.JSONArray
+import org.json.JSONObject
+
+enum class ChatTarget { API_MODEL, UNIFIED_AGENT }
+
+/** Plugin selection never changes modes; Chat only remains a tool-free API-model request. */
+internal fun resolveChatTarget(target: ChatTarget, @Suppress("UNUSED_PARAMETER") pluginIds: List<String>): ChatTarget = target
+
+data class CloudTaskUiState(
+    val taskId: String,
+    val sessionId: String,
+    val status: String,
+    val serverId: String? = null,
+    val message: String? = null,
+    val engine: String = "cloud",
+)
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val agentLoop: AgentLoop,
     private val conversationRepository: ConversationRepository,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val agentEnvironment: AgentToolEnvironment,
+    private val unifiedAgentLoop: UnifiedAgentLoop,
+    private val connectorApprovals: ConnectorApprovalCoordinator,
+    private val cloudServerClient: CloudServerClient,
 ) : ViewModel() {
+
+    private data class PendingOutgoing(val sessionId: String?, val message: ChatMessage)
+
+    private val optimisticOutgoing = MutableStateFlow<List<PendingOutgoing>>(emptyList())
+    private val sendQueueMutex = Mutex()
+    private val recoveryComplete = CompletableDeferred<Unit>()
+    private val retryingMessageIds = mutableSetOf<String>()
+    private var lastSubmissionFingerprint: String? = null
+    private var lastSubmissionAtMillis: Long = 0
+    private var lastOutgoingTimestamp: Long = 0
+    private var unifiedAgentJob: Job? = null
+    private var unifiedAgentStopToken: java.util.concurrent.atomic.AtomicBoolean? = null
+
+    val pendingConnectorApproval = connectorApprovals.pending
+
+    fun approveConnectorToolCall() = connectorApprovals.decide(true)
+    fun denyConnectorToolCall() = connectorApprovals.decide(false)
+
+    /** Writes the selected attachment (text or base64 binary) into the Colab workspace after exact per-call approval. */
+    suspend fun sendAttachmentToColab(context: Context, displayName: String, content: String?, contentBase64: String?): String {
+        if (!KillSwitch.isEnabled) return "Action blocked by Kill Switch"
+        if (content == null && contentBase64 == null) return "Nothing to transfer: the attachment has no readable content."
+        val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return "Network status is unavailable; no Colab request was sent."
+        val active = connectivity.activeNetwork
+            ?: return "No active network connection; no Colab request was sent."
+        val capabilities = connectivity.getNetworkCapabilities(active)
+        if (capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) != true) {
+            return "Internet is not validated; no Colab request was sent."
+        }
+        val safeName = displayName.substringAfterLast('/').substringAfterLast('\\')
+            .replace(Regex("[^A-Za-z0-9_.-]"), "_").take(120).ifBlank { "attachment.bin" }
+        val payload = JSONObject().put("path", "uploads/$safeName")
+        if (content != null) payload.put("content", content) else payload.put("content_base64", contentBase64)
+        val tool = ConnectorTool(
+            connectorId = "colab",
+            name = "files_write",
+            description = "Write the selected attachment into the Colab workspace.",
+            parametersJsonSchema = OpenSwarmToolCatalog.specs.first { it.capabilityId == "files.write" }.schema,
+            risk = ConnectorRisk.HIGH,
+        )
+        val invocation = ConnectorInvocation(tool = tool, argumentsJson = payload.toString())
+        val approved = try {
+            connectorApprovals.request(invocation)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            return "Another approval is pending; attachment was not sent."
+        }
+        if (!approved) return "user denied"
+        if (!KillSwitch.isEnabled) return "Action blocked by Kill Switch"
+        return try {
+            val response = cloudServerClient.executeOpenSwarmTool("files.write", payload, approved = true)
+            val result = response.optJSONObject("result")
+            if (result?.optBoolean("verified") == true) {
+                "Saved verified file to Colab: ${result.optString("path", "uploads/$safeName")} (${result.optLong("size_bytes")} bytes). The file was not executed."
+            } else {
+                "Colab did not verify the file write: ${response.toString().take(500)}"
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            "Colab transfer failed: ${failure.message ?: failure.javaClass.simpleName}"
+        }
+    }
+
+    init {
+        viewModelScope.launch {
+            try {
+                conversationRepository.recoverInterruptedOutgoingMessages()
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                android.util.Log.e("ChatOutbox", "Interrupted-send recovery failed", failure)
+            } finally {
+                recoveryComplete.complete(Unit)
+            }
+        }
+    }
 
     val llmConfig: StateFlow<LLMConfig> = settingsRepository.llmConfig
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LLMConfig())
-
-    // Scoped to whichever session is current; re-collects automatically when the
-    // user switches chats since the repository's flow is driven off the same
-    // reactive "current session" pointer that switchToSession() flips.
-    val conversationHistory: StateFlow<List<ChatMessage>> = conversationRepository.conversations
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
 
     /** Every chat session, most recently active first. */
     val sessions: StateFlow<List<ChatSession>> = conversationRepository.sessions
@@ -59,6 +180,23 @@ class ChatViewModel @Inject constructor(
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = null
         )
+
+    // Room is the source of truth. This id-keyed overlay makes a just-submitted
+    // message visible synchronously until its insert reaches Room, and session
+    // filtering keeps it with the chat that owned the send.
+    val conversationHistory: StateFlow<List<ChatMessage>> = combine(
+        conversationRepository.conversations, optimisticOutgoing, currentSessionId
+    ) { persisted, optimistic, activeSessionId ->
+        val merged = linkedMapOf<String, ChatMessage>()
+        optimistic.filter { it.sessionId == null || it.sessionId == activeSessionId }
+            .forEach { merged[it.message.id] = it.message }
+        persisted.forEach { merged[it.id] = it }
+        merged.values.sortedBy { it.timestamp }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList(),
+    )
 
     val agentState: StateFlow<AgentState> = agentLoop.agentState
 
@@ -104,6 +242,15 @@ class ChatViewModel @Inject constructor(
     // task start" rule so [agentState], which is a single field shared by every chat,
     // can be attributed back to the chat it actually belongs to. See [visibleAgentState].
     private val _taskSessionId = MutableStateFlow<String?>(null)
+    private val _cloudTaskState = MutableStateFlow<CloudTaskUiState?>(null)
+    val cloudTaskState: StateFlow<CloudTaskUiState?> = _cloudTaskState
+
+    private fun updateCloudTask(taskId: String, transform: (CloudTaskUiState) -> CloudTaskUiState) {
+        _cloudTaskState.value?.takeIf { it.taskId == taskId }?.let { current ->
+            _cloudTaskState.value = transform(current)
+        }
+    }
+
 
     /**
      * [agentState], but forced to [AgentState.Idle] whenever it actually describes a
@@ -133,11 +280,11 @@ class ChatViewModel @Inject constructor(
      * running" indicator, which must stay visible for that chat even while the user has
      * switched away from it.
      */
-    val runningSessionId: StateFlow<String?> = combine(agentState, _taskSessionId) { state, sessionId ->
-        if (sessionId != null && (state is AgentState.Thinking || state is AgentState.ExecutingPlan)) {
-            sessionId
-        } else {
-            null
+    val runningSessionId: StateFlow<String?> = combine(agentState, _taskSessionId, _cloudTaskState) { state, sessionId, cloud ->
+        when {
+            cloud != null && cloud.status in setOf("RUNNING", "CANCEL_REQUESTED", "UNKNOWN") -> cloud.sessionId
+            sessionId != null && (state is AgentState.Thinking || state is AgentState.ExecutingPlan) -> sessionId
+            else -> null
         }
     }.stateIn(
         scope = viewModelScope,
@@ -157,11 +304,318 @@ class ChatViewModel @Inject constructor(
         return sessionId
     }
 
-    fun sendMessage(query: String, context: Context) {
+    fun sendMessage(query: String, context: Context, imageBase64: String? = null, target: ChatTarget = ChatTarget.API_MODEL, pluginIds: List<String> = emptyList(), thinkHarder: Boolean = false) {
         if (query.isBlank()) return
+        val effectiveTarget = resolveChatTarget(target, pluginIds)
         val sessionId = pinTaskSessionSnapshot()
-        agentLoop.processQuery(query, context, sessionId)
+        val fingerprint = listOf(
+            sessionId.orEmpty(),
+            effectiveTarget.name,
+            query,
+            imageBase64?.hashCode()?.toString().orEmpty(),
+            pluginIds.distinct().sorted().joinToString(","),
+            thinkHarder.toString(),
+        ).joinToString("|")
+        val now = System.currentTimeMillis()
+        if (fingerprint == lastSubmissionFingerprint && now - lastSubmissionAtMillis < 500) return
+        lastSubmissionFingerprint = fingerprint
+        lastSubmissionAtMillis = now
+        val messageTimestamp = maxOf(now, lastOutgoingTimestamp + 10)
+        lastOutgoingTimestamp = messageTimestamp
+
+        val messageId = UUID.randomUUID().toString()
+        val taskId = if (effectiveTarget == ChatTarget.UNIFIED_AGENT) "agent-$messageId" else null
+        val metadata = JSONObject()
+            .put("plugins", JSONArray(pluginIds.distinct()))
+            .put("think_harder", thinkHarder)
+            .toString()
+        val queued = ChatMessage(
+            id = messageId,
+            text = query,
+            sender = ChatMessage.Sender.USER,
+            timestamp = messageTimestamp,
+            imageBase64 = imageBase64,
+            deliveryState = ChatDeliveryState.QUEUED,
+            deliveryTarget = effectiveTarget.name,
+            deliveryTaskId = taskId,
+            deliveryMetadata = metadata,
+            deliveryRetryable = false,
+        )
+        optimisticOutgoing.value = optimisticOutgoing.value + PendingOutgoing(sessionId, queued)
+        viewModelScope.launch {
+            recoveryComplete.await()
+            val pinnedSession = sessionId ?: conversationRepository.ensureCurrentSessionId()
+            updateOptimisticSession(messageId, pinnedSession)
+            try {
+                // Persist QUEUED before waiting behind another request. If the process is
+                // interrupted while an earlier send runs, startup recovery can still see it.
+                conversationRepository.insertMessage(pinnedSession, queued)
+                awaitPersistedMessage(pinnedSession, messageId)
+                sendQueueMutex.withLock {
+                    conversationRepository.updateMessageDelivery(messageId, ChatDeliveryState.SENDING)
+                    val sending = queued.copy(deliveryState = ChatDeliveryState.SENDING)
+                    when (effectiveTarget) {
+                        ChatTarget.UNIFIED_AGENT -> {
+                            val pinnedTaskId = requireNotNull(taskId)
+                            _cloudTaskState.value = CloudTaskUiState(
+                                pinnedTaskId, pinnedSession, "RUNNING", engine = "unified_agent"
+                            )
+                            unifiedAgentStopToken = java.util.concurrent.atomic.AtomicBoolean(false)
+                            unifiedAgentJob = viewModelScope.launch {
+                                runUnifiedAgent(sending, pinnedSession, imageBase64, pinnedTaskId)
+                            }
+                            unifiedAgentJob?.join()
+                        }
+                        ChatTarget.API_MODEL -> {
+                            _taskSessionId.value = pinnedSession
+                            agentLoop.processQuery(
+                                query, context, pinnedSession, imageBase64,
+                                prePersistedUserMessage = sending,
+                            ).join()
+                        }
+                    }
+                }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) {
+                    withContext(NonCancellable) {
+                        runCatching {
+                            conversationRepository.updateMessageDelivery(
+                                messageId,
+                                ChatDeliveryState.FAILED,
+                                "The app stopped while this request was running. Check its task status before retrying.",
+                                retryable = false,
+                            )
+                        }
+                    }
+                    throw failure
+                }
+                val detail = sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank {
+                    failure.javaClass.simpleName
+                }
+                runCatching {
+                    conversationRepository.updateMessageDelivery(
+                        messageId, ChatDeliveryState.FAILED, detail, retryable = true
+                    )
+                }
+                updateOptimisticMessage(queued.copy(
+                    deliveryState = ChatDeliveryState.FAILED,
+                    deliveryError = detail,
+                    deliveryRetryable = true,
+                ))
+            }
+        }
     }
+
+    private suspend fun awaitPersistedMessage(sessionId: String, messageId: String) {
+        conversationRepository.getMessages(sessionId).first { messages -> messages.any { it.id == messageId } }
+        optimisticOutgoing.value = optimisticOutgoing.value.filterNot { it.message.id == messageId }
+    }
+
+    private fun updateOptimisticSession(messageId: String, sessionId: String) {
+        optimisticOutgoing.value = optimisticOutgoing.value.map { pending ->
+            if (pending.message.id == messageId) pending.copy(sessionId = sessionId) else pending
+        }
+    }
+
+    private fun updateOptimisticMessage(message: ChatMessage) {
+        optimisticOutgoing.value = optimisticOutgoing.value.map { pending ->
+            if (pending.message.id == message.id) pending.copy(message = message) else pending
+        }
+    }
+
+    private suspend fun runUnifiedAgent(
+        userMessage: ChatMessage,
+        sessionId: String,
+        imageBase64: String?,
+        taskId: String,
+    ) {
+        val stopToken = unifiedAgentStopToken ?: java.util.concurrent.atomic.AtomicBoolean(false)
+        unifiedAgentStopToken = stopToken
+        val assistantId = "unified-reply-${userMessage.id}"
+        conversationRepository.insertMessage(
+            sessionId,
+            ChatMessage(
+                id = assistantId,
+                text = "Unified Agent is starting…",
+                sender = ChatMessage.Sender.AGENT,
+                timestamp = userMessage.timestamp + 1,
+                modelBadge = "Unified Agent",
+            ),
+        )
+        try {
+            val result = unifiedAgentLoop.run(
+                userMessage.text,
+                maxSteps = UnifiedAgentLoop.MAX_STEPS,
+                imageBase64 = imageBase64,
+                stopRequested = stopToken,
+            )
+            val attemptedDispatch = result.events.any { it.type == "dispatch" }
+            val reachedProvider = result.events.any { it.type in setOf("dispatch", "result", "completed") }
+            if (reachedProvider) {
+                conversationRepository.updateMessageDelivery(
+                    userMessage.id, ChatDeliveryState.SENT, taskId = taskId,
+                )
+            }
+            val steps = result.events
+                .filter { it.type in setOf("thinking", "dispatch", "result", "blocked", "denied", "stopped", "error") }
+                .joinToString("\n") { event -> "${event.type.uppercase()}: ${event.message}" }
+                .take(7_000)
+            val visibleOutput = buildString {
+                if (result.lastOutput.isNotBlank()) append(result.lastOutput.take(10_000))
+                if (steps.isNotBlank()) {
+                    if (isNotEmpty()) append("\n\n")
+                    append("Agent activity\n").append(steps)
+                }
+                if (isEmpty()) append("Unified Agent stopped without a final response.")
+            }.take(12_000)
+            conversationRepository.updateMessageText(assistantId, visibleOutput)
+
+            if (result.completed) {
+                conversationRepository.updateMessageDelivery(
+                    userMessage.id, ChatDeliveryState.COMPLETED, taskId = taskId,
+                )
+                updateCloudTask(taskId) { it.copy(status = "COMPLETED", message = null) }
+            } else {
+                val denied = result.events.lastOrNull { it.type == "denied" }
+                if (denied != null) {
+                    // A denied action is not a failure. Surface the specific reason and keep the
+                    // task resumable rather than reporting a hard failure.
+                    val reason = denied.message.take(1_000)
+                    conversationRepository.updateMessageDelivery(
+                        userMessage.id,
+                        ChatDeliveryState.FAILED,
+                        error = "Action denied by the owner. $reason",
+                        retryable = true,
+                        taskId = taskId,
+                    )
+                    updateCloudTask(taskId) { it.copy(status = "COMPLETED", message = "Action denied by the owner") }
+                } else {
+                    val failure = result.events.lastOrNull { it.type in setOf("error", "stopped", "blocked") }
+                        ?.message?.take(1_000) ?: "Unified Agent did not produce a verified final response."
+                    conversationRepository.updateMessageDelivery(
+                        userMessage.id,
+                        ChatDeliveryState.FAILED,
+                        error = failure,
+                        retryable = !attemptedDispatch,
+                        taskId = taskId,
+                    )
+                    updateCloudTask(taskId) { it.copy(status = "FAILED", message = failure) }
+                }
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            withContext(NonCancellable) {
+                runCatching {
+                    connectorApprovals.cancelPending()
+                    conversationRepository.updateMessageText(assistantId, "Unified Agent stopped by the user.")
+                    conversationRepository.updateMessageDelivery(
+                        userMessage.id,
+                        ChatDeliveryState.FAILED,
+                        "Unified Agent was stopped before completion; retry is disabled because a tool may already have run.",
+                        retryable = false,
+                        taskId = taskId,
+                    )
+                    updateCloudTask(taskId) { it.copy(status = "CANCELLED", message = "Stopped by user.") }
+                }
+            }
+            throw cancelled
+        } catch (failure: Exception) {
+            val detail = sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank {
+                failure.javaClass.simpleName
+            }
+            conversationRepository.updateMessageText(assistantId, "Unified Agent failed: $detail")
+            conversationRepository.updateMessageDelivery(
+                userMessage.id, ChatDeliveryState.FAILED, detail, retryable = false, taskId = taskId,
+            )
+            updateCloudTask(taskId) { it.copy(status = "FAILED", message = detail) }
+        } finally {
+            unifiedAgentJob = null
+            unifiedAgentStopToken = null
+        }
+    }
+
+    /** Retry reuses the existing visible/user row and preserves its API-only or tools mode. */
+    fun retryMessage(messageId: String, sessionId: String?, context: Context) {
+        if (sessionId == null || !retryingMessageIds.add(messageId)) return
+        viewModelScope.launch {
+            try {
+                recoveryComplete.await()
+                val message = conversationRepository.getMessages(sessionId).first()
+                    .firstOrNull { it.id == messageId && it.sender == ChatMessage.Sender.USER } ?: return@launch
+                if (message.deliveryState != ChatDeliveryState.FAILED || message.deliveryRetryable != true) return@launch
+                val unifiedRetry = message.deliveryTarget == ChatTarget.UNIFIED_AGENT.name
+                val retry = message.copy(
+                    deliveryState = ChatDeliveryState.QUEUED,
+                    deliveryError = null,
+                    deliveryRetryable = false,
+                )
+                conversationRepository.updateMessageDelivery(messageId, ChatDeliveryState.QUEUED, error = null, retryable = false)
+
+                sendQueueMutex.withLock {
+                    conversationRepository.updateMessageDelivery(
+                        messageId,
+                        ChatDeliveryState.SENDING,
+                        taskId = retry.deliveryTaskId,
+                    )
+                    if (unifiedRetry) {
+                        val taskId = retry.deliveryTaskId ?: "agent-${retry.id}"
+                        _cloudTaskState.value = CloudTaskUiState(
+                            taskId, sessionId, "RUNNING", engine = "unified_agent"
+                        )
+                        unifiedAgentStopToken = java.util.concurrent.atomic.AtomicBoolean(false)
+                        unifiedAgentJob = viewModelScope.launch {
+                            runUnifiedAgent(retry, sessionId, retry.imageBase64, taskId)
+                        }
+                        unifiedAgentJob?.join()
+                    } else {
+                        _taskSessionId.value = sessionId
+                        agentLoop.retryRequest(messageId, sessionId, context).join()
+                    }
+                }
+            } catch (failure: Exception) {
+                if (failure is kotlinx.coroutines.CancellationException) throw failure
+                val detail = sanitizeCloudDiagnostic(failure.message.orEmpty()).ifBlank {
+                    failure.javaClass.simpleName
+                }
+                runCatching {
+                    conversationRepository.updateMessageDelivery(
+                        messageId, ChatDeliveryState.FAILED, detail, retryable = true
+                    )
+                }
+            } finally {
+                retryingMessageIds.remove(messageId)
+            }
+        }
+    }
+
+    /** Runs only after the user presses the per-message approval button. */
+    fun approveChatToolCall(call: ChatToolCall, context: Context) {
+        val targetSession = sessions.value.firstOrNull { it.isCurrent }?.id
+        viewModelScope.launch {
+            val result = runCatching { withContext(Dispatchers.IO) { executeApprovedChatTool(call) } }
+                .fold(onSuccess = { it }, onFailure = { "Action failed: ${it.message ?: "Unknown error."}" })
+            val sessionId = targetSession ?: conversationRepository.ensureCurrentSessionId()
+            conversationRepository.insertMessage(
+                sessionId,
+                ChatMessage(id = UUID.randomUUID().toString(), text = result.take(12_000), sender = ChatMessage.Sender.AGENT),
+            )
+            if (call.action == "use_local_app" && !result.startsWith("Action failed:")) {
+                _taskSessionId.value = sessionId
+                agentLoop.processQuery(
+                    "The local AI app tool completed. Original prompt: ${call.prompt.orEmpty()}\n\n" +
+                        "Tool result from ${call.appName ?: call.packageName ?: "the selected local AI app"}:\n$result\n\n" +
+                        "Continue the user's workflow using this real result. Do not claim actions that were not completed.",
+                    context,
+                    sessionId,
+                    null,
+                )
+            }
+        }
+    }
+
+    private val agentTools = AgentToolRegistry.standard()
+
+    private suspend fun executeApprovedChatTool(call: ChatToolCall): String =
+        agentTools.execute(call, agentEnvironment)
 
     /**
      * Edits a previously sent user message and resends it, DeepSeek-style: cancels any
@@ -170,14 +624,21 @@ class ChatViewModel @Inject constructor(
      * current session so the conversation visibly rewinds, then sends the edited text
      * as a fresh query.
      */
-    fun editAndResend(messageId: String, newText: String, context: Context) {
+    fun editAndResend(messageId: String, newText: String, context: Context, imageBase64: String? = null) {
         if (newText.isBlank()) return
         agentLoop.cancelCurrentTask()
         viewModelScope.launch {
             val sessionId = conversationRepository.ensureCurrentSessionId()
             conversationRepository.deleteMessageAndAfter(sessionId, messageId)
             _taskSessionId.value = sessionId
-            agentLoop.processQuery(newText, context, sessionId)
+            agentLoop.processQuery(newText, context, sessionId, imageBase64)
+        }
+    }
+
+    /** Deletes one visible message without affecting the rest of the conversation. */
+    fun deleteMessage(messageId: String) {
+        viewModelScope.launch {
+            conversationRepository.deleteMessage(messageId)
         }
     }
 
@@ -258,7 +719,7 @@ class ChatViewModel @Inject constructor(
      */
     fun deleteChat(sessionId: String) {
         if (isCurrentSession(sessionId) || runningSessionId.value == sessionId) {
-            agentLoop.cancelCurrentTask()
+            if (_cloudTaskState.value?.sessionId == sessionId) stopTask() else agentLoop.cancelCurrentTask()
         }
         agentLoop.forgetSession(sessionId)
         viewModelScope.launch {
@@ -281,6 +742,15 @@ class ChatViewModel @Inject constructor(
      * conversation history. Shared by the Plan tab and the chat UI's stop control.
      */
     fun stopTask() {
-        agentLoop.cancelCurrentTask()
+        val cloud = _cloudTaskState.value
+        if (cloud?.engine == "unified_agent" && cloud.status == "RUNNING") {
+            updateCloudTask(cloud.taskId) {
+                it.copy(status = "RUNNING", message = "Stop requested; finishing the current API/tool call.")
+            }
+            unifiedAgentStopToken?.set(true)
+            connectorApprovals.cancelPending()
+        } else {
+            agentLoop.cancelCurrentTask()
+        }
     }
 }

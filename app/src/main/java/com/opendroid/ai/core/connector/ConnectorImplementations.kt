@@ -59,8 +59,12 @@ class CliConnector(
 
 data class HttpTransportResponse(val code: Int, val body: String)
 
-class HttpConnectorTransport {
-    suspend fun post(url: String, body: String, bearer: String?): HttpTransportResponse = withContext(Dispatchers.IO) {
+/**
+ * Posts a JSON body to an MCP-style endpoint and returns the status and body. Open so a caller can
+ * substitute the socket (tests, and a future transport that reuses one connection).
+ */
+open class HttpConnectorTransport {
+    open suspend fun post(url: String, body: String, bearer: String?): HttpTransportResponse = withContext(Dispatchers.IO) {
         val connection = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 20_000

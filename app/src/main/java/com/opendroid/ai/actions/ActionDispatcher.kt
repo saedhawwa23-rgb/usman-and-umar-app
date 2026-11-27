@@ -6,6 +6,7 @@ import com.opendroid.ai.actions.base.Action
 import com.opendroid.ai.actions.base.ActionResult
 import com.opendroid.ai.core.agent.ActionSchema
 import com.opendroid.ai.core.agent.DeviceStateProvider
+import com.opendroid.ai.core.connector.KillSwitch
 import com.opendroid.ai.data.db.dao.UnknownActionDao
 import com.opendroid.ai.data.db.entities.UnknownActionEntity
 import javax.inject.Inject
@@ -47,6 +48,15 @@ class ActionDispatcher @Inject constructor(
 
     companion object {
         private const val TAG = "ActionDispatcher"
+
+        /** Message returned when the global automation kill switch blocks an action. */
+        const val KILL_SWITCH_BLOCKED_MESSAGE = "Action blocked by Kill Switch"
+
+        /**
+         * Fail-closed gate for automation. Actions run only when the kill switch is enabled;
+         * a fresh process starts with it disabled.
+         */
+        fun automationAllowed(killSwitchEnabled: Boolean): Boolean = killSwitchEnabled
 
         // Actions that require internet connectivity
         private val internetRequiredActions = setOf(
@@ -119,7 +129,21 @@ class ActionDispatcher @Inject constructor(
 
     suspend fun execute(actionName: String, params: Map<String, String>, context: Context): ActionResult {
 
-        // ── STEP 0: Normalize the raw action name ──
+        // ── STEP 0: Global automation gate ──
+        // ActionDispatcher is the single chokepoint every automation entry point reaches
+        // (unified agent loop via LocalActionConnector, AgentLoop, McpServer,
+        // WorkspaceWorkflowRunner). The connector registry gates connector tools, but these
+        // direct callers bypass it, so the kill switch must be checked here too. Fail-closed:
+        // a disabled switch blocks the action before any resolution or side effect.
+        if (!automationAllowed(KillSwitch.isEnabled)) {
+            Log.d(TAG, "║ BLOCKED — global automation kill switch is disabled")
+            return ActionResult.Failure(
+                errorMsg = KILL_SWITCH_BLOCKED_MESSAGE,
+                fallback = "Enable Global Automation in Settings to run actions."
+            )
+        }
+
+        // ── STEP 0b: Normalize the raw action name ──
         val normalized = autoMapper.normalizeActionName(actionName)
 
         Log.d(TAG, "╔══ Action Execution Pipeline ══════════")

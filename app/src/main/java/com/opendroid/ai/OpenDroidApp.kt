@@ -5,9 +5,12 @@ import android.util.Log
 import com.opendroid.ai.core.crash.CrashLogRecorder
 import com.opendroid.ai.core.crash.DeviceMetadata
 import com.opendroid.ai.core.crash.OpenDroidCrashHandler
+import com.opendroid.ai.core.remote.RemoteReconnectSupervisor
 import com.opendroid.ai.core.memory.MemoryManager
 import com.opendroid.ai.core.security.LegacyPreferenceMigration
 import com.opendroid.ai.data.crash.CrashLogRepository
+import com.opendroid.ai.data.repository.WorkspaceTaskRepository
+import com.opendroid.ai.data.repository.WorkspaceWorkflowRunner
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +29,15 @@ class OpenDroidApp : Application() {
 
     @Inject
     lateinit var legacyPreferenceMigration: LegacyPreferenceMigration
+
+    @Inject
+    lateinit var workspaceTaskRepository: WorkspaceTaskRepository
+
+    @Inject
+    lateinit var remoteReconnectSupervisor: RemoteReconnectSupervisor
+
+    @Inject
+    lateinit var workspaceWorkflowRunner: WorkspaceWorkflowRunner
 
     private val appScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -47,6 +59,28 @@ class OpenDroidApp : Application() {
                 memoryManager.cleanPoisonedMemories()
             } catch (e: Exception) {
                 // Silently ignore cleanup errors to not block app startup
+            }
+        }
+
+        appScope.launch {
+            runCatching { workspaceTaskRepository.recoverAfterRestart() }
+        }
+
+        // Re-drive any multi-plugin workflow that a process death left unfinished. The durable engine
+        // reads each run's persisted state and its execution receipts, so a step whose external
+        // effect already happened is not repeated.
+        appScope.launch {
+            runCatching { workspaceWorkflowRunner.resumeInterrupted() }
+        }
+
+        // Reconnect any desktop the owner had left connected before the app was killed or the phone
+        // rebooted. The desire is persisted, so this survives a restart; a failed attempt backs off
+        // and gives up after a bounded schedule rather than retrying forever.
+        appScope.launch {
+            runCatching {
+                remoteReconnectSupervisor.reconnectAll(
+                    reason = com.opendroid.ai.core.remote.ReconnectReason.APP_START
+                )
             }
         }
     }

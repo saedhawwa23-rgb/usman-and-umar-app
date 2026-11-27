@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -29,6 +30,7 @@ import com.opendroid.ai.ui.viewmodel.UniversalAgentViewModel
 fun UniversalAgentScreen(viewModel: UniversalAgentViewModel = hiltViewModel()) {
     val events by viewModel.events.collectAsState()
     val running by viewModel.running.collectAsState()
+    val approval by viewModel.pendingApproval.collectAsState()
     val cloudflare by viewModel.cloudflareState.collectAsState()
     var goal by remember { mutableStateOf("") }
     var cloudflareToken by remember { mutableStateOf("") }
@@ -38,7 +40,7 @@ fun UniversalAgentScreen(viewModel: UniversalAgentViewModel = hiltViewModel()) {
     ) {
         Text("CLOUD AI TOOL AGENT", color = AppTheme.colors.textPrimary, fontSize = 22.sp)
         Text(
-            "Uses the selected cloud provider's native tool-call protocol. Read-only and reversible tools may run; sensitive and destructive actions are denied until a real approval flow is implemented.",
+            "Uses the selected cloud provider's native tool-call protocol. Read-only tools may run; high-risk, write, and execute calls pause for one-call approval.",
             color = AppTheme.colors.textSecondary
         )
         OutlinedTextField(
@@ -50,6 +52,9 @@ fun UniversalAgentScreen(viewModel: UniversalAgentViewModel = hiltViewModel()) {
         )
         Button(onClick = { viewModel.run(goal) }, enabled = goal.isNotBlank() && !running) {
             Text(if (running) "RUNNING WITH CLOUD PROVIDER…" else "RUN WITH SELECTED PROVIDER")
+        }
+        if (running) {
+            TextButton(onClick = viewModel::stop) { Text("STOP TOOL LOOP") }
         }
         Text("CLOUDFLARE API TOKEN (NO WORKER TARGET CONFIGURED)", color = AppTheme.colors.textPrimary, fontSize = 16.sp)
         Text("Status: ${cloudflare.status}", color = AppTheme.colors.textSecondary)
@@ -75,5 +80,14 @@ fun UniversalAgentScreen(viewModel: UniversalAgentViewModel = hiltViewModel()) {
                 Text("${event.type.uppercase()}: ${event.message}", color = AppTheme.colors.textSecondary, fontSize = 13.sp)
             }
         }
+    }
+    approval?.let { pending ->
+        AlertDialog(
+            onDismissRequest = viewModel::denyPendingCall,
+            title = { Text("Approve tool call?") },
+            text = { Text("${pending.toolName}\n\nArguments:\n${pending.argumentsJson}\n\nApproval applies to this call only.") },
+            confirmButton = { TextButton(onClick = viewModel::approvePendingCall) { Text("Approve") } },
+            dismissButton = { TextButton(onClick = viewModel::denyPendingCall) { Text("Deny") } },
+        )
     }
 }
