@@ -256,9 +256,11 @@ class CloudServerClient @Inject constructor(
             val validUrl = validateOpenSwarmTunnelUrl(url)
             CloudServerConfig(id = "connection-test", name = "OpenSwarm", url = validUrl, token = token.orEmpty(), enabled = true, role = "OPENSWARM")
         } else {
-            val servers = settingsRepository.cloudServers.first().filter { it.role == "OPENSWARM" && it.url.isNotBlank() }
-            check(servers.size == OpenSwarmRouteConfig.MAX_CONNECTED_NODES) { "Only one OpenSwarm Colab node can be connected." }
-            servers.single().also { check(it.enabled && it.token.isNotBlank()) { "Configure and enable the OpenSwarm Colab node first." } }
+            val servers = settingsRepository.cloudServers.first()
+                .filter { it.role == "OPENSWARM" && it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
+            val selectedId = settingsRepository.selectedCloudServerId.first()
+            servers.firstOrNull { it.id == selectedId } ?: servers.firstOrNull()
+                ?: error("Configure and enable an OpenSwarm Colab node first.")
         }
         val request = Request.Builder().url("${serverBaseUrl(server.url)}/tools")
             .header("Authorization", "Bearer ${server.token}").get().build()
@@ -287,8 +289,9 @@ class CloudServerClient @Inject constructor(
     suspend fun executeOpenSwarmTool(capabilityId: String, payload: JSONObject, approved: Boolean = false): JSONObject = withContext(Dispatchers.IO) {
         require(capabilityId.matches(Regex("[a-zA-Z0-9._-]{1,100}"))) { "Invalid OpenSwarm capability ID." }
         val servers = settingsRepository.cloudServers.first().filter { it.role == "OPENSWARM" && it.enabled && it.url.isNotBlank() && it.token.isNotBlank() }
-        check(servers.size == OpenSwarmRouteConfig.MAX_CONNECTED_NODES) { "Only one OpenSwarm Colab node can be connected." }
-        val server = servers.single()
+        val selectedId = settingsRepository.selectedCloudServerId.first()
+        val server = servers.firstOrNull { it.id == selectedId } ?: servers.firstOrNull()
+            ?: error("Configure and enable an OpenSwarm Colab node first.")
         val body = JSONObject().put("payload", payload).put("approved", approved).toString()
         val request = Request.Builder().url("${serverBaseUrl(server.url)}/tools/${capabilityId}/execute")
             .header("Authorization", "Bearer ${server.token}")
@@ -324,11 +327,6 @@ class CloudServerClient @Inject constructor(
     suspend fun pingAll(includeDisabled: Boolean = false): List<CloudServerHealth> {
         val configured = settingsRepository.cloudServers.first()
             .filter { it.role == "OPENSWARM" && (includeDisabled || it.enabled) && it.url.isNotBlank() }
-        if (configured.size > OpenSwarmRouteConfig.MAX_CONNECTED_NODES) {
-            return configured.map { server ->
-                CloudServerHealth(server.id, server.name, online = false, error = "Only one OpenSwarm Colab node can be connected.")
-            }
-        }
         return probeServers(configured)
     }
 
@@ -347,8 +345,9 @@ class CloudServerClient @Inject constructor(
     suspend fun hasOnlineOpenSwarmServer(onWaking: () -> Unit = {}): Boolean {
         val profiles = settingsRepository.cloudServers.first()
             .filter { it.role == "OPENSWARM" && it.url.isNotBlank() }
-        if (profiles.size != OpenSwarmRouteConfig.MAX_CONNECTED_NODES) return false
-        val server = profiles.singleOrNull { it.enabled && it.token.isNotBlank() } ?: return false
+        val candidates = profiles.filter { it.enabled && it.token.isNotBlank() }
+        val selectedId = settingsRepository.selectedCloudServerId.first()
+        val server = candidates.firstOrNull { it.id == selectedId } ?: candidates.firstOrNull() ?: return false
         val first = withContext(Dispatchers.IO) { probe(server) }
         if (first.online) return true
         if (!first.error.orEmpty().contains("timeout", ignoreCase = true)) return false
@@ -371,13 +370,6 @@ class CloudServerClient @Inject constructor(
     ): String = withContext(Dispatchers.IO) {
         val configured = settingsRepository.cloudServers.first()
         val profiles = configured.filter { it.role == "OPENSWARM" && it.url.isNotBlank() }
-        if (profiles.size != OpenSwarmRouteConfig.MAX_CONNECTED_NODES) {
-            throw CloudRequestException(
-                stage = "configuration",
-                requestUrl = null,
-                responseBody = "OpenSwarm server offline. Start the Colab notebook and try again.",
-            )
-        }
         val candidates = profiles.filter { it.enabled && it.token.isNotBlank() }
         if (candidates.isEmpty()) {
             throw CloudRequestException(
@@ -402,7 +394,8 @@ class CloudServerClient @Inject constructor(
             .filter { it.online }
             .mapNotNull { result -> candidates.firstOrNull { it.id == result.serverId } }
             .toList()
-        val ordered = targetId?.let { id ->
+        val preferredTargetId = targetId ?: settingsRepository.selectedCloudServerId.first()
+        val ordered = preferredTargetId?.let { id ->
             val selected = candidates.firstOrNull { it.id == id }
                 ?: error("The selected cloud server is disabled or not configured.")
             if (selected.id !in healthyIds) {
@@ -507,9 +500,6 @@ class CloudServerClient @Inject constructor(
         require(action in setOf("pause", "cancel", "resume")) { "Unsupported cloud task control action." }
         val profiles = settingsRepository.cloudServers.first()
             .filter { it.role == "OPENSWARM" && it.url.isNotBlank() }
-        check(profiles.size == OpenSwarmRouteConfig.MAX_CONNECTED_NODES) {
-            "Only one OpenSwarm Colab node can be connected."
-        }
         val configured = profiles.filter { it.enabled && it.token.isNotBlank() }
         check(configured.isNotEmpty()) { "Enable and configure the OpenSwarm Colab node in Remote settings." }
         // Controls target already-running work, so a draining/not-ready server
@@ -654,9 +644,6 @@ class CloudServerClient @Inject constructor(
     suspend fun fetchOpenSwarmAgents(): List<RemoteOpenSwarmAgent> {
         val profiles = settingsRepository.cloudServers.first()
             .filter { it.role == "OPENSWARM" && it.url.isNotBlank() }
-        check(profiles.size == OpenSwarmRouteConfig.MAX_CONNECTED_NODES) {
-            "Only one OpenSwarm Colab node can be connected."
-        }
         val configured = profiles.filter { it.enabled && it.token.isNotBlank() }
         check(configured.isNotEmpty()) { "Enable and configure the OpenSwarm Colab node first." }
         val healthy = probeServers(configured).filter { it.online }

@@ -98,6 +98,7 @@ fun SettingsScreen(
     val cloudServerEnabled by viewModel.settingsRepository.cloudServerEnabled.collectAsState(initial = listOf(true, false, false))
     val cloudServerTokens by viewModel.settingsRepository.cloudServerTokens.collectAsState()
     val cloudServers by viewModel.cloudServers.collectAsState()
+    val selectedCloudServerId by viewModel.selectedCloudServerId.collectAsState()
     val cloudServerHealth by viewModel.cloudServerHealth.collectAsState()
     val pingingCloudServers by viewModel.pingingCloudServers.collectAsState()
     val cloudKeepAliveEnabled by viewModel.cloudKeepAliveEnabled.collectAsState()
@@ -320,7 +321,7 @@ fun SettingsScreen(
                                 }
                                 Text(if (pingingCloudServers) " Checking…" else " Ping All")
                             }
-                            Text("${cloudServers.size}/${SettingsRepository.MAX_CLOUD_SERVERS} OpenSwarm node configured", color = TextSecondary, fontSize = 12.sp)
+                            Text("${cloudServers.size}/${SettingsRepository.MAX_CLOUD_SERVERS} OpenSwarm nodes configured", color = TextSecondary, fontSize = 12.sp)
                         }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Switch(checked = cloudKeepAliveEnabled, onCheckedChange = viewModel::setCloudKeepAliveEnabled)
@@ -381,6 +382,12 @@ fun SettingsScreen(
                                 )
                             }
                             Switch(checked = server.enabled, onCheckedChange = { viewModel.setCloudServerEnabled(server.id, it) })
+                            TextButton(onClick = { viewModel.selectCloudServer(server.id) }) {
+                                Text(if (selectedCloudServerId == server.id) "Selected" else "Use runtime")
+                            }
+                            TextButton(onClick = { viewModel.reconnectCloudServer(server) }, enabled = server.enabled && server.token.isNotBlank()) {
+                                Text("Reconnect")
+                            }
                             IconButton(onClick = { viewModel.removeCloudServer(server.id) }) {
                                 Icon(Icons.Default.Delete, contentDescription = "Delete ${server.name}", tint = AccentRed)
                             }
@@ -467,7 +474,7 @@ fun SettingsScreen(
                                 newServerToken = ""
                             },
                             enabled = newServerUrl.isNotBlank() && newServerToken.isNotBlank() && cloudServers.size < SettingsRepository.MAX_CLOUD_SERVERS,
-                        ) { Text(if (cloudServers.size < SettingsRepository.MAX_CLOUD_SERVERS) "+ Add OpenSwarm Node" else "One node already configured") }
+                        ) { Text(if (cloudServers.size < SettingsRepository.MAX_CLOUD_SERVERS) "+ Add OpenSwarm Node" else "Node limit reached") }
                         OutlinedButton(
                             onClick = { viewModel.testOpenSwarmConnection(newServerUrl, newServerToken) },
                             enabled = newServerUrl.isNotBlank() && newServerToken.isNotBlank(),

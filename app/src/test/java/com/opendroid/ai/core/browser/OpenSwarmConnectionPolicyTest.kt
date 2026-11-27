@@ -44,9 +44,9 @@ class OpenSwarmConnectionPolicyTest {
     }
 
     @Test
-    fun `non OpenSwarm routes are behind one false shared flag`() {
+    fun `non OpenSwarm routes remain gated while ten OpenSwarm nodes are supported`() {
         assertEquals(false, OpenSwarmRouteConfig.ENABLE_NON_OPENSWARM_ROUTES)
-        assertEquals(1, OpenSwarmRouteConfig.MAX_CONNECTED_NODES)
+        assertEquals(10, OpenSwarmRouteConfig.MAX_CONNECTED_NODES)
         assertEquals(true, OpenSwarmRouteConfig.isHiddenAgent("terminal.execute", "Terminal"))
         assertEquals(true, OpenSwarmRouteConfig.isHiddenAgent("files.list", "File Manager"))
         assertEquals(true, OpenSwarmRouteConfig.isHiddenAgent("browser_agent", "Browser"))

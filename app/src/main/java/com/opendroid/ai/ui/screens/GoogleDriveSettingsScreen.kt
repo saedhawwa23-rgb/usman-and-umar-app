@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import com.opendroid.ai.core.drive.formatGoogleStorage
 import com.opendroid.ai.core.drive.summarizeGoogleDrivePool
 import com.opendroid.ai.data.db.entities.GoogleDriveAccountEntity
+import com.opendroid.ai.data.repository.GoogleDriveAccountRepository
 import com.opendroid.ai.ui.theme.AppTheme
 import com.opendroid.ai.ui.viewmodel.GoogleDriveAccountsViewModel
 
@@ -140,10 +141,10 @@ fun GoogleDriveSettingsScreen(
                         )
                         chooserLauncher.launch(chooser)
                     },
-                    enabled = !isWorking,
+                    enabled = !isWorking && accounts.size < GoogleDriveAccountRepository.MAX_ACCOUNTS,
                     modifier = Modifier.weight(1f),
                 ) {
-                    Text("+ Add Google Account")
+                    Text(if (accounts.size < GoogleDriveAccountRepository.MAX_ACCOUNTS) "+ Add Google Account" else "Account limit reached")
                 }
                 OutlinedButton(
                     onClick = viewModel::refreshAllQuotas,
@@ -161,7 +162,7 @@ fun GoogleDriveSettingsScreen(
             message?.let { Text(it, color = AppTheme.colors.textSecondary) }
 
             Text(
-                text = "Connected accounts (${accounts.size})",
+                text = "Connected accounts (${accounts.size}/${GoogleDriveAccountRepository.MAX_ACCOUNTS})",
                 color = AppTheme.colors.textPrimary,
             )
 

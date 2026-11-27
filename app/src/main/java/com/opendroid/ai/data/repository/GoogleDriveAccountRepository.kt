@@ -20,6 +20,11 @@ class GoogleDriveAccountRepository @Inject constructor(
     suspend fun connect(email: String, accessToken: String) {
         val normalizedId = accountId(email)
         val existing = dao.getById(normalizedId)
+        if (existing == null) {
+            check(dao.getAll().size < MAX_ACCOUNTS) {
+                "Up to $MAX_ACCOUNTS Google accounts can be connected. Remove an account before adding another."
+            }
+        }
         tokenVault.save(normalizedId, accessToken)
         try {
             dao.upsert(
@@ -68,6 +73,7 @@ class GoogleDriveAccountRepository @Inject constructor(
     }
 
     companion object {
+        const val MAX_ACCOUNTS = 10
         fun accountId(email: String): String = email.trim().lowercase(Locale.ROOT).also {
             require(it.isNotBlank()) { "Google account email cannot be blank." }
         }

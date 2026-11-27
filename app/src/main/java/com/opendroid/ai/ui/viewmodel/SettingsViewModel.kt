@@ -69,6 +69,8 @@ class SettingsViewModel @Inject constructor(
 
     val cloudServers: StateFlow<List<CloudServerConfig>> = settingsRepository.cloudServers
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val selectedCloudServerId: StateFlow<String?> = settingsRepository.selectedCloudServerId
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private val mutableCloudServerHealth = MutableStateFlow<Map<String, CloudServerHealth>>(emptyMap())
     val cloudServerHealth: StateFlow<Map<String, CloudServerHealth>> = mutableCloudServerHealth.asStateFlow()
@@ -137,6 +139,8 @@ class SettingsViewModel @Inject constructor(
     }
     fun removeCloudServer(id: String) = viewModelScope.launch { settingsRepository.removeCloudServer(id) }
     fun setCloudServerEnabled(id: String, enabled: Boolean) = viewModelScope.launch { settingsRepository.setCloudServerEnabled(id, enabled) }
+    fun selectCloudServer(id: String?) = viewModelScope.launch { settingsRepository.selectCloudServer(id) }
+    fun reconnectCloudServer(server: CloudServerConfig) = testOpenSwarmConnection(server.url, server.token)
 
     fun pingAllCloudServers() {
         if (cloudHealthJob?.isActive == true) return

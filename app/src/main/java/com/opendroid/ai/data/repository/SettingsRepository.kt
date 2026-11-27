@@ -92,6 +92,7 @@ class SettingsRepository internal constructor(
     private val cloudServerUrlKeys = (1..3).map { stringPreferencesKey("openswarm_server_${it}_url") }
     private val cloudServerEnabledKeys = (1..3).map { booleanPreferencesKey("openswarm_server_${it}_enabled") }
     private val cloudServersKey = stringPreferencesKey("openswarm_cloud_servers_v2")
+    private val selectedCloudServerIdKey = stringPreferencesKey("openswarm_selected_server_id")
     private val cloudKeepAliveKey = booleanPreferencesKey("openswarm_cloud_keep_alive_enabled")
     private val autoRunGeneratedCodeKey = booleanPreferencesKey("auto_run_generated_code")
     private val approvedFmhyHostsKey = stringSetPreferencesKey("fmhy_approved_hosts")
@@ -120,6 +121,18 @@ class SettingsRepository internal constructor(
     val cloudKeepAliveEnabled: Flow<Boolean> = dataStore.data
         .map { it[cloudKeepAliveKey] ?: false }
         .flowOn(Dispatchers.IO)
+
+    /** Runtime profile selected for new manifest/tool requests and task dispatch. */
+    val selectedCloudServerId: Flow<String?> = dataStore.data
+        .map { it[selectedCloudServerIdKey] }
+        .flowOn(Dispatchers.IO)
+
+    suspend fun selectCloudServer(id: String?) {
+        dataStore.edit { preferences ->
+            if (id.isNullOrBlank()) preferences.remove(selectedCloudServerIdKey)
+            else preferences[selectedCloudServerIdKey] = id
+        }
+    }
 
     suspend fun setCloudKeepAliveEnabled(enabled: Boolean) {
         dataStore.edit { it[cloudKeepAliveKey] = enabled }
@@ -182,7 +195,7 @@ class SettingsRepository internal constructor(
     suspend fun saveCloudServer(server: CloudServerConfig, token: String = server.token) {
         val normalized = server.copy(name = server.name.trim().ifBlank { "OpenSwarm Colab" }.take(80), url = validateOpenSwarmTunnelUrl(server.url), token = "", role = "OPENSWARM")
         check(cloudServers.first().none { it.id != normalized.id }) {
-            "Only one OpenSwarm Colab node can be connected. Remove the existing node first."
+            "The OpenSwarm node profile is already saved. Edit the existing profile instead of creating a duplicate."
         }
         saveDynamicCloudToken(normalized.id, token)
         if (cloudServerDao != null) {
@@ -200,6 +213,7 @@ class SettingsRepository internal constructor(
 
     suspend fun removeCloudServer(id: String) {
         providerCredentialStore.remove(cloudCredential(id))
+        if (selectedCloudServerId.first() == id) selectCloudServer(null)
         if (cloudServerDao != null) {
             cloudServerDao.delete(id)
         } else {

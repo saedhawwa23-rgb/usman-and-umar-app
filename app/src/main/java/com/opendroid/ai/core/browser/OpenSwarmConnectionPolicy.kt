@@ -7,7 +7,8 @@ enum class OpenSwarmConnectionState { ONLINE, WAKING, OFFLINE }
 
 object OpenSwarmRouteConfig {
     const val ENABLE_NON_OPENSWARM_ROUTES = false
-    const val MAX_CONNECTED_NODES = 1
+    /** Maximum number of independently saved Colab/OpenSwarm runtime profiles. */
+    const val MAX_CONNECTED_NODES = 10
     private val hiddenAgentTokens = setOf("terminal", "file manager", "files", "browser", "delivery")
 
     fun isHiddenAgent(id: String, name: String): Boolean {
